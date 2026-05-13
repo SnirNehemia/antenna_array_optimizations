@@ -1,0 +1,155 @@
+# ══════════════════════════════════════════════════════════════════
+# config.yaml — Antenna Array Pattern Optimization Configuration
+#
+# Fill in all required fields before running run_optimization.py.
+# Optional fields are marked with [optional] and have defaults shown.
+# ══════════════════════════════════════════════════════════════════
+
+
+# ────────────────────────── DATA PATHS ────────────────────────────
+
+# Path to the folder containing all CST element pattern .txt files.
+# One file per array element. All files in this folder are loaded.
+# The number of elements is inferred from the number of files found.
+element_patterns_dir: "data/Env_1_1/"
+
+
+# ────────────────────────── POLARIZATION ──────────────────────────
+
+# Which field component to use for optimization.
+# Options:
+#   "copol"       — Co-polarization (Abs(Copol) + Phase(Copol)). Default.
+#   "Cross"       — Cross-polarization (Abs(Cross) + Phase(Cross)).
+#   "total"       — Total E-field magnitude (Abs(E)). Use when polarization
+#                   purity is not a concern.
+polarization: "copol"
+
+
+# ────────────────────────── OPTIMIZATION DIRECTIVES ───────────────
+
+# List of beam shaping directives.
+# Each directive has:
+#   type    : "peak" or "null"
+#   theta   : target elevation angle in degrees (0° = boresight / broadside)
+#   phi     : target azimuth angle in degrees [optional, default: 0.0]
+#   width   : angular window in degrees over which the constraint applies
+#             For "peak": this is the desired Half-Maximum Beam Width (HMBW)
+#             For "null": total null width to suppress
+#   level   : [optional]
+#             For "peak": desired gain level in dBi (informational target for metrics)
+#             For "null": desired null depth in dB relative to peak (e.g. -30.0)
+#   weight  : [optional, default: 1.0] relative priority in the composite cost function.
+#             Higher weight = stronger enforcement of this directive.
+
+directives:
+  # - type:   "peak"
+  #   theta:  30.0          # degrees — boresight
+  #   phi:    30.0          # degrees
+  #   width:  20.0         # degrees — desired HMBW
+  #   level:  null         # dBi — set to null if unknown; metrics will report achieved value
+  #   weight: 5.0
+
+  - type:   "peak"
+    theta:  90.0          # degrees — boresight
+    phi:    45.0          # degrees
+    width:  2.0         # degrees — desired HMBW
+    level:  null         # dBi — set to null if unknown; metrics will report achieved value
+    weight: 1.0
+
+  - type:   "null"
+    theta:  90.0         # degrees — interference direction
+    phi:    345.0          # degrees
+    width:  5.0         # degrees — total suppression window
+    level:  -20.0        # dB — desired null depth relative to peak
+    weight: 2.5          # higher weight: 2.0 for null enforcement is twice as important as peak
+
+  # - type:   "null"
+  #   theta:  180.0         # degrees — interference direction
+  #   phi:    0.0          # degrees
+  #   width:  5.0         # degrees — total suppression window
+  #   level:  -20.0        # dB — desired null depth relative to peak
+  #   weight: 2.5          # higher weight: 2.0 for null enforcement is twice as important as peak
+
+
+# ────────────────────────── OPTIMIZER SETTINGS ────────────────────
+
+optimizer:
+  # Maximum L-BFGS-B iterations allowed per restart.
+  # The optimizer may stop earlier when cost_tolerance is satisfied.
+  # Total iteration budget ≈ n_restarts × max_iterations (upper bound).
+  max_iterations: 500
+
+  # Relative cost improvement tolerance (scipy ftol).
+  # Stops when: |J_k - J_{k+1}| / max(|J_k|, 1) < cost_tolerance
+  # Smaller = finer convergence, slower.
+  # Suggested range: 1e-6 (fast/exploratory) → 1e-10 (production accuracy).
+  cost_tolerance: 1.0e-8
+
+  # Number of independent optimization runs (multi-start).
+  # Run 1 always starts from uniform weights [amplitude=1, phase=0] — deterministic.
+  # Runs 2+ start from random unit-amplitude phases to help escape local minima.
+  # All restarts use a fixed seed, so results are fully reproducible run-to-run.
+  # Increase to 10–20 if the result looks like a local minimum.
+  #
+  # In addition to n_restarts, one run per array element is automatically performed,
+  # starting with that element at weight=1 and all others at 0 (single-element beam).
+  # This adds N_elements extra restarts (e.g. +16 for a 16-element array) and all
+  # trajectories are shown in the convergence plot.
+  n_restarts: 2
+
+  # Amplitude bounds per element [min, max]. Set to null for unbounded.
+  # Example: [0.0, 1.0] constrains amplitudes to the range [0, 1].
+  amplitude_bounds: [0.0, 1.0]
+
+  # If true, fix all amplitudes to 1.0 and optimize phase only.
+  # Overrides amplitude_bounds.
+  phase_only: false
+
+  # If true, fix all phases to 0 and optimize amplitudes only.
+  # Uses a length-N variable vector with exact amplitude bounds [a_min, a_max].
+  # Mutually exclusive with phase_only.
+  amplitude_only: false
+
+  # If true, include a deterministic uniform-weights run (amplitude=1, phase=0)
+  # as the first restart. Useful baseline; disable if you only want random inits.
+  use_uniform_init: true
+
+  # If true, add one run per array element starting with that element active
+  # (weight=1) and all others zeroed. Adds N_elements restarts on top of
+  # n_restarts. Disable to reduce total run count.
+  use_single_element_init: true
+
+
+# ────────────────────────── OUTPUT SETTINGS ───────────────────────
+
+output:
+  # Directory where results (weights, plots, metrics) are saved.
+  # A timestamped subfolder is created automatically on each run.
+  results_dir: "results/"
+
+  # Pattern cut to plot in Cartesian and polar views.
+  # "auto":      automatically use theta_cut at the first peak directive's phi.
+  # "theta_cut": elevation sweep at fixed Phi = plot_phi_deg.
+  # "phi_cut":   azimuth sweep at fixed Theta = plot_theta_deg.
+  # Directive overlays are only drawn when the cut passes through the window.
+  plot_cut_type: "auto"
+  plot_phi_deg:  0.0    # used when plot_cut_type = "theta_cut"
+  plot_theta_deg: 90.0  # used when plot_cut_type = "phi_cut"
+
+  # Dynamic range for polar and Cartesian pattern plots (dB span from peak to floor).
+  plot_dynamic_range_db: 40
+
+  # Save polar plot of the array pattern.
+  save_polar_plot: true
+
+  # Save Cartesian (dB vs angle) plot.
+  save_cartesian_plot: true
+
+  # Save 2D theta-phi heatmap of the full pattern with directive markers.
+  save_2d_projection_plot: true
+
+  # Save weight amplitude and phase bar charts.
+  save_weight_plots: true
+
+  # Save cost function convergence plot.
+  save_cost_history_plot: true
