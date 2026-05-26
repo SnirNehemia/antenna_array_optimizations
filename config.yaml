@@ -19,9 +19,9 @@ element_patterns_dir: "data/Env_1_1/"
 # Which field component to use for optimization.
 # Options:
 #   "copol"       — Co-polarization (Abs(Copol) + Phase(Copol)). Default.
-#   "Cross"       — Cross-polarization (Abs(Cross) + Phase(Cross)).
-#   "total"       — Total E-field magnitude (Abs(E)). Use when polarization
-#                   purity is not a concern.
+#   "cross"       — Cross-polarization (Abs(Cross) + Phase(Cross)).
+#   "total"       — Total E-field power |E_copol|² + |E_xpol|².
+#                   Manual tuner only (not wired through run_optimization.py).
 polarization: "copol"
 
 
@@ -38,6 +38,10 @@ polarization: "copol"
 #   level   : [optional]
 #             For "peak": desired gain level in dBi (informational target for metrics)
 #             For "null": desired null depth in dB relative to peak (e.g. -30.0)
+#   width       : full angular window width in both θ and φ (symmetric shorthand).
+#                 Ignored when theta_width / phi_width are both set.
+#   theta_width : [optional] independent elevation window width (overrides width).
+#   phi_width   : [optional] independent azimuth window width (overrides width).
 #   weight  : [optional, default: 1.0] relative priority in the composite cost function.
 #             Higher weight = stronger enforcement of this directive.
 
@@ -153,3 +157,16 @@ output:
 
   # Save cost function convergence plot.
   save_cost_history_plot: true
+
+  # Use equal-area cylindrical projection (y-axis = cos θ) for the 2D heatmap.
+  # Each equal vertical step represents equal solid angle (dΩ = sin θ dθ dφ).
+  # Set to false to revert to the flat θ-axis (Mercator-style) view.
+  plot_equal_area: false
+
+  # Save animated GIF showing the radiation pattern evolving over optimizer
+  # iterations for the best restart. Requires pillow (pip install pillow).
+  save_pattern_gif: false
+
+  # Maximum number of frames in the GIF. Strides automatically when the
+  # iteration count exceeds this value.
+  gif_max_frames: 100

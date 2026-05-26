@@ -29,13 +29,21 @@ from src.io.cst_parser import load_element_patterns
 from src.cost.cost_function import compute_array_factor
 from src.optimize.optimizer import run_optimizer
 from src.metrics.metrics import evaluate_metrics
-from src.plot.plotter import save_all_plots
+from src.plot.plotter import save_all_plots, save_pattern_gif
 
 # ────────────────────────── CONSTANTS ─────────────────────────────
 
-# Polarization modes that are currently implemented in the parser.
-# "total" (total E-field) is reserved for a future extension.
-SUPPORTED_POLARIZATIONS = ("copol",)
+# Polarization modes wired through the optimizer pipeline.
+# "copol" → E_complex (co-pol), "cross" → cross_complex (cross-pol).
+# "total" is supported only in the interactive manual_weights tool, where the
+# power-sum |AF_copol|² + |AF_xpol|² is rendered without a single coherent AF.
+SUPPORTED_POLARIZATIONS = ("copol", "cross")
+
+# Mapping from polarization name → pattern dict key used to build the stack.
+POLARIZATION_TO_PATTERN_KEY = {
+    "copol": "E_complex",
+    "cross": "cross_complex",
+}
 
 # Required top-level keys in config.yaml.
 REQUIRED_CONFIG_KEYS = ("element_patterns_dir", "directives", "optimizer", "output")
@@ -264,9 +272,14 @@ def main():
     print("Loading element patterns...")
     patterns = load_element_patterns(config["element_patterns_dir"])
 
+    # Pick the per-element complex pattern according to the chosen polarization.
+    polarization = config.get("polarization", "copol")
+    pattern_key  = POLARIZATION_TO_PATTERN_KEY[polarization]
+    print(f"  Polarization: {polarization} (using '{pattern_key}')")
+
     # Stack individual element patterns into a single 3D array.
-    element_patterns_stacked = np.stack([p["E_complex"] for p in patterns], axis=0)
-    # [MATLAB] element_patterns_stacked = cat(3, patterns{:}.E_complex);
+    element_patterns_stacked = np.stack([p[pattern_key] for p in patterns], axis=0)
+    # [MATLAB] element_patterns_stacked = cat(3, patterns{:}.(pattern_key));
     theta_deg = patterns[0]["theta_deg"]
     phi_deg   = patterns[0]["phi_deg"]
 
@@ -310,6 +323,16 @@ def main():
         all_cost_histories, best_run_index, all_run_labels,
         config["output"], output_dir,
     )
+
+    # ── Stage 7: Save pattern evolution GIF (optional) ────────────
+    if config["output"].get("save_pattern_gif", False):
+        print("Saving pattern evolution GIF...")
+        save_pattern_gif(
+            optimizer_result["weights_history"],
+            element_patterns_stacked,
+            theta_deg, phi_deg, directives,
+            cost_history, config["output"], output_dir,
+        )
 
     # ── Save weights and metrics ───────────────────────────────────
     _save_weights_csv(weights_complex, output_dir / "weights.csv")

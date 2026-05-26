@@ -124,6 +124,12 @@ def parse_cst_file(filepath):
               Units: degrees.
             - ``E_complex``   (np.ndarray, shape (N_theta, N_phi), complex) — complex
               co-pol element pattern. Units: V/m.
+            - ``cross_abs``     (np.ndarray, shape (N_theta, N_phi)) — cross-pol
+              magnitude. Units: V/m.
+            - ``cross_phase``   (np.ndarray, shape (N_theta, N_phi)) — cross-pol phase.
+              Units: degrees.
+            - ``cross_complex`` (np.ndarray, shape (N_theta, N_phi), complex) — complex
+              cross-pol element pattern. Units: V/m.
 
     Raises:
         FileNotFoundError: If ``filepath`` does not exist.
@@ -145,10 +151,12 @@ def parse_cst_file(filepath):
         )
 
     # Extract flat angle and field columns.
-    theta_deg_flat      = raw_data[:, COL_THETA]
-    phi_deg_flat        = raw_data[:, COL_PHI]
-    e_abs_flat          = raw_data[:, COL_E_ABS]
-    copol_abs_flat      = raw_data[:, COL_COPOL_ABS]
+    theta_deg_flat       = raw_data[:, COL_THETA]
+    phi_deg_flat         = raw_data[:, COL_PHI]
+    e_abs_flat           = raw_data[:, COL_E_ABS]
+    cross_abs_flat       = raw_data[:, COL_CROSS_ABS]
+    cross_phase_deg_flat = raw_data[:, COL_CROSS_PHASE]
+    copol_abs_flat       = raw_data[:, COL_COPOL_ABS]
     copol_phase_deg_flat = raw_data[:, COL_COPOL_PHASE]
 
     n_theta, n_phi = _detect_grid_shape(theta_deg_flat, phi_deg_flat)
@@ -166,9 +174,13 @@ def parse_cst_file(filepath):
     e_abs_grid           = e_abs_flat.reshape(n_phi, n_theta).T
     copol_abs_grid       = copol_abs_flat.reshape(n_phi, n_theta).T
     copol_phase_deg_grid = copol_phase_deg_flat.reshape(n_phi, n_theta).T
+    cross_abs_grid       = cross_abs_flat.reshape(n_phi, n_theta).T
+    cross_phase_deg_grid = cross_phase_deg_flat.reshape(n_phi, n_theta).T
     # [MATLAB] e_abs_grid           = reshape(e_abs_flat,           n_theta, n_phi);
     # [MATLAB] copol_abs_grid       = reshape(copol_abs_flat,       n_theta, n_phi);
     # [MATLAB] copol_phase_deg_grid = reshape(copol_phase_deg_flat, n_theta, n_phi);
+    # [MATLAB] cross_abs_grid       = reshape(cross_abs_flat,       n_theta, n_phi);
+    # [MATLAB] cross_phase_deg_grid = reshape(cross_phase_deg_flat, n_theta, n_phi);
 
     # Build the complex element pattern from co-polarization magnitude and phase.
     # Convert phase from degrees to radians for all internal complex arithmetic.
@@ -178,13 +190,23 @@ def parse_cst_file(filepath):
     # [MATLAB] copol_phase_rad_grid = copol_phase_deg_grid .* (pi / 180);
     # [MATLAB] e_complex_grid = copol_abs_grid .* exp(1j .* copol_phase_rad_grid);
 
+    # Build the complex cross-polarization pattern using the same convention.
+    # Formula: cross_complex = |E_cross| * exp(j * phi_cross)
+    cross_phase_rad_grid = cross_phase_deg_grid * (np.pi / 180.0)
+    cross_complex_grid = cross_abs_grid * np.exp(1j * cross_phase_rad_grid)
+    # [MATLAB] cross_phase_rad_grid = cross_phase_deg_grid .* (pi / 180);
+    # [MATLAB] cross_complex_grid = cross_abs_grid .* exp(1j .* cross_phase_rad_grid);
+
     return {
-        "theta_deg":   theta_deg,
-        "phi_deg":     phi_deg,
-        "E_abs":       e_abs_grid,
-        "copol_abs":   copol_abs_grid,
-        "copol_phase": copol_phase_deg_grid,
-        "E_complex":   e_complex_grid,
+        "theta_deg":     theta_deg,
+        "phi_deg":       phi_deg,
+        "E_abs":         e_abs_grid,
+        "copol_abs":     copol_abs_grid,
+        "copol_phase":   copol_phase_deg_grid,
+        "E_complex":     e_complex_grid,
+        "cross_abs":     cross_abs_grid,
+        "cross_phase":   cross_phase_deg_grid,
+        "cross_complex": cross_complex_grid,
     }
 
 

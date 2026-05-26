@@ -205,6 +205,138 @@ or `ValueError` — never silently fall back to a hardcoded default.
 > Claude Code must append an entry here at the end of every working session.
 > Format shown below. Newest entry at the top.
 
+### 2026-05-26 — manual_weights.py GUI enhancements (hover, HPBW, POV rotation, axis invert)
+
+**Implemented**:
+- `src/metrics/metrics.py` — `evaluate_metrics` now returns four new keys:
+  `global_peak_theta_deg`, `global_peak_phi_deg` (location of the global peak),
+  `hpbw_theta_deg`, `hpbw_phi_deg` (3 dB half-power beamwidth in the θ-cut and φ-cut
+  at the peak). Helper `_compute_hpbw` uses outward scan from the peak with linear
+  interpolation; φ-cut is roll-centred to handle 0°/360° wrap-around.
+- `scripts/manual_weights.py` — six GUI enhancements:
+  1. **Mouse-hover readout**: `motion_notify_event` updates the status bar with
+     `θ=X° φ=Y° value=Z dB(i)` at the cursor position. Suppressed during drag.
+  2. **θ-axis inversion**: `set_ylim(180.0, 0.0)` so 0° (boresight/zenith) is at the top
+     (standard antenna convention).
+  3. **Power-normalized weights**: before computing the array factor, weights are divided by
+     `||w||₂` to match the optimizer's `cost_fn` convention; Total J in the GUI now equals
+     the optimizer's objective. Directivity is scale-invariant so the displayed pattern is
+     unchanged.
+  4. **POV drag-to-rotate**: `_on_drag_start/motion/end` + `_apply_view_rotation` implement
+     grab-and-drag sphere rotation using `scipy.spatial.transform.Rotation` (minimal-arc
+     rotation mapping the grabbed direction to the display centre (90°, 180°)) and
+     `scipy.interpolate.RegularGridInterpolator` for bilinear resampling. The interpolator is
+     rebuilt only on full recompute (weight/directive change), not on every drag step.
+     "Reset View" toolbar button snaps back to the default centre. When rotated, directive
+     rectangles are replaced by centre-point markers (rectangles do not transform
+     rectangularly under spherical projection).
+  5. **Metrics panel**: removed "Peak-to-null" row; added "Peak angle" (θ,φ of global peak)
+     and "3 dB HPBW" (θ/φ beamwidths from `evaluate_metrics`).
+  6. **Directive inline results**: each directive row now shows its live gain (for peaks) or
+     `gain (null_depth)` (for nulls) in green/red next to the × button. The per-directive
+     metric rows previously appended to the Metrics panel are removed.
+
+**Decisions made**:
+- Power-normalization in the GUI: directivity `D = 4π|AF|²/P_total` is invariant to any
+  overall amplitude scaling, so normalizing weights does not alter any visual output. The
+  change only affects the Total J value, making it numerically consistent with the optimizer.
+- POV drag direction convention: "grab and drag" — the grabbed data point follows the cursor
+  (`Δview = −Δmouse`). This matches the feel of physically rotating a globe.
+- During POV rotation, directive rectangles are dropped (only `+` markers shown) because
+  rectangular window shapes become non-rectangular under the spherical projection, and
+  rendering correct spherical polygons would require significant additional complexity.
+- `_compute_hpbw` returns 0 when the beam never drops 3 dB within the grid (e.g., isotropic
+  radiator); this is correct and callers should handle it as "HPBW > grid extent".
+
+**Open questions / known issues**:
+- HPBW for a beam straddling θ=0° or θ=180° (pole-pointing) may be reported as the grid
+  extent (180°) rather than the true width; the θ-cut is linear (no wrap-around for θ).
+- Drag sensitivity near the poles (very small θ or θ near 180°) can cause rapid φ changes
+  since all φ values converge to the same physical direction; no special handling yet.
+
+### 2026-05-19 — Solid-angle weighting in cost/metrics; flat-θ visualization
+
+**Implemented**:
+- `src/cost/cost_function.py` — `_directive_cost` now uses a solid-angle-weighted mean
+  `Σ(|AF|² × sin θ) / Σ(sin θ)` over the directive mask instead of a uniform pixel mean.
+  `sin_theta` is pre-computed once per `build_cost_function` call (outside the closure).
+  `power_grid = |AF|²` computed once outside the directive loop per `cost_fn` call.
+  A 5° window at θ=2° (pole) has the same pixel count as at θ=90° (equator) but ~29× less
+  solid angle — the new weighting correctly de-emphasizes polar pixels proportionally.
+- `src/metrics/metrics.py` — `evaluate_metrics` window mean uses the same sin θ weighting
+  so `cost_term` reconstruction stays consistent with the optimizer.
+- `src/plot/plotter.py` — `save_2d_projection_plot` default changed to `equal_area=False`
+  (flat linear θ axis, 0–180°). The cos(θ) path is retained and still selectable via
+  `equal_area=True` or `plot_equal_area: true` in config.
+- `src/plot/plotter.py` — `save_pattern_gif` reverted to flat θ y-axis and flat-θ directive
+  rectangle coordinates.
+- `scripts/manual_weights.py` — `_build_pattern_panel` uses `self._theta_deg` as y-coordinates
+  (reverted from cos θ); directive overlays in `_update_directive_overlays` draw in θ space.
+  `self._cos_theta` attribute removed.
+- `config.yaml` — `plot_equal_area: false`.
+
+**Decisions made**:
+- Flat θ axis is preferred for visualization: the cos(θ) equal-area projection compresses
+  directive windows near the poles to near-zero visual height, which is confusing for
+  pole-directed antenna optimization. Equal-area property is now captured correctly in the
+  cost function (sin θ weighting) rather than in the visual projection.
+- `gain_dbi` (directivity point lookup at target grid index) is unaffected — it is correct
+  at all angles regardless of weighting.
+- A directive exactly at θ=0° has zero solid-angle weight (sin 0° = 0); the optimizer will
+  treat it as a zero-cost term. Physically correct (the pole is a single degenerate direction)
+  but may surprise users — note in config if pole directives are needed.
+
+**Open questions / known issues**:
+- None new.
+
+### 2026-05-18 — Cross-pol, absolute-dBi, CST directivity convention, separate θ/φ widths, GIF
+
+**Implemented**:
+- `src/io/cst_parser.py` — `parse_cst_file` extended to extract cross-polarization columns
+  and return `cross_complex = cross_abs × exp(j × cross_phase_rad)`.
+- `scripts/manual_weights.py` — polarization toolbar combobox extended with `cross` and
+  `total` modes. `total` computes orthogonal power sum `|AF_copol|² + |AF_xpol|²`.
+- `scripts/manual_weights.py` — display-mode toolbar added: `relative` (peak-normalized) and
+  `absolute` (dBi, user-set clim via min/max entry widgets).
+- `src/metrics/metrics.py` — `_compute_directivity_dbi_grid` gains optional `normalizer_power`
+  kwarg; when provided it replaces the single-pol integral as denominator (CST/IEEE Std 149
+  partial directivity convention). `evaluate_metrics` accepts `normalizer_power` and
+  `precomputed_array_factor`.
+- `scripts/manual_weights.py` — always computes both copol and cross AFs; passes
+  P_copol + P_cross as `normalizer_power` to metrics and directivity. This ensures
+  D_total ≥ D_copol ≥ 0 at all angles (fixed previous incorrect total < copol result).
+- `src/cost/cost_function.py` — `angular_window_mask` signature changed from `width_deg` to
+  `theta_width_deg, phi_width_deg`; `_directive_cost` call site updated. Directives support
+  independent elevation and azimuth window widths; `width` remains as symmetric shorthand.
+- `src/metrics/metrics.py`, `src/plot/plotter.py` — updated all `angular_window_mask` call
+  sites to use `theta_width_deg`/`phi_width_deg` with `width` fallback.
+- `scripts/manual_weights.py` — directive table now has `θW(°)` and `φW(°)` columns (split
+  from single `W(°)` column).
+- `src/optimize/optimizer.py` — `_run_single_optimization` callback records `xk.copy()` to
+  `xk_history`; `run_optimizer` returns `weights_history` (decoded complex weights per best-run
+  iteration) and `all_run_labels`, `all_cost_histories`, `best_run_index`.
+- `src/plot/plotter.py` — new `save_pattern_gif()`: animated GIF showing radiation pattern
+  evolving over optimizer iterations. Two-panel layout: 2D heatmap with directive overlays
+  (left) + convergence plot with current-iteration dot (right). Auto-strides to
+  `gif_max_frames`. Requires `pillow`.
+- `scripts/run_optimization.py` — calls `save_pattern_gif` conditionally when
+  `save_pattern_gif: true` in config output section. Import updated accordingly.
+- `config.yaml` — added `theta_width`/`phi_width` fields to directive schema comments;
+  added `plot_equal_area`, `save_pattern_gif`, `gif_max_frames` to output section.
+
+**Decisions made**:
+- CST partial directivity convention (IEEE Std 149): D_copol = 4π|AF_copol|² / (P_copol + P_cross).
+  Ensures D_total ≥ D_copol always. `run_optimization.py` (single stack) uses the single-pol
+  denominator as a documented approximation.
+- `cross` polarization selectable in `run_optimization.py` via `polarization: "cross"` config;
+  `total` is GUI-only (`run_optimization.py` only supports coherent single-stack optimization).
+- GIF always uses flat θ axis (after the equal-area projection was initially used then reverted
+  per the 2026-05-19 entry).
+
+**Open questions / known issues**:
+- GIF file size can be large for many iterations or high-resolution grids; `gif_max_frames`
+  caps frame count but not file size.
+
 ### Template
 ```
 ### YYYY-MM-DD — <one-line summary>

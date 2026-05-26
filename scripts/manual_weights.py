@@ -23,6 +23,9 @@ from matplotlib.figure import Figure
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from matplotlib.patches import Rectangle
 
+from scipy.interpolate import RegularGridInterpolator
+from scipy.spatial.transform import Rotation as SciRotation
+
 import yaml
 
 # Add project root to sys.path so src/ modules are importable
@@ -31,7 +34,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from src.io.cst_parser import load_element_patterns
 from src.cost.cost_function import compute_array_factor
-from src.metrics.metrics import evaluate_metrics
+from src.metrics.metrics import evaluate_metrics, _compute_directivity_dbi_grid
 
 # ────────────────────────── CONSTANTS ─────────────────────────────
 
@@ -106,9 +109,71 @@ PHASE_SLIDER_MAX_DEG = 180.0
 # Right-column panel width — wider to accommodate inline sliders
 RIGHT_PANEL_WIDTH_PX = 480
 
-# Supported polarisation modes (must match keys in element pattern dict)
+# Supported polarisation modes
+# - copol / cross: coherent superposition of the matching complex element pattern
+# - total: orthogonal power sum |AF_copol|² + |AF_xpol|² (see _recompute_and_redraw)
 POLARIZATION_COPOL = "copol"
+POLARIZATION_CROSS = "cross"
 POLARIZATION_TOTAL = "total"
+
+# Heatmap display modes
+DISPLAY_RELATIVE = "relative"        # 0 dB at live peak, floor at -DYNAMIC_RANGE_DB
+DISPLAY_ABSOLUTE = "absolute"        # Absolute directivity in dBi, user-set clim
+
+# Default dBi range used when "absolute" display mode is selected
+DEFAULT_DBI_MIN = -40.0
+DEFAULT_DBI_MAX =  10.0
+
+# Width (characters) of the dBi min/max Entry widgets in the toolbar
+ENTRY_WIDTH_DBI = 6
+
+# Colorbar text shown in each display mode
+COLORBAR_LABEL_RELATIVE = "dB (normalized to peak)"
+COLORBAR_LABEL_ABSOLUTE = "dBi (absolute directivity)"
+
+# ────────────────────────── SPHERE ROTATION HELPERS ──────────────
+
+
+def _sph_to_cart(theta_deg, phi_deg):
+    """Convert spherical (θ°, φ°) to a unit Cartesian vector [x, y, z]."""
+    t = np.deg2rad(theta_deg)
+    p = np.deg2rad(phi_deg)
+    return np.array([np.sin(t) * np.cos(p), np.sin(t) * np.sin(p), np.cos(t)])
+
+
+def _build_view_rotation(view_theta_deg, view_phi_deg):
+    """Build the minimal scipy Rotation that maps (view_θ, view_φ) to display centre (90°, 180°).
+
+    The display centre (90°, 180°) corresponds to Cartesian direction (-1, 0, 0).
+    The returned rotation R satisfies: R @ d_view ≈ d_centre.
+
+    Args:
+        view_theta_deg (float): Elevation of the direction to centre. Units: degrees.
+        view_phi_deg (float): Azimuth of the direction to centre. Units: degrees.
+
+    Returns:
+        scipy.spatial.transform.Rotation: Rotation object.
+    """
+    d_view   = _sph_to_cart(view_theta_deg, view_phi_deg)
+    d_centre = _sph_to_cart(90.0, 180.0)   # (-1, 0, 0)
+
+    cross      = np.cross(d_view, d_centre)
+    cross_norm = np.linalg.norm(cross)
+    dot        = float(np.dot(d_view, d_centre))
+
+    if cross_norm < 1e-9:
+        if dot > 0.0:
+            return SciRotation.identity()
+        # Antiparallel: 180° around any perpendicular axis
+        perp = np.array([0., 0., 1.]) if abs(d_view[0]) < 0.9 else np.array([0., 1., 0.])
+        axis = np.cross(d_view, perp)
+        axis = axis / np.linalg.norm(axis)
+        return SciRotation.from_rotvec(axis * np.pi)
+
+    axis  = cross / cross_norm
+    angle = np.arctan2(cross_norm, dot)
+    return SciRotation.from_rotvec(axis * angle)
+
 
 # ────────────────────────── CONFIG HELPERS ────────────────────────
 
@@ -184,20 +249,23 @@ class ManualWeightsTuner:
         self._phi_deg: np.ndarray = element_patterns[0]["phi_deg"]      # (N_phi,)   deg
         self._n_elements: int = len(element_patterns)
 
-        # Pre-compute stacked element patterns for both supported polarisations.
+        # Pre-compute stacked element patterns for both polarisation channels.
         # copol: complex co-pol field — E_complex = copol_abs · exp(j · copol_phase)
-        # total: total E-field magnitude used as real-valued element patterns;
-        #        no phase info for the total field is available in the CST export,
-        #        so it is cast to complex with zero imaginary part.
+        # cross: complex cross-pol field — same formula on the cross-pol columns
+        # The 'total' display mode combines them in power: |AF_copol|² + |AF_xpol|²
+        # (orthogonal channels add in power; see _recompute_and_redraw).
         # [MATLAB] avoid list comprehension; use a for-loop to build a 3-D array
         self._element_patterns_copol: np.ndarray = np.stack(
             [p["E_complex"] for p in element_patterns], axis=0
         )
-        self._element_patterns_total: np.ndarray = np.stack(
-            [p["E_abs"].astype(complex) for p in element_patterns], axis=0
+        self._element_patterns_cross: np.ndarray = np.stack(
+            [p["cross_complex"] for p in element_patterns], axis=0
         )
-        # Active pattern stack — switched by the polarisation combobox
-        self._element_patterns_stacked: np.ndarray = self._element_patterns_copol
+
+        # Active polarisation flag — switched by the polarisation combobox.
+        # Stored as a string rather than a stack reference because 'total' uses
+        # both stacks together and cannot be represented by a single one.
+        self._active_polarization: str = POLARIZATION_COPOL
 
         # Ground-truth weight vector: complex (N_elements,), dimensionless V/V
         self._weights_complex: np.ndarray = np.ones(
@@ -222,6 +290,15 @@ class ManualWeightsTuner:
         # Polarisation combobox state (assigned in _build_toolbar)
         self._polarization_var: tk.StringVar
 
+        # Display-mode state (assigned in _build_toolbar):
+        # - _display_mode_var:  "relative" or "absolute" (dBi)
+        # - _dbi_min_var / _dbi_max_var: colorbar clim entries for absolute mode
+        self._display_mode_var: tk.StringVar
+        self._dbi_min_var: tk.StringVar
+        self._dbi_max_var: tk.StringVar
+        self._dbi_min_entry: tk.Entry
+        self._dbi_max_entry: tk.Entry
+
         # Matplotlib artists added for directive overlays (cleared on each redraw)
         self._directive_artists: list = []
 
@@ -229,19 +306,37 @@ class ManualWeightsTuner:
         # plus "_frame" → tk.Frame (used for identity-based removal)
         self._directive_rows: list[dict] = []
 
-        # Tkinter widgets created dynamically for per-directive metric lines
-        self._per_directive_metric_widgets: list[tk.Widget] = []
+        # ── POV / hover state ──────────────────────────────────────
+        # Direction in original data coordinates shown at the display centre (90°, 180°).
+        self._view_theta: float = 90.0
+        self._view_phi:   float = 180.0
+
+        # Drag tracking: set on button-press, cleared on button-release.
+        self._is_dragging:      bool = False
+        self._drag_start:       tuple | None = None       # (phi_data, theta_data)
+        self._drag_view_start:  tuple | None = None       # (view_theta, view_phi)
+
+        # Cached RegularGridInterpolator for the current display grid (rebuilt on
+        # full recompute, reused every drag step to avoid the setup cost).
+        self._display_interp: object | None = None
+        self._unrotated_display_grid: np.ndarray | None = None
+        self._last_clim: tuple = (-float(DYNAMIC_RANGE_DB), 0.0)
+
+        # Most recently displayed grid (after rotation) — used by the hover handler.
+        self._last_display_grid: np.ndarray | None = None
 
         # Frames set during UI build (assigned in _build_* methods)
         self._directives_inner_frame: tk.Frame
         self._metrics_inner_frame: tk.Frame
         self._ax: object            # matplotlib Axes
         self._mesh: object          # QuadMesh returned by pcolormesh
+        self._cbar: object          # Colorbar (label/ticks updated on mode change)
         self._canvas: FigureCanvasTkAgg
         self._status_label: tk.Label
         self._label_cost: tk.Label
         self._label_peak: tk.Label
-        self._label_pnr: tk.Label
+        self._label_peak_angle: tk.Label
+        self._label_hpbw: tk.Label
 
         # Build the window
         self._root = tk.Tk()
@@ -286,7 +381,6 @@ class ManualWeightsTuner:
         self._build_weights_panel(right_frame)
         self._build_directives_panel(right_frame)
         self._build_metrics_panel(right_frame)
-        self._build_status_bar()
 
     def _build_toolbar(self) -> None:
         """Build the top toolbar: config label, polarisation selector, action buttons."""
@@ -310,6 +404,10 @@ class ManualWeightsTuner:
             toolbar, text="Uniform Weights", command=self._on_uniform
         ).pack(side=tk.RIGHT, padx=2, pady=4)
 
+        ttk.Button(
+            toolbar, text="Reset View", command=self._on_reset_view
+        ).pack(side=tk.RIGHT, padx=2, pady=4)
+
         ttk.Separator(toolbar, orient="vertical").pack(
             side=tk.RIGHT, fill=tk.Y, padx=10, pady=4
         )
@@ -319,7 +417,7 @@ class ManualWeightsTuner:
         pol_combo = ttk.Combobox(
             toolbar,
             textvariable=self._polarization_var,
-            values=[POLARIZATION_COPOL, POLARIZATION_TOTAL],
+            values=[POLARIZATION_COPOL, POLARIZATION_CROSS, POLARIZATION_TOTAL],
             width=6,
             state="readonly",
         )
@@ -329,6 +427,53 @@ class ManualWeightsTuner:
         )
         tk.Label(
             toolbar, text="Polarisation:", font=LABEL_FONT, bg=PANEL_BG
+        ).pack(side=tk.RIGHT, padx=(0, 2), pady=5)
+
+        ttk.Separator(toolbar, orient="vertical").pack(
+            side=tk.RIGHT, fill=tk.Y, padx=10, pady=4
+        )
+
+        # ── Display-mode controls ────────────────────────────────────
+        # max (dBi) entry — packed first because tk.RIGHT stacks right-to-left.
+        self._dbi_max_var = tk.StringVar(value=f"{DEFAULT_DBI_MAX:.1f}")
+        self._dbi_max_entry = tk.Entry(
+            toolbar, textvariable=self._dbi_max_var,
+            width=ENTRY_WIDTH_DBI, font=LABEL_FONT, bg=ENTRY_BG_COLOR,
+        )
+        self._dbi_max_entry.pack(side=tk.RIGHT, pady=4)
+        self._dbi_max_entry.bind("<Return>",   lambda _: self._on_display_mode_change())
+        self._dbi_max_entry.bind("<FocusOut>", lambda _: self._on_display_mode_change())
+        tk.Label(
+            toolbar, text="max (dBi):", font=LABEL_FONT, bg=PANEL_BG
+        ).pack(side=tk.RIGHT, padx=(4, 2), pady=5)
+
+        self._dbi_min_var = tk.StringVar(value=f"{DEFAULT_DBI_MIN:.1f}")
+        self._dbi_min_entry = tk.Entry(
+            toolbar, textvariable=self._dbi_min_var,
+            width=ENTRY_WIDTH_DBI, font=LABEL_FONT, bg=ENTRY_BG_COLOR,
+        )
+        self._dbi_min_entry.pack(side=tk.RIGHT, pady=4)
+        self._dbi_min_entry.bind("<Return>",   lambda _: self._on_display_mode_change())
+        self._dbi_min_entry.bind("<FocusOut>", lambda _: self._on_display_mode_change())
+        tk.Label(
+            toolbar, text="min (dBi):", font=LABEL_FONT, bg=PANEL_BG
+        ).pack(side=tk.RIGHT, padx=(4, 2), pady=5)
+
+        # Display-mode combobox: relative-to-peak vs absolute dBi
+        self._display_mode_var = tk.StringVar(value=DISPLAY_RELATIVE)
+        disp_combo = ttk.Combobox(
+            toolbar,
+            textvariable=self._display_mode_var,
+            values=[DISPLAY_RELATIVE, DISPLAY_ABSOLUTE],
+            width=8,
+            state="readonly",
+        )
+        disp_combo.pack(side=tk.RIGHT, pady=4)
+        disp_combo.bind(
+            "<<ComboboxSelected>>", lambda _: self._on_display_mode_change()
+        )
+        tk.Label(
+            toolbar, text="Display:", font=LABEL_FONT, bg=PANEL_BG
         ).pack(side=tk.RIGHT, padx=(0, 2), pady=5)
 
     def _build_pattern_panel(self, parent: tk.Frame) -> None:
@@ -352,7 +497,7 @@ class ManualWeightsTuner:
         n_phi = len(self._phi_deg)
         init_grid = np.full((n_theta, n_phi), -DYNAMIC_RANGE_DB, dtype=float)
 
-        # 2-D heatmap: azimuth φ on x-axis, elevation θ on y-axis
+        # 2-D heatmap: azimuth φ on x-axis, elevation θ on y-axis (0°–180°).
         # [MATLAB] use imagesc or pcolor; pcolormesh has no direct equivalent
         self._mesh = self._ax.pcolormesh(
             self._phi_deg,
@@ -364,27 +509,43 @@ class ManualWeightsTuner:
             shading="auto",
         )
 
-        cbar = fig.colorbar(
-            self._mesh, ax=self._ax, label="dB (normalised to peak)"
+        # Keep a handle on the colorbar — its label and ticks are updated when
+        # the user switches between relative-to-peak and absolute-dBi modes.
+        self._cbar = fig.colorbar(
+            self._mesh, ax=self._ax, label=COLORBAR_LABEL_RELATIVE
         )
         cbar_ticks = list(range(-DYNAMIC_RANGE_DB, 1, 10))
-        cbar.set_ticks(cbar_ticks)
+        self._cbar.set_ticks(cbar_ticks)
 
         self._ax.set_xlabel("Azimuth  φ (°)")
-        self._ax.set_ylabel("Elevation  θ (°)")
+        self._ax.set_ylabel("Elevation θ (°)")
         self._ax.set_title("Array Factor — manual weights", fontsize=10)
         self._ax.grid(
             True, alpha=GRID_ALPHA, color="white", linewidth=GRID_LINEWIDTH
         )
 
         # Fix axes to full-sphere coverage regardless of data resolution.
+        # θ is inverted so 0° (boresight / zenith) is at the top.
         self._ax.set_xlim(0.0, 360.0)
-        self._ax.set_ylim(0.0, 180.0)
+        self._ax.set_ylim(180.0, 0.0)
 
         fig.tight_layout()
 
         self._canvas = FigureCanvasTkAgg(fig, master=lf)
         self._canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
+
+        # Status bar sits directly below the canvas, inside the pattern LabelFrame.
+        self._status_label = tk.Label(
+            lf, text="", font=LABEL_FONT, bg=PANEL_BG, fg="#555555",
+            anchor="w", relief=tk.SUNKEN, bd=1,
+        )
+        self._status_label.pack(side=tk.BOTTOM, fill=tk.X)
+
+        # Connect mouse events for hover readout and POV drag.
+        self._canvas.mpl_connect("motion_notify_event",  self._on_mouse_move)
+        self._canvas.mpl_connect("button_press_event",   self._on_drag_start)
+        self._canvas.mpl_connect("motion_notify_event",  self._on_drag_motion)
+        self._canvas.mpl_connect("button_release_event", self._on_drag_end)
 
     def _build_weights_panel(self, parent: tk.Frame) -> None:
         """Build the scrollable element-weights panel.
@@ -558,7 +719,8 @@ class ManualWeightsTuner:
         header = tk.Frame(lf, bg=PANEL_BG)
         header.pack(fill=tk.X, padx=4, pady=(2, 0))
         col_specs = [
-            ("Type", 6), ("θ (°)", 6), ("φ (°)", 6), ("W (°)", 6), ("wt", 5)
+            ("Type", 5), ("θ (°)", 5), ("φ (°)", 5), ("θW(°)", 5), ("φW(°)", 5),
+            ("wt", 4), ("", 2), ("Result", 14),
         ]
         for col_text, col_width in col_specs:
             tk.Label(
@@ -595,9 +757,10 @@ class ManualWeightsTuner:
         self._metrics_inner_frame.pack(fill=tk.X, padx=6, pady=4)
 
         # Fixed metric rows (always visible)
-        self._label_cost = self._make_metric_label("Total J:", "—")
-        self._label_peak = self._make_metric_label("Global peak:", "—")
-        self._label_pnr  = self._make_metric_label("Peak-to-null:", "—")
+        self._label_cost        = self._make_metric_label("Total J:",     "—")
+        self._label_peak        = self._make_metric_label("Global peak:", "—")
+        self._label_peak_angle  = self._make_metric_label("Peak angle:",  "—")
+        self._label_hpbw        = self._make_metric_label("3 dB HPBW:",  "—")
 
     def _make_metric_label(self, title: str, initial_value: str) -> tk.Label:
         """Create a key = value row inside the metrics frame.
@@ -632,20 +795,6 @@ class ManualWeightsTuner:
         value_label.pack(side=tk.LEFT)
         return value_label
 
-    def _build_status_bar(self) -> None:
-        """Build the status bar along the bottom of the window."""
-        self._status_label = tk.Label(
-            self._root,
-            text="",
-            font=LABEL_FONT,
-            bg=PANEL_BG,
-            fg="#555555",
-            anchor="w",
-            relief=tk.SUNKEN,
-            bd=1,
-        )
-        self._status_label.pack(side=tk.BOTTOM, fill=tk.X)
-
     # ── DIRECTIVE TABLE MANAGEMENT ────────────────────────────────
 
     def _add_directive_row(self, directive_dict: dict | None) -> None:
@@ -656,15 +805,20 @@ class ManualWeightsTuner:
                 None to use project defaults. Expected keys: type, theta (deg),
                 phi (deg), width (deg), weight.
         """
-        # Fall back to default values for any missing field
+        # Fall back to default values for any missing field.
+        # theta_width / phi_width take precedence over the symmetric "width" shorthand.
         defaults = {
-            "type":   DEFAULT_DIRECTIVE_TYPE,
-            "theta":  DEFAULT_DIRECTIVE_THETA_DEG,
-            "phi":    DEFAULT_DIRECTIVE_PHI_DEG,
-            "width":  DEFAULT_DIRECTIVE_WIDTH_DEG,
-            "weight": DEFAULT_DIRECTIVE_WEIGHT,
+            "type":        DEFAULT_DIRECTIVE_TYPE,
+            "theta":       DEFAULT_DIRECTIVE_THETA_DEG,
+            "phi":         DEFAULT_DIRECTIVE_PHI_DEG,
+            "theta_width": DEFAULT_DIRECTIVE_WIDTH_DEG,
+            "phi_width":   DEFAULT_DIRECTIVE_WIDTH_DEG,
+            "weight":      DEFAULT_DIRECTIVE_WEIGHT,
         }
         d = directive_dict if directive_dict is not None else {}
+        sym_w = d.get("width", None)   # symmetric fallback if per-axis widths absent
+        theta_width_default = d.get("theta_width", sym_w if sym_w is not None else defaults["theta_width"])
+        phi_width_default   = d.get("phi_width",   sym_w if sym_w is not None else defaults["phi_width"])
 
         row_frame = tk.Frame(self._directives_inner_frame, bg=BG_COLOR)
         row_frame.pack(fill=tk.X, pady=1)
@@ -683,12 +837,13 @@ class ManualWeightsTuner:
             "<<ComboboxSelected>>", lambda _: self._on_directive_change()
         )
 
-        # Numeric fields: theta, phi, width, weight (all in degrees or dimensionless)
+        # Numeric fields: theta, phi, theta_width, phi_width, weight
         numeric_field_specs = [
-            ("theta",  d.get("theta",  defaults["theta"]),  6),
-            ("phi",    d.get("phi",    defaults["phi"]),    6),
-            ("width",  d.get("width",  defaults["width"]),  6),
-            ("weight", d.get("weight", defaults["weight"]), 5),
+            ("theta",       d.get("theta",   defaults["theta"]),   5),
+            ("phi",         d.get("phi",     defaults["phi"]),     5),
+            ("theta_width", theta_width_default,                   5),
+            ("phi_width",   phi_width_default,                     5),
+            ("weight",      d.get("weight",  defaults["weight"]),  4),
         ]
         vars_dict: dict = {"type_var": type_var, "_frame": row_frame}
 
@@ -713,6 +868,14 @@ class ManualWeightsTuner:
             command=lambda rf=row_frame: self._remove_directive_row(rf),
             width=2,
         ).pack(side=tk.LEFT, padx=(4, 0))
+
+        # Inline live metric readout (gain in dBi, or gain + null depth for nulls)
+        metric_label = tk.Label(
+            row_frame, text="—", font=METRIC_FONT, bg=BG_COLOR,
+            anchor="w", width=14,
+        )
+        metric_label.pack(side=tk.LEFT, padx=(4, 0))
+        vars_dict["metric_label"] = metric_label
 
         self._directive_rows.append(vars_dict)
         self._on_directive_change()
@@ -874,17 +1037,48 @@ class ManualWeightsTuner:
         self._recompute_and_redraw()
 
     def _on_polarization_change(self) -> None:
-        """Switch the active element pattern stack based on the polarisation selector.
+        """Update the active polarisation channel and trigger a redraw.
 
-        copol: complex co-pol patterns (E_complex from parser).
-        total: real total-field magnitude patterns (E_abs cast to complex;
-               no cross-pol phase info is available in the CST export).
+        copol: coherent superposition of complex co-pol element patterns.
+        cross: coherent superposition of complex cross-pol element patterns.
+        total: orthogonal power sum  |AF_copol|² + |AF_xpol|²  (the two
+               polarization components are orthogonal so their powers add).
         """
-        if self._polarization_var.get() == POLARIZATION_COPOL:
-            self._element_patterns_stacked = self._element_patterns_copol
+        self._active_polarization = self._polarization_var.get()
+        self._recompute_and_redraw()
+
+    def _on_display_mode_change(self) -> None:
+        """Apply a change to display mode or dBi range entries.
+
+        Validates the dBi min/max entries (must be floats and max > min),
+        flips the colorbar label/ticks to match the chosen mode, and triggers
+        a redraw. Invalid entries highlight red and abort the redraw.
+        """
+        mode = self._display_mode_var.get()
+
+        if mode == DISPLAY_ABSOLUTE:
+            # Validate the user-supplied dBi range before applying it.
+            try:
+                dbi_min = float(self._dbi_min_var.get())
+                dbi_max = float(self._dbi_max_var.get())
+                if dbi_max <= dbi_min:
+                    raise ValueError("max (dBi) must be greater than min (dBi).")
+            except ValueError as exc:
+                self._dbi_min_entry.config(bg=ENTRY_ERROR_COLOR)
+                self._dbi_max_entry.config(bg=ENTRY_ERROR_COLOR)
+                self._set_status(f"Invalid dBi range: {exc}")
+                return
+
+            self._dbi_min_entry.config(bg=ENTRY_BG_COLOR)
+            self._dbi_max_entry.config(bg=ENTRY_BG_COLOR)
+
+            self._cbar.set_label(COLORBAR_LABEL_ABSOLUTE)
+            # Span the range with up to 5 evenly spaced ticks.
+            self._cbar.set_ticks(np.linspace(dbi_min, dbi_max, 5))
         else:
-            # Total field: magnitude-only real-valued patterns cast to complex
-            self._element_patterns_stacked = self._element_patterns_total
+            self._cbar.set_label(COLORBAR_LABEL_RELATIVE)
+            self._cbar.set_ticks(list(range(-DYNAMIC_RANGE_DB, 1, 10)))
+
         self._recompute_and_redraw()
 
     # ── CSV PARSING ───────────────────────────────────────────────
@@ -941,53 +1135,147 @@ class ManualWeightsTuner:
     def _recompute_and_redraw(self) -> None:
         """Compute array factor and metrics, then refresh all displays.
 
-        Called on every weight or directive change. Runs synchronously on
-        the tkinter main thread; numpy operations keep latency low.
+        Called on every weight, directive, polarisation, or display-mode
+        change. Runs synchronously on the tkinter main thread; numpy
+        operations keep latency low for the (N_theta × N_phi) grid.
         """
         directives = self._get_directives_from_ui()
 
-        # Array factor: coherent superposition of weighted element patterns.
-        # AF(θ,φ) = Σ_n  w_n · E_n(θ,φ),  shape (N_theta, N_phi), V/m.
-        array_factor = compute_array_factor(
-            self._weights_complex, self._element_patterns_stacked
-        )
+        # ── 1) Compute both copol and cross AFs for CST-convention directivity ──
+        # Both stacks are always computed so that directivity can be normalised by
+        # total radiated power P_copol + P_cross (IEEE Std 149 partial directivity),
+        # matching the denominator CST uses when displaying component patterns.
+        # The "active polarisation" controls which power is shown in the heatmap;
+        # normalisation always uses the combined power.
+        #
+        # Power-normalise weights to match the optimizer's cost_fn convention:
+        #   w_norm = w / ||w||₂
+        # Directivity (|AF|² / P_total) is scale-invariant, so the displayed
+        # pattern is unchanged; only Total J becomes consistent with the optimizer.
+        # [MATLAB] w_norm = weights_complex / sqrt(max(sum(abs(weights_complex).^2), 1e-30));
+        _w_power = float(np.sum(np.abs(self._weights_complex) ** 2))
+        _weights_norm = self._weights_complex / np.sqrt(max(_w_power, 1e-30))
 
-        # Power density in linear scale (V/m)².
-        # Project convention: all optimisation math uses linear magnitude, not dB.
-        power_linear_grid = np.abs(array_factor) ** 2
+        af_copol = compute_array_factor(_weights_norm, self._element_patterns_copol)
+        af_cross = compute_array_factor(_weights_norm, self._element_patterns_cross)
 
-        # Convert to dB, normalise so the peak sits at 0 dB, clip to dynamic range.
-        power_db_grid = 10.0 * np.log10(
-            np.maximum(power_linear_grid, LOG10_EPSILON)
-        )
-        peak_db = np.max(power_db_grid)
-        grid_norm_db = np.clip(power_db_grid - peak_db, -DYNAMIC_RANGE_DB, 0.0)
+        # Spherical integral for total radiated power: P = Σ|AF|² sin(θ) Δθ Δφ
+        # [MATLAB] sin_t = sind(theta_deg)'; p = sum(sum((abs(af).^2) .* sin_t)) * dth * dph;
+        theta_rad  = np.deg2rad(self._theta_deg)
+        dtheta_rad = float(np.diff(theta_rad).mean()) if len(theta_rad) > 1 else np.pi
+        dphi_rad   = float(np.deg2rad(np.diff(self._phi_deg).mean())) if len(self._phi_deg) > 1 else 2.0 * np.pi
+        sin_theta  = np.sin(theta_rad)
 
-        self._update_heatmap(grid_norm_db)
+        def _spherical_power(af):
+            return float(np.sum(np.abs(af) ** 2 * sin_theta[:, np.newaxis])) * dtheta_rad * dphi_rad
+
+        p_total = _spherical_power(af_copol) + _spherical_power(af_cross)
+
+        # ── 2) Power grid + metrics AF, by polarisation channel ──────
+        # copol / cross: |AF|² of a single coherent superposition.
+        # total:         |AF_copol|² + |AF_xpol|² (orthogonal channels).
+        # For metrics we hand a "pseudo-AF" whose |·|² equals the power grid;
+        # phase is irrelevant because evaluate_metrics() only ever uses |AF|².
+        if self._active_polarization == POLARIZATION_CROSS:
+            power_linear_grid    = np.abs(af_cross) ** 2
+            metrics_array_factor = af_cross
+        elif self._active_polarization == POLARIZATION_TOTAL:
+            # Orthogonal polarizations add in power, not field.
+            # [MATLAB] power_total = abs(af_copol).^2 + abs(af_cross).^2;
+            power_linear_grid    = np.abs(af_copol) ** 2 + np.abs(af_cross) ** 2
+            metrics_array_factor = np.sqrt(power_linear_grid).astype(complex)
+        else:  # POLARIZATION_COPOL (default)
+            power_linear_grid    = np.abs(af_copol) ** 2
+            metrics_array_factor = af_copol
+
+        # ── 3) Build display grid + colorbar limits by display mode ──
+        display_mode = self._display_mode_var.get()
+        if display_mode == DISPLAY_ABSOLUTE:
+            # Absolute directivity in dBi using CST-convention total-power denominator.
+            # D_copol(θ,φ) = 4π|AF_copol|² / (P_copol+P_cross) — partial directivity.
+            # [MATLAB] grid = _compute_directivity_dbi_grid(metrics_af, theta, phi, p_total);
+            grid_display = _compute_directivity_dbi_grid(
+                metrics_array_factor, self._theta_deg, self._phi_deg,
+                normalizer_power=p_total,
+            )
+            # Parse the user-supplied clim; fall back to defaults on bad input.
+            try:
+                clim_min = float(self._dbi_min_var.get())
+                clim_max = float(self._dbi_max_var.get())
+                if clim_max <= clim_min:
+                    raise ValueError
+            except ValueError:
+                clim_min, clim_max = DEFAULT_DBI_MIN, DEFAULT_DBI_MAX
+        else:
+            # Relative-to-peak dB: normalise so the live peak sits at 0 dB.
+            power_db_grid = 10.0 * np.log10(
+                np.maximum(power_linear_grid, LOG10_EPSILON)
+            )
+            grid_display = np.clip(
+                power_db_grid - np.max(power_db_grid),
+                -DYNAMIC_RANGE_DB, 0.0,
+            )
+            clim_min, clim_max = -float(DYNAMIC_RANGE_DB), 0.0
+
+        self._update_heatmap(grid_display, clim_min, clim_max)
         self._update_directive_overlays(directives)
 
-        # Evaluate directivity-based metrics; pass empty cost_history (not applicable
-        # in manual mode; only used for iteration_count which is not displayed here)
+        # ── 4) Update live metric labels ─────────────────────────────
+        # Pass CST-convention total-power normaliser so that the metric panel
+        # shows the same partial directivity that CST displays.
         metrics = evaluate_metrics(
-            self._element_patterns_stacked,
+            self._element_patterns_copol,
             self._theta_deg,
             self._phi_deg,
             self._weights_complex,
             directives,
             [],
+            precomputed_array_factor=metrics_array_factor,
+            normalizer_power=p_total,
         )
         self._update_metrics_labels(metrics)
 
-    def _update_heatmap(self, grid_norm_db: np.ndarray) -> None:
-        """Push new data into the existing pcolormesh without rebuilding the axes.
+    def _update_heatmap(self, grid: np.ndarray,
+                        clim_min: float, clim_max: float) -> None:
+        """Cache the raw grid, rebuild the rotation interpolator, apply rotation, and push to the mesh.
 
         Args:
-            grid_norm_db (np.ndarray): Normalised power in dB, shape (N_theta, N_phi).
-                Values in the range [-DYNAMIC_RANGE_DB, 0]. Units: dB.
+            grid (np.ndarray): Unrotated display grid, shape (N_theta, N_phi).
+                Either normalised-to-peak dB or absolute dBi.
+            clim_min (float): Lower colorbar limit.
+            clim_max (float): Upper colorbar limit.
         """
+        self._unrotated_display_grid = grid
+        self._last_clim = (clim_min, clim_max)
+        # Rebuild the interpolator each time the underlying data changes.
+        # This is the expensive step (~few ms); it is reused for every drag event.
+        self._display_interp = RegularGridInterpolator(
+            (self._theta_deg, self._phi_deg),
+            grid,
+            method="linear",
+            bounds_error=False,
+            fill_value=float(np.min(grid)),
+        )
+        display_grid = self._apply_view_rotation(grid)
+        self._last_display_grid = display_grid
         # QuadMesh.set_array expects a flattened (row-major) 1-D array.
-        # [MATLAB] set(mesh_handle, 'CData', grid_norm_db)
-        self._mesh.set_array(grid_norm_db.ravel())
+        # [MATLAB] set(mesh_handle, 'CData', display_grid)
+        self._mesh.set_array(display_grid.ravel())
+        self._mesh.set_clim(clim_min, clim_max)
+        self._canvas.draw_idle()
+
+    def _update_heatmap_no_rebuild(self, grid: np.ndarray) -> None:
+        """Push a pre-rotated grid to the mesh without rebuilding the interpolator.
+
+        Used during drag events where only the view direction changes, not the
+        underlying pattern data.
+
+        Args:
+            grid (np.ndarray): Rotated display grid, shape (N_theta, N_phi).
+        """
+        self._last_display_grid = grid
+        self._mesh.set_array(grid.ravel())
+        self._mesh.set_clim(*self._last_clim)
         self._canvas.draw_idle()
 
     def _update_directive_overlays(self, directives: list[dict]) -> None:
@@ -1005,31 +1293,51 @@ class ManualWeightsTuner:
                 pass
         self._directive_artists.clear()
 
+        # When the view is at the default centre (90°, 180°) draw full rectangles.
+        # When rotated, rectangles transform non-rectangularly under spherical
+        # projection, so only centre markers are drawn at the transformed position.
+        is_default_view = (
+            abs(self._view_theta - 90.0) < 0.5
+            and abs((self._view_phi % 360.0) - 180.0) < 0.5
+        )
+
         for d in directives:
             color = (
                 PEAK_OVERLAY_COLOR if d["type"] == "peak" else NULL_OVERLAY_COLOR
             )
-            # Half angular width of the enforcement / suppression window, deg
-            half_width_deg = d["width"] / 2.0
+            sym_w    = d.get("width", None)
+            theta_hw = d.get("theta_width", sym_w) / 2.0
+            phi_hw   = d.get("phi_width",   sym_w) / 2.0
 
-            # Rectangle marks the full angular window on the θ-φ heatmap
-            rect = Rectangle(
-                (d["phi"] - half_width_deg, d["theta"] - half_width_deg),
-                2.0 * half_width_deg,
-                2.0 * half_width_deg,
-                linewidth=PATCH_LINEWIDTH,
-                edgecolor=color,
-                facecolor=color,
-                alpha=WINDOW_ALPHA,
-                zorder=4,
-            )
-            self._ax.add_patch(rect)
-            self._directive_artists.append(rect)
+            if is_default_view:
+                # Rectangle in flat θ (degrees) coordinates.
+                # [MATLAB] rectangle('Position', [phi-phi_hw, theta-theta_hw, 2*phi_hw, 2*theta_hw], ...);
+                rect = Rectangle(
+                    (d["phi"] - phi_hw, d["theta"] - theta_hw),
+                    2.0 * phi_hw,
+                    2.0 * theta_hw,
+                    linewidth=PATCH_LINEWIDTH,
+                    edgecolor=color,
+                    facecolor=color,
+                    alpha=WINDOW_ALPHA,
+                    zorder=4,
+                )
+                self._ax.add_patch(rect)
+                self._directive_artists.append(rect)
+                disp_phi, disp_theta = d["phi"], d["theta"]
+            else:
+                # Rotated view: transform directive centre to display coordinates.
+                rot    = _build_view_rotation(self._view_theta, self._view_phi)
+                d_orig = _sph_to_cart(d["theta"], d["phi"])
+                d_disp = rot.apply(d_orig)
+                z_disp     = float(np.clip(d_disp[2], -1.0, 1.0))
+                disp_theta = np.degrees(np.arccos(z_disp))
+                disp_phi   = float(np.degrees(np.arctan2(d_disp[1], d_disp[0])) % 360.0)
 
-            # Cross marker at exact target (φ, θ) coordinate
+            # Cross marker at directive target.
             scatter = self._ax.scatter(
-                d["phi"],
-                d["theta"],
+                disp_phi,
+                disp_theta,
                 marker="+",
                 s=SCATTER_MARKER_SIZE,
                 color=color,
@@ -1041,16 +1349,17 @@ class ManualWeightsTuner:
         self._canvas.draw_idle()
 
     def _update_metrics_labels(self, metrics: dict) -> None:
-        """Refresh all fixed and per-directive metric labels.
+        """Refresh all fixed metric labels and inline directive result labels.
 
         Args:
             metrics (dict): Return value of evaluate_metrics().
-                Expected keys: total_cost, global_peak_dbi,
-                peak_to_null_ratio_db, directive_metrics.
         """
-        total_cost    = metrics.get("total_cost", None)
-        global_peak   = metrics.get("global_peak_dbi", None)
-        pnr_db        = metrics.get("peak_to_null_ratio_db", None)
+        total_cost  = metrics.get("total_cost",  None)
+        global_peak = metrics.get("global_peak_dbi", None)
+        peak_theta  = metrics.get("global_peak_theta_deg", None)
+        peak_phi    = metrics.get("global_peak_phi_deg",   None)
+        hpbw_th     = metrics.get("hpbw_theta_deg", None)
+        hpbw_ph     = metrics.get("hpbw_phi_deg",   None)
 
         self._label_cost.config(
             text=f"{total_cost:.4e}" if total_cost is not None else "—"
@@ -1058,50 +1367,165 @@ class ManualWeightsTuner:
         self._label_peak.config(
             text=f"{global_peak:+.2f} dBi" if global_peak is not None else "—"
         )
-        self._label_pnr.config(
-            text=f"{pnr_db:.2f} dB" if pnr_db is not None else "—"
+        self._label_peak_angle.config(
+            text=(f"θ={peak_theta:.1f}° φ={peak_phi:.1f}°"
+                  if peak_theta is not None else "—")
+        )
+        self._label_hpbw.config(
+            text=(f"θ:{hpbw_th:.1f}° φ:{hpbw_ph:.1f}°"
+                  if hpbw_th is not None else "—")
         )
 
-        # Destroy existing per-directive rows and rebuild from fresh metrics
-        for widget in self._per_directive_metric_widgets:
-            widget.destroy()
-        self._per_directive_metric_widgets.clear()
-
+        # Update inline result labels in the directive table.
+        # Walk directive_rows in order, skipping invalid rows (same logic as
+        # _get_directives_from_ui), and map the i-th valid row to directive_metrics[i].
         directive_metrics = metrics.get("directive_metrics", [])
-        if directive_metrics:
-            sep = ttk.Separator(self._metrics_inner_frame, orient="horizontal")
-            sep.pack(fill=tk.X, pady=3)
-            self._per_directive_metric_widgets.append(sep)
+        metrics_idx = 0
+        for row_vars in self._directive_rows:
+            try:
+                d_type = row_vars["type_var"].get().strip()
+                if d_type not in ("peak", "null"):
+                    row_vars["metric_label"].config(text="—", fg="#222222")
+                    continue
+                float(row_vars["theta"].get())
+                float(row_vars["phi"].get())
+                float(row_vars["theta_width"].get())
+                float(row_vars["phi_width"].get())
+                float(row_vars["weight"].get())
+            except (ValueError, KeyError):
+                row_vars["metric_label"].config(text="—", fg="#222222")
+                continue
 
-        for dm in directive_metrics:
-            gain_dbi  = dm.get("gain_dbi", None)
-            d_type    = dm.get("type", "?").capitalize()
-            d_theta   = dm.get("theta_deg", 0.0)
-            d_phi     = dm.get("phi_deg", 0.0)
+            if metrics_idx < len(directive_metrics):
+                dm = directive_metrics[metrics_idx]
+                if dm["type"] == "peak":
+                    text  = f"{dm['gain_dbi']:+.2f} dBi"
+                    color = PEAK_OVERLAY_COLOR
+                else:
+                    text  = f"{dm['gain_dbi']:+.2f} ({dm['null_depth_db']:.1f})"
+                    color = NULL_OVERLAY_COLOR
+                row_vars["metric_label"].config(text=text, fg=color)
+                metrics_idx += 1
+            else:
+                row_vars["metric_label"].config(text="—", fg="#222222")
 
-            row = tk.Frame(self._metrics_inner_frame, bg=BG_COLOR)
-            row.pack(fill=tk.X, pady=1)
+    # ── MOUSE / POV HANDLERS ──────────────────────────────────────
 
-            tk.Label(
-                row,
-                text=f"{d_type} θ={d_theta:.1f}° φ={d_phi:.1f}°:",
-                font=LABEL_FONT,
-                bg=BG_COLOR,
-                anchor="w",
-                width=22,
-            ).pack(side=tk.LEFT)
+    def _on_mouse_move(self, event) -> None:
+        """Show pattern value under cursor in the status bar (hover readout).
 
-            value_text = f"{gain_dbi:+.2f} dBi" if gain_dbi is not None else "—"
-            tk.Label(
-                row,
-                text=value_text,
-                font=METRIC_FONT,
-                bg=BG_COLOR,
-                anchor="w",
-                fg="#222222",
-            ).pack(side=tk.LEFT)
+        Skipped during drag so the drag handler's status messages take priority.
+        """
+        if self._is_dragging:
+            return
+        if event.inaxes != self._ax or event.xdata is None or self._last_display_grid is None:
+            return
+        phi_idx   = int(np.argmin(np.abs(self._phi_deg   - event.xdata)))
+        theta_idx = int(np.argmin(np.abs(self._theta_deg - event.ydata)))
+        val  = self._last_display_grid[theta_idx, phi_idx]
+        unit = "dBi" if self._display_mode_var.get() == DISPLAY_ABSOLUTE else "dB"
+        self._set_status(
+            f"θ={self._theta_deg[theta_idx]:.1f}°  "
+            f"φ={self._phi_deg[phi_idx]:.1f}°  "
+            f"value={val:.2f} {unit}"
+        )
 
-            self._per_directive_metric_widgets.append(row)
+    def _on_drag_start(self, event) -> None:
+        """Record the mouse-down position and current view centre for drag tracking."""
+        if event.inaxes != self._ax or event.xdata is None:
+            return
+        self._is_dragging     = True
+        self._drag_start      = (event.xdata, event.ydata)   # (φ, θ) display coords
+        self._drag_view_start = (self._view_theta, self._view_phi)
+
+    def _on_drag_end(self, event) -> None:
+        """Clear dragging state on mouse button release."""
+        self._is_dragging = False
+
+    def _on_drag_motion(self, event) -> None:
+        """Update view centre and redisplay during a mouse drag.
+
+        Grab-and-drag semantics: the grabbed point follows the cursor, so the
+        view centre shifts opposite to the drag direction.
+        """
+        if not self._is_dragging or event.inaxes != self._ax or event.xdata is None:
+            return
+        delta_phi   = event.xdata - self._drag_start[0]
+        delta_theta = event.ydata - self._drag_start[1]
+        self._view_phi   = (self._drag_view_start[1] - delta_phi) % 360.0
+        self._view_theta = float(np.clip(
+            self._drag_view_start[0] - delta_theta, 0.5, 179.5
+        ))
+        if self._unrotated_display_grid is not None and self._display_interp is not None:
+            rotated = self._apply_view_rotation(self._unrotated_display_grid)
+            self._update_heatmap_no_rebuild(rotated)
+        self._update_directive_overlays(self._get_directives_from_ui())
+        self._set_status(
+            f"View centre: θ={self._view_theta:.1f}°  φ={self._view_phi:.1f}°"
+        )
+
+    def _on_reset_view(self) -> None:
+        """Snap the view back to the default centre (θ=90°, φ=180°) and redraw."""
+        self._view_theta = 90.0
+        self._view_phi   = 180.0
+        self._is_dragging = False
+        self._ax.set_title("Array Factor — manual weights", fontsize=10)
+        if self._unrotated_display_grid is not None:
+            self._update_heatmap(
+                self._unrotated_display_grid, *self._last_clim
+            )
+        self._update_directive_overlays(self._get_directives_from_ui())
+        self._update_status_count()
+
+    def _apply_view_rotation(self, data_grid: np.ndarray) -> np.ndarray:
+        """Rotate ``data_grid`` so that (view_theta, view_phi) appears at display centre.
+
+        For the default view centre (θ=90°, φ=180°) the grid is returned unchanged.
+        Otherwise a spherical rotation is applied via ``scipy.spatial.transform.Rotation``
+        and the result is interpolated back onto the regular (θ, φ) display grid.
+
+        Args:
+            data_grid (np.ndarray): Unrotated display grid, shape (N_theta, N_phi).
+
+        Returns:
+            np.ndarray: Rotated display grid, shape (N_theta, N_phi).
+        """
+        is_default = (
+            abs(self._view_theta - 90.0) < 0.5
+            and abs((self._view_phi % 360.0) - 180.0) < 0.5
+        )
+        if is_default:
+            return data_grid
+
+        rot = _build_view_rotation(self._view_theta, self._view_phi)
+
+        # Build a flat list of all display-grid directions in Cartesian coordinates.
+        theta_g, phi_g = np.meshgrid(self._theta_deg, self._phi_deg, indexing="ij")
+        t = np.deg2rad(theta_g.ravel())
+        p = np.deg2rad(phi_g.ravel())
+        xyz = np.stack(
+            [np.sin(t) * np.cos(p), np.sin(t) * np.sin(p), np.cos(t)], axis=1
+        )  # shape (N_theta*N_phi, 3)
+
+        # Inverse rotation: for each output display pixel find the original direction.
+        # [MATLAB] xyz_orig = (R^{-1}) * xyz';
+        xyz_orig = rot.inv().apply(xyz)
+
+        z_orig   = np.clip(xyz_orig[:, 2], -1.0, 1.0)
+        th_orig  = np.degrees(np.arccos(z_orig))
+        ph_orig  = np.degrees(np.arctan2(xyz_orig[:, 1], xyz_orig[:, 0])) % 360.0
+
+        query  = np.stack([th_orig, ph_orig], axis=1)
+        result = self._display_interp(query).reshape(
+            len(self._theta_deg), len(self._phi_deg)
+        )
+
+        # Update plot title to reflect the current view centre.
+        self._ax.set_title(
+            f"Array Factor — view: θ={self._view_theta:.1f}° φ={self._view_phi:.1f}°",
+            fontsize=10,
+        )
+        return result
 
     # ── HELPERS ───────────────────────────────────────────────────
 
@@ -1123,11 +1547,12 @@ class ManualWeightsTuner:
                 if d_type not in ("peak", "null"):
                     continue
                 directive = {
-                    "type":   d_type,
-                    "theta":  float(row_vars["theta"].get()),
-                    "phi":    float(row_vars["phi"].get()),
-                    "width":  float(row_vars["width"].get()),
-                    "weight": float(row_vars["weight"].get()),
+                    "type":        d_type,
+                    "theta":       float(row_vars["theta"].get()),
+                    "phi":         float(row_vars["phi"].get()),
+                    "theta_width": float(row_vars["theta_width"].get()),
+                    "phi_width":   float(row_vars["phi_width"].get()),
+                    "weight":      float(row_vars["weight"].get()),
                 }
                 directives.append(directive)
             except ValueError:

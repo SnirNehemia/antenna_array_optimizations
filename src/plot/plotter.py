@@ -10,8 +10,11 @@ import numpy as np
 import matplotlib
 matplotlib.use("Agg")   # non-interactive backend — safe for headless script use
 import matplotlib.pyplot as plt
+import matplotlib.animation as animation
 from matplotlib.patches import Rectangle
 from pathlib import Path
+
+from src.cost.cost_function import compute_array_factor
 
 # ────────────────────────── CONSTANTS ─────────────────────────────
 
@@ -21,6 +24,13 @@ CARTESIAN_PLOT_FILENAME  = "pattern_cartesian.png"
 PROJECTION_PLOT_FILENAME = "pattern_2d.png"
 WEIGHTS_PLOT_FILENAME    = "weights.png"
 COST_HISTORY_FILENAME    = "cost_history.png"
+GIF_FILENAME             = "pattern_evolution.gif"
+
+# Maximum number of GIF frames (strides automatically over iterations).
+MAX_GIF_FRAMES = 100
+
+# GIF playback speed in frames per second.
+GIF_FPS = 10
 
 # Rendering resolution for all saved figures.
 PLOT_DPI = 150
@@ -94,10 +104,12 @@ def _directive_window_bounds(directive, output_config):
 
     For a theta_cut the window is centred on the directive's theta;
     for a phi_cut it is centred on the directive's phi.
+    Uses ``theta_width`` / ``phi_width`` when present; falls back to ``width``.
 
     Args:
         directive (dict): A beam-shaping directive dict with keys ``type``,
-            ``theta``, ``phi`` (optional), and ``width``.
+            ``theta``, ``phi`` (optional), ``width`` / ``theta_width`` /
+            ``phi_width``.
         output_config (dict): Output settings containing ``plot_cut_type``.
 
     Returns:
@@ -107,16 +119,20 @@ def _directive_window_bounds(directive, output_config):
             - hi_deg: Upper window bound. Units: degrees.
             - color: Overlay color string (green for peak, red for null).
     """
-    cut_type       = output_config["plot_cut_type"]
-    half_width_deg = directive["width"] / 2.0
-    color          = PEAK_WINDOW_COLOR if directive["type"] == "peak" else NULL_WINDOW_COLOR
+    cut_type  = output_config["plot_cut_type"]
+    sym_width = directive.get("width", None)
+    theta_hw  = directive.get("theta_width", sym_width) / 2.0
+    phi_hw    = directive.get("phi_width",   sym_width) / 2.0
+    color     = PEAK_WINDOW_COLOR if directive["type"] == "peak" else NULL_WINDOW_COLOR
 
     if cut_type == "theta_cut":
         center_deg = directive["theta"]
+        hw = theta_hw
     else:
         center_deg = directive.get("phi", 0.0)
+        hw = phi_hw
 
-    return center_deg, center_deg - half_width_deg, center_deg + half_width_deg, color
+    return center_deg, center_deg - hw, center_deg + hw, color
 
 
 def _directive_on_cut(directive, output_config):
@@ -141,24 +157,28 @@ def _directive_on_cut(directive, output_config):
         tuple[bool, bool]: ``(show_on_plot, on_front_half)``.
             ``on_front_half`` is only meaningful when cut_type == ``"theta_cut"``.
     """
-    cut_type = output_config["plot_cut_type"]
-    half_w   = directive["width"] / 2.0
-    d_phi    = directive.get("phi", 0.0)
-    d_theta  = directive["theta"]
+    cut_type  = output_config["plot_cut_type"]
+    sym_width = directive.get("width", None)
+    theta_hw  = directive.get("theta_width", sym_width) / 2.0
+    phi_hw    = directive.get("phi_width",   sym_width) / 2.0
+    d_phi     = directive.get("phi", 0.0)
+    d_theta   = directive["theta"]
 
     if cut_type == "theta_cut":
+        # A theta-cut at fixed phi: visible if the directive's phi window covers the cut.
         fixed_phi = float(output_config.get("plot_phi_deg", 0.0))
         back_phi  = (fixed_phi + 180.0) % 360.0
         delta_front = abs((d_phi - fixed_phi + 180.0) % 360.0 - 180.0)
         delta_back  = abs((d_phi - back_phi  + 180.0) % 360.0 - 180.0)
-        on_front = delta_front <= half_w
-        on_back  = delta_back  <= half_w
-        # [MATLAB] on_front = abs(mod(d_phi - fixed_phi + 180, 360) - 180) <= half_w;
+        on_front = delta_front <= phi_hw
+        on_back  = delta_back  <= phi_hw
+        # [MATLAB] on_front = abs(mod(d_phi - fixed_phi + 180, 360) - 180) <= phi_hw;
         return (on_front or on_back), on_front
     else:  # phi_cut
+        # A phi-cut at fixed theta: visible if the directive's theta window covers the cut.
         fixed_theta = float(output_config.get("plot_theta_deg", 90.0))
-        visible     = abs(d_theta - fixed_theta) <= half_w
-        # [MATLAB] visible = abs(d_theta - fixed_theta) <= half_w;
+        visible     = abs(d_theta - fixed_theta) <= theta_hw
+        # [MATLAB] visible = abs(d_theta - fixed_theta) <= theta_hw;
         return visible, True
 
 
@@ -362,12 +382,15 @@ def save_cartesian_plot(array_factor_db_grid, theta_deg, phi_deg,
 
 
 def save_2d_projection_plot(array_factor_db_grid, theta_deg, phi_deg,
-                             directives, dynamic_range_db, output_path):
+                             directives, dynamic_range_db, output_path,
+                             equal_area=False):
     """Save a 2D theta-phi heatmap of the full radiation pattern with directive markers.
 
     The full (N_theta × N_phi) grid is normalized to 0 dB at the global peak and
-    clamped at -dynamic_range_db. Each directive is overlaid as a scatter marker:
-    green star (``*``) for peak, red cross (``x``) for null.
+    clamped at -dynamic_range_db. Directives are overlaid as filled rectangles.
+
+    When ``equal_area`` is False (default), the y-axis uses linear θ (0–180°).
+    Set ``equal_area=True`` for the cos(θ) equal-area cylindrical projection.
 
     Args:
         array_factor_db_grid (np.ndarray): Pre-computed 10·log10(|AF|²),
@@ -375,9 +398,12 @@ def save_2d_projection_plot(array_factor_db_grid, theta_deg, phi_deg,
         theta_deg (np.ndarray): Elevation angle grid, shape (N_theta,). Units: degrees.
         phi_deg (np.ndarray): Azimuth angle grid, shape (N_phi,). Units: degrees.
         directives (list[dict]): Beam-shaping directives. Each must have ``type``,
-            ``theta``, and optionally ``phi`` (default 0.0).
+            ``theta``, and optionally ``phi`` (default 0.0), ``theta_width`` /
+            ``phi_width`` / ``width``.
         dynamic_range_db (float): Color axis span. Units: dB.
         output_path (str | Path): Full path for the saved PNG file.
+        equal_area (bool): Use cos(θ) y-axis for equal solid-angle representation.
+            Default: False (linear θ axis).
     """
     # Normalize full 2D grid to peak = 0 dB, then clamp at floor.
     grid_norm = array_factor_db_grid - np.max(array_factor_db_grid)
@@ -385,48 +411,85 @@ def save_2d_projection_plot(array_factor_db_grid, theta_deg, phi_deg,
     # [MATLAB] grid_norm = array_factor_db_grid - max(array_factor_db_grid(:));
     # [MATLAB] grid_norm = max(grid_norm, -dynamic_range_db);
 
+    if equal_area:
+        # Equal-area cylindrical projection: y = cos(θ).
+        # θ=0° (zenith) → cos=+1 (top), θ=90° (horizon) → cos=0, θ=180° → cos=-1 (bottom).
+        # [MATLAB] y_coords = cosd(theta_deg);
+        y_coords = np.cos(np.deg2rad(theta_deg))
+        y_label  = "Elevation θ  [equal-area cos θ]"
+        y_lim    = (-1.0, 1.0)
+        tick_theta = np.array([0, 30, 60, 90, 120, 150, 180])
+        tick_y     = np.cos(np.deg2rad(tick_theta))
+        tick_labels = [f"{t}°" for t in tick_theta]
+    else:
+        y_coords = theta_deg
+        y_label  = "Elevation θ (°)"
+        y_lim    = (0.0, 180.0)
+        tick_theta  = None
+        tick_y      = None
+        tick_labels = None
+
     fig, ax = plt.subplots(figsize=(9, 5))
 
     mesh = ax.pcolormesh(
-        phi_deg, theta_deg, grid_norm,
+        phi_deg, y_coords, grid_norm,
         cmap="jet", vmin=-dynamic_range_db, vmax=0, shading="auto",
     )
-    # [MATLAB] imagesc(phi_deg, theta_deg, grid_norm); colormap jet; caxis([-dynamic_range_db 0]);
+    # [MATLAB] imagesc(phi_deg, y_coords, grid_norm); colormap jet; caxis([-dynamic_range_db 0]);
 
     cbar = fig.colorbar(mesh, ax=ax, label="dB (normalized to peak)")
     cbar.set_ticks(np.arange(-dynamic_range_db, 1, 10).tolist())
+
+    if tick_y is not None:
+        ax.set_yticks(tick_y)
+        ax.set_yticklabels(tick_labels)
 
     # Overlay each directive as a rectangle showing the full angular window.
     for directive in directives:
         d_theta   = directive["theta"]
         d_phi     = directive.get("phi", 0.0)
-        half_w    = directive["width"] / 2.0
+        sym_width = directive.get("width", None)
+        theta_hw  = directive.get("theta_width", sym_width) / 2.0
+        phi_hw    = directive.get("phi_width",   sym_width) / 2.0
         color     = PEAK_WINDOW_COLOR if directive["type"] == "peak" else NULL_WINDOW_COLOR
         type_str  = "Peak" if directive["type"] == "peak" else "Null"
         label_str = f'{type_str} window  θ={d_theta:.0f}°, φ={d_phi:.0f}°'
 
-        rect = Rectangle(
-            (d_phi - half_w, d_theta - half_w),
-            2 * half_w, 2 * half_w,
-            linewidth=2, edgecolor=color, facecolor=color,
-            alpha=0.30, zorder=4, label=label_str,
-        )
-        ax.add_patch(rect)
-        # Cross at the exact target center, visible inside the filled rectangle.
-        ax.scatter(d_phi, d_theta, marker="+", s=120, color=color,
-                   linewidths=2, zorder=5)
-        # [MATLAB] rectangle('Position', [d_phi-half_w, d_theta-half_w, 2*half_w, 2*half_w], ...
+        if equal_area:
+            # Map θ bounds through cos — cos is decreasing so lo/hi swap.
+            cos_bot = np.cos(np.deg2rad(d_theta + theta_hw))  # lower y in cos coords
+            cos_top = np.cos(np.deg2rad(d_theta - theta_hw))  # upper y in cos coords
+            cos_ctr = np.cos(np.deg2rad(d_theta))
+            rect = Rectangle(
+                (d_phi - phi_hw, cos_bot),
+                2 * phi_hw, cos_top - cos_bot,
+                linewidth=2, edgecolor=color, facecolor=color,
+                alpha=0.30, zorder=4, label=label_str,
+            )
+            ax.add_patch(rect)
+            ax.scatter(d_phi, cos_ctr, marker="+", s=120, color=color,
+                       linewidths=2, zorder=5)
+        else:
+            rect = Rectangle(
+                (d_phi - phi_hw, d_theta - theta_hw),
+                2 * phi_hw, 2 * theta_hw,
+                linewidth=2, edgecolor=color, facecolor=color,
+                alpha=0.30, zorder=4, label=label_str,
+            )
+            ax.add_patch(rect)
+            ax.scatter(d_phi, d_theta, marker="+", s=120, color=color,
+                       linewidths=2, zorder=5)
+        # [MATLAB] rectangle('Position', [d_phi-phi_hw, y_bot, 2*phi_hw, y_top-y_bot], ...
         # [MATLAB]   'EdgeColor', color, 'FaceColor', color, 'FaceAlpha', 0.30);
 
     ax.set_xlabel("Phi (deg)")
-    ax.set_ylabel("Theta (deg)")
+    ax.set_ylabel(y_label)
     ax.set_title("Array Pattern — 2D Projection")
     ax.legend(fontsize=8, loc="upper right")
     ax.grid(True, alpha=0.2, color="white")
 
-    # Fix axes to full-sphere coverage regardless of data resolution.
     ax.set_xlim(0.0, 360.0)
-    ax.set_ylim(0.0, 180.0)
+    ax.set_ylim(*y_lim)
 
     fig.tight_layout()
     fig.savefig(output_path, dpi=PLOT_DPI, bbox_inches="tight")
@@ -517,6 +580,129 @@ def save_cost_history_plot(all_cost_histories, best_run_index, all_run_labels, o
     plt.close(fig)
 
 
+# ────────────────────────── GIF ANIMATION ─────────────────────────
+
+def save_pattern_gif(weights_history, element_patterns_stacked,
+                     theta_deg, phi_deg, directives,
+                     cost_history, output_config, output_dir):
+    """Save an animated GIF showing the radiation pattern evolving over optimizer iterations.
+
+    Each frame renders the 2D heatmap (equal-area projection) with directive overlays
+    and a cost-convergence panel. Iteration count is automatically strided to stay
+    within ``gif_max_frames``.
+
+    Requires the ``pillow`` package (``pip install pillow``).
+
+    Args:
+        weights_history (list[np.ndarray]): Complex weight vectors recorded at each
+            optimizer iteration, shape (N_iterations, N_elements). Units: V/V.
+        element_patterns_stacked (np.ndarray): Complex element patterns,
+            shape (N_elements, N_theta, N_phi). Units: V/m.
+        theta_deg (np.ndarray): Elevation angle grid, shape (N_theta,). Units: degrees.
+        phi_deg (np.ndarray): Azimuth angle grid, shape (N_phi,). Units: degrees.
+        directives (list[dict]): Beam-shaping directives for overlays.
+        cost_history (list[float]): Cost value per iteration (same length as
+            ``weights_history``).
+        output_config (dict): Output section from config.yaml. Reads
+            ``gif_max_frames`` (int, default 100) and ``plot_dynamic_range_db``.
+        output_dir (Path): Directory where the GIF is saved.
+    """
+    if not weights_history:
+        return
+
+    try:
+        from PIL import Image  # noqa: F401 — ensure pillow is importable
+    except ImportError:
+        print("  WARNING: pillow not installed — skipping GIF. Run: pip install pillow")
+        return
+
+    max_frames      = int(output_config.get("gif_max_frames", MAX_GIF_FRAMES))
+    dynamic_range   = float(output_config.get("plot_dynamic_range_db", DEFAULT_DYNAMIC_RANGE_DB))
+    n_iters         = len(weights_history)
+    stride          = max(1, n_iters // max_frames)
+    frame_indices   = list(range(0, n_iters, stride))
+    if (n_iters - 1) not in frame_indices:
+        frame_indices.append(n_iters - 1)   # always include the final state
+
+    fig, (ax_map, ax_cost) = plt.subplots(
+        1, 2, figsize=(12, 5),
+        gridspec_kw={"width_ratios": [2, 1]},
+    )
+
+    # ── Initialise heatmap on ax_map ──────────────────────────────────
+    dummy_grid = np.zeros((len(theta_deg), len(phi_deg)))
+    mesh = ax_map.pcolormesh(
+        phi_deg, theta_deg, dummy_grid,
+        cmap="jet", vmin=-dynamic_range, vmax=0, shading="auto",
+    )
+    fig.colorbar(mesh, ax=ax_map, label="dB (normalized to peak)")
+    ax_map.set_xlabel("Phi (deg)")
+    ax_map.set_ylabel("Elevation θ (°)")
+    ax_map.set_xlim(0.0, 360.0)
+    ax_map.set_ylim(0.0, 180.0)
+    ax_map.grid(True, alpha=0.2, color="white")
+    title_text = ax_map.set_title("")
+
+    # Directive overlay artists (created once, updated each frame via set_xy / set_height).
+    overlay_patches = []
+    overlay_scatters = []
+    for directive in directives:
+        d_theta   = directive["theta"]
+        d_phi     = directive.get("phi", 0.0)
+        sym_width = directive.get("width", None)
+        theta_hw  = directive.get("theta_width", sym_width) / 2.0
+        phi_hw    = directive.get("phi_width",   sym_width) / 2.0
+        color     = PEAK_WINDOW_COLOR if directive["type"] == "peak" else NULL_WINDOW_COLOR
+        rect = Rectangle(
+            (d_phi - phi_hw, d_theta - theta_hw), 2 * phi_hw, 2 * theta_hw,
+            linewidth=2, edgecolor=color, facecolor=color, alpha=0.30, zorder=4,
+        )
+        ax_map.add_patch(rect)
+        sc = ax_map.scatter(d_phi, d_theta, marker="+", s=100, color=color,
+                            linewidths=2, zorder=5)
+        overlay_patches.append(rect)
+        overlay_scatters.append(sc)
+
+    # ── Initialise cost plot on ax_cost ───────────────────────────────
+    cost_arr = np.array(cost_history)
+    iters    = np.arange(len(cost_arr))
+    ax_cost.plot(iters, cost_arr, color="gray", alpha=0.5, linewidth=1)
+    cost_dot, = ax_cost.plot([], [], "bo", markersize=6)
+    ax_cost.set_xlabel("Iteration")
+    ax_cost.set_ylabel("Cost J")
+    ax_cost.set_title("Convergence")
+    ax_cost.grid(True, alpha=0.3)
+
+    fig.tight_layout()
+
+    def _update(frame_idx):
+        weights = weights_history[frame_idx]
+        # Compute normalised dB grid for this weight vector.
+        af         = compute_array_factor(weights, element_patterns_stacked)
+        power      = np.abs(af) ** 2
+        power_db   = 10.0 * np.log10(np.maximum(power, 1e-30))
+        grid_norm  = np.clip(power_db - power_db.max(), -dynamic_range, 0.0)
+        mesh.set_array(grid_norm.ravel())
+        # [MATLAB] set(mesh_handle, 'CData', grid_norm);
+
+        cost_val = cost_history[frame_idx] if frame_idx < len(cost_history) else float("nan")
+        title_text.set_text(f"Iter {frame_idx}   J = {cost_val:.4f}")
+
+        # Cost dot on convergence plot.
+        cost_dot.set_data([frame_idx], [cost_val])
+
+        return [mesh, title_text, cost_dot]
+
+    anim = animation.FuncAnimation(
+        fig, _update, frames=frame_indices, blit=True, repeat=False,
+    )
+    interval_ms = int(1000 / GIF_FPS)
+    writer = animation.PillowWriter(fps=GIF_FPS)
+    anim.save(str(output_dir / GIF_FILENAME), writer=writer)
+    plt.close(fig)
+    # [MATLAB] MATLAB's imwrite() loop or VideoWriter can produce a similar result.
+
+
 # ────────────────────────── ORCHESTRATOR ──────────────────────────
 
 def save_all_plots(array_factor_db_grid, theta_deg, phi_deg,
@@ -569,10 +755,12 @@ def save_all_plots(array_factor_db_grid, theta_deg, phi_deg,
         )
 
     if output_config.get("save_2d_projection_plot", False):
+        equal_area = bool(output_config.get("plot_equal_area", True))
         save_2d_projection_plot(
             array_factor_db_grid, theta_deg, phi_deg, directives,
             dynamic_range_db,
             output_dir / PROJECTION_PLOT_FILENAME,
+            equal_area=equal_area,
         )
 
     if output_config.get("save_weight_plots", False):
