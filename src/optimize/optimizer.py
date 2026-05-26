@@ -149,9 +149,8 @@ def _single_element_initial_x(n_elements, element_idx, mode):
 def _run_single_optimization(cost_fn, x_initial, bounds, max_iterations, cost_tolerance):
     """Run a single L-BFGS-B optimization from a given starting point.
 
-    Tracks the cost value at the end of each iteration via the callback mechanism.
-    Note: the callback triggers one extra cost function evaluation per iteration,
-    which is acceptable for the small overhead of logging convergence history.
+    Tracks the cost value and the raw variable vector at the end of each
+    iteration via the callback mechanism.
 
     Args:
         cost_fn (callable): Scalar cost function ``f(x) -> float``.
@@ -162,15 +161,18 @@ def _run_single_optimization(cost_fn, x_initial, bounds, max_iterations, cost_to
             (``ftol`` in scipy: stop when |f_{k+1} - f_k| / max(|f_k|, 1) < ftol).
 
     Returns:
-        tuple[scipy.optimize.OptimizeResult, list[float]]:
+        tuple[scipy.optimize.OptimizeResult, list[float], list[np.ndarray]]:
             - result: Full scipy optimization result object.
             - cost_history: Cost value recorded at the end of each iteration.
+            - xk_history: Raw variable vector ``xk`` at the end of each iteration.
     """
     cost_history = []
+    xk_history   = []
 
     def callback(xk):
-        # Record cost at the current iterate for convergence plotting.
+        # Record cost and variable state at the current iterate.
         cost_history.append(float(cost_fn(xk)))
+        xk_history.append(xk.copy())
     # [MATLAB] options.OutputFcn = @(x, optimValues, state) record_cost(x, optimValues);
 
     result = scipy.optimize.minimize(
@@ -188,7 +190,7 @@ def _run_single_optimization(cost_fn, x_initial, bounds, max_iterations, cost_to
     # [MATLAB]     'MaxIterations', max_iterations, 'FunctionTolerance', cost_tolerance);
     # [MATLAB] result = fmincon(cost_fn, x_initial, [], [], [], [], lb, ub, [], options);
 
-    return result, cost_history
+    return result, cost_history, xk_history
 
 
 # ────────────────────────── PUBLIC INTERFACE ──────────────────────
@@ -283,6 +285,7 @@ def run_optimizer(element_patterns_stacked, theta_deg, phi_deg,
 
     best_result        = None
     best_cost_history  = []
+    best_xk_history    = []
     best_final_cost    = np.inf
     best_run_index     = 0
     all_cost_histories = []
@@ -301,7 +304,7 @@ def run_optimizer(element_patterns_stacked, theta_deg, phi_deg,
             run_label = f"Random init {restart_index}"
         # [MATLAB] % restart_index == 0 and use_uniform: uniform; else random
 
-        result, cost_history = _run_single_optimization(
+        result, cost_history, xk_history = _run_single_optimization(
             cost_fn, x_initial, bounds, max_iterations, cost_tolerance
         )
         all_cost_histories.append(cost_history)
@@ -311,6 +314,7 @@ def run_optimizer(element_patterns_stacked, theta_deg, phi_deg,
             best_final_cost   = result.fun
             best_result       = result
             best_cost_history = cost_history
+            best_xk_history   = xk_history
             best_run_index    = run_index
         run_index += 1
 
@@ -322,7 +326,7 @@ def run_optimizer(element_patterns_stacked, theta_deg, phi_deg,
             run_label = f"Element {element_idx} init"
             # [MATLAB] x0 = zeros(2*n_elements, 1); x0(2*element_idx+1) = 1;
 
-            result, cost_history = _run_single_optimization(
+            result, cost_history, xk_history = _run_single_optimization(
                 cost_fn, x_initial, bounds, max_iterations, cost_tolerance
             )
             all_cost_histories.append(cost_history)
@@ -332,6 +336,7 @@ def run_optimizer(element_patterns_stacked, theta_deg, phi_deg,
                 best_final_cost   = result.fun
                 best_result       = result
                 best_cost_history = cost_history
+                best_xk_history   = xk_history
                 best_run_index    = run_index
             run_index += 1
 
@@ -342,6 +347,16 @@ def run_optimizer(element_patterns_stacked, theta_deg, phi_deg,
         )
 
     # ── Decode best solution ───────────────────────────────────────
+    def _decode_x(x):
+        """Decode raw variable vector x to complex weights without power-normalisation."""
+        if mode == "amplitude_only":
+            return x.astype(complex)
+        w = x_to_weights(x)
+        if mode == "phase_only":
+            a = np.abs(w)
+            w = w / np.where(a > 0.0, a, 1.0)
+        return w
+
     if mode == "amplitude_only":
         # Amplitude-only: x is a real amplitude vector; Im parts are 0.
         weights_complex = best_result.x.astype(complex)
@@ -356,6 +371,11 @@ def run_optimizer(element_patterns_stacked, theta_deg, phi_deg,
             weights_complex = weights_complex / safe_amplitudes
             # [MATLAB] weights_complex = weights_complex ./ max(abs(weights_complex), eps);
 
+    # Decode the per-iteration variable history for the best run into complex weights.
+    # Used for GIF animation in save_pattern_gif(); pattern shape is unaffected
+    # by the per-call power normalisation inside cost_fn.
+    weights_history = [_decode_x(xk) for xk in best_xk_history]
+
     return {
         "weights_complex":    weights_complex,
         "cost_history":       best_cost_history,
@@ -363,4 +383,5 @@ def run_optimizer(element_patterns_stacked, theta_deg, phi_deg,
         "all_cost_histories": all_cost_histories,
         "all_run_labels":     all_run_labels,
         "best_run_index":     best_run_index,
+        "weights_history":    weights_history,
     }

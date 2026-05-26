@@ -95,31 +95,34 @@ def compute_array_factor(weights_complex, element_patterns_stacked):
 # ────────────────────────── ANGULAR WINDOW ────────────────────────
 
 def angular_window_mask(theta_deg, phi_deg,
-                        target_theta_deg, target_phi_deg, width_deg):
+                        target_theta_deg, target_phi_deg,
+                        theta_width_deg, phi_width_deg):
     """Build a boolean 2D mask covering an angular window on the (theta, phi) grid.
 
-    The window is a rectangular region centred on (target_theta, target_phi)
-    with full angular width ``width_deg`` in both dimensions (half-width = width/2).
+    The window is a rectangular region centred on (target_theta, target_phi).
+    Elevation and azimuth half-widths are specified independently so the window
+    can be asymmetric (e.g. narrow in phi, wide in theta).
 
     Args:
         theta_deg (np.ndarray): Elevation angle grid, shape (N_theta,). Units: degrees.
         phi_deg (np.ndarray): Azimuth angle grid, shape (N_phi,). Units: degrees.
         target_theta_deg (float): Window centre in elevation. Units: degrees.
         target_phi_deg (float): Window centre in azimuth. Units: degrees.
-        width_deg (float): Full angular width of the window in both dimensions.
-            Units: degrees.
+        theta_width_deg (float): Full angular width in elevation. Units: degrees.
+        phi_width_deg (float): Full angular width in azimuth. Units: degrees.
 
     Returns:
         np.ndarray: Boolean mask, shape (N_theta, N_phi). True where the grid
             point falls inside the angular window.
     """
-    half_width_deg = width_deg / 2.0
+    theta_hw = theta_width_deg / 2.0
+    phi_hw   = phi_width_deg   / 2.0
 
     # Identify which theta and phi values fall within the window.
-    theta_in_window = np.abs(theta_deg - target_theta_deg) <= half_width_deg
-    # [MATLAB] theta_in_window = abs(theta_deg - target_theta_deg) <= half_width_deg;
-    phi_in_window = np.abs(phi_deg - target_phi_deg) <= half_width_deg
-    # [MATLAB] phi_in_window = abs(phi_deg - target_phi_deg) <= half_width_deg;
+    theta_in_window = np.abs(theta_deg - target_theta_deg) <= theta_hw
+    # [MATLAB] theta_in_window = abs(theta_deg - target_theta_deg) <= theta_hw;
+    phi_in_window = np.abs(phi_deg - target_phi_deg) <= phi_hw
+    # [MATLAB] phi_in_window = abs(phi_deg - target_phi_deg) <= phi_hw;
 
     # Outer product: mask[i, j] = True iff theta_i and phi_j are both in window.
     mask = theta_in_window[:, np.newaxis] & phi_in_window[np.newaxis, :]
@@ -129,20 +132,26 @@ def angular_window_mask(theta_deg, phi_deg,
 
 # ────────────────────────── DIRECTIVE COST ────────────────────────
 
-def _directive_cost(array_factor, mask, directive_type):
+def _directive_cost(power_grid, mask, directive_type, sin_theta):
     """Compute the scalar cost contribution for a single beam-shaping directive.
 
     All cost terms are formulated as quantities to **minimize** so that
     L-BFGS-B (a minimizer) drives the array pattern toward the desired shape.
 
-    - Peak:  C = -mean(|AF|²) in window  (negative → minimizing increases gain)
-    - Null:  C = +mean(|AF|²) in window  (positive → minimizing suppresses gain)
+    - Peak:  C = -mean_sa(|AF|²) in window  (negative → minimizing increases gain)
+    - Null:  C = +mean_sa(|AF|²) in window  (positive → minimizing suppresses gain)
+
+    The window mean is weighted by solid angle (sin θ · Δθ · Δφ) so that pixels
+    near the poles (where sin θ ≈ 0) do not over-contribute relative to their
+    actual angular area.
 
     Args:
-        array_factor (np.ndarray): Complex array factor, shape (N_theta, N_phi).
-            Units: V/m.
+        power_grid (np.ndarray): |AF|² over the full grid, shape (N_theta, N_phi).
+            Units: (V/m)². Pre-computed by the caller once per cost evaluation.
         mask (np.ndarray): Boolean angular window mask, shape (N_theta, N_phi).
         directive_type (str): Either ``"peak"`` or ``"null"``.
+        sin_theta (np.ndarray): sin(θ) for each elevation sample, shape (N_theta,).
+            Used as the solid-angle weighting factor.
 
     Returns:
         float: Scalar cost contribution for this directive. Units: (V/m)².
@@ -156,17 +165,20 @@ def _directive_cost(array_factor, mask, directive_type):
             f"Valid types: {VALID_DIRECTIVE_TYPES}."
         )
 
-    # Mean power (|AF|²) over all grid points inside the angular window.
-    # Boolean indexing flattens the masked values to 1D before averaging.
-    mean_power_in_window = np.mean(np.abs(array_factor[mask]) ** 2, axis=0)
-    # [MATLAB] mean_power = mean(abs(array_factor(mask)) .^ 2);
+    # Solid-angle-weighted mean power inside the window.
+    # weights_sa[i,j] = sin(θ_i) when mask[i,j] is True, 0 otherwise.
+    # [MATLAB] weights_sa = mask .* sin(deg2rad(theta_deg))';
+    weights_sa   = mask * sin_theta[:, np.newaxis]
+    total_weight = float(np.sum(weights_sa))
+    mean_power   = float(np.sum(power_grid * weights_sa)) / max(total_weight, 1e-30)
+    # [MATLAB] mean_power = sum(power_grid(:) .* weights_sa(:)) / max(sum(weights_sa(:)), 1e-30);
 
     if directive_type == "peak":
         # Maximizing gain = minimizing the negative of mean power in the beam window.
-        return -mean_power_in_window
+        return -mean_power
     else:  # "null"
         # Suppressing gain = minimizing mean power in the null window.
-        return mean_power_in_window
+        return mean_power
 
 
 # ────────────────────────── COST FUNCTION BUILDER ─────────────────
@@ -191,8 +203,11 @@ def build_cost_function(element_patterns_stacked, theta_deg, phi_deg,
         directives (list[dict]): Beam-shaping directives. Each dict must have:
             - ``type`` (str): ``"peak"`` or ``"null"``.
             - ``theta`` (float): Target elevation angle. Units: degrees.
-            - ``width`` (float): Full angular window width. Units: degrees.
+            - ``width`` (float): Symmetric angular window width (used when
+              ``theta_width`` / ``phi_width`` are absent). Units: degrees.
             Optional keys:
+            - ``theta_width`` (float): Elevation window width (overrides ``width``).
+            - ``phi_width`` (float): Azimuth window width (overrides ``width``).
             - ``phi`` (float): Target azimuth angle (default 0.0). Units: degrees.
             - ``weight`` (float): Directive weight lambda_k (default 1.0).
         mode (str): Optimization mode. One of:
@@ -214,15 +229,24 @@ def build_cost_function(element_patterns_stacked, theta_deg, phi_deg,
         )
 
     # Pre-compute angular window masks — these are fixed for the entire optimization.
+    # theta_width / phi_width are independent; "width" is the symmetric fallback.
     directive_masks = []
     for directive in directives:
         target_theta_deg = directive["theta"]
         target_phi_deg   = directive.get("phi", DEFAULT_TARGET_PHI_DEG)
-        width_deg        = directive["width"]
+        sym_width        = directive.get("width", None)
+        theta_width_deg  = directive.get("theta_width", sym_width)
+        phi_width_deg    = directive.get("phi_width",   sym_width)
         mask = angular_window_mask(
-            theta_deg, phi_deg, target_theta_deg, target_phi_deg, width_deg
+            theta_deg, phi_deg, target_theta_deg, target_phi_deg,
+            theta_width_deg, phi_width_deg,
         )
         directive_masks.append(mask)
+
+    # Pre-compute solid-angle weights: sin(θ) for each elevation sample.
+    # Captured by the cost_fn closure; computed once per build_cost_function call.
+    # [MATLAB] sin_theta = sin(deg2rad(theta_deg));
+    sin_theta = np.sin(np.deg2rad(theta_deg))
 
     def cost_fn(x):
         """Evaluate the composite cost J(x) for a given variable vector x."""
@@ -256,12 +280,16 @@ def build_cost_function(element_patterns_stacked, theta_deg, phi_deg,
         # Array factor: coherent superposition of power-normalized element patterns.
         array_factor = compute_array_factor(weights_complex, element_patterns_stacked)
 
+        # Pre-compute power grid once; reused for every directive this call.
+        # [MATLAB] power_grid = abs(array_factor) .^ 2;
+        power_grid = np.abs(array_factor) ** 2
+
         # Composite cost: weighted sum over all directives.
         total_cost = 0.0
         for directive, mask in zip(directives, directive_masks):
             directive_type   = directive["type"]
             directive_weight = directive.get("weight", DEFAULT_DIRECTIVE_WEIGHT)
-            term = _directive_cost(array_factor, mask, directive_type)
+            term = _directive_cost(power_grid, mask, directive_type, sin_theta)
             total_cost += directive_weight * term
 
         return float(total_cost)
