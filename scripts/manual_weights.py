@@ -259,8 +259,9 @@ class ManualWeightsTuner:
         # plus "_frame" → tk.Frame (used for identity-based removal)
         self._directive_rows: list[dict] = []
 
-        # Most recently displayed grid — used by the hover handler.
-        self._last_display_grid: np.ndarray | None = None
+        # Absolute dBi directivity grid — always computed in _recompute_and_redraw
+        # so hover readout shows dBi regardless of the active display mode.
+        self._dbi_grid: np.ndarray | None = None
 
         # Frames set during UI build (assigned in _build_* methods)
         self._directives_inner_frame: tk.Frame
@@ -269,6 +270,7 @@ class ManualWeightsTuner:
         self._mesh: object          # QuadMesh returned by pcolormesh
         self._cbar: object          # Colorbar (label/ticks updated on mode change)
         self._canvas: FigureCanvasTkAgg
+        self._hover_text: object    # in-axes text annotation for cursor readout
         self._status_label: tk.Label
         self._label_cost: tk.Label
         self._label_peak: tk.Label
@@ -462,6 +464,18 @@ class ManualWeightsTuner:
         self._ax.set_xlim(0.0, 360.0)
         self._ax.set_ylim(180.0, 0.0)
 
+        # Cursor readout annotation — overlaid in the top-left of the axes.
+        # Invisible until the mouse enters the axes for the first time.
+        self._hover_text = self._ax.text(
+            0.01, 0.98, "",
+            transform=self._ax.transAxes,
+            va="top", ha="left",
+            fontsize=9, color="white",
+            bbox=dict(boxstyle="round,pad=0.3", facecolor="black", alpha=0.55),
+            zorder=10,
+            visible=False,
+        )
+
         fig.tight_layout()
 
         self._canvas = FigureCanvasTkAgg(fig, master=lf)
@@ -474,8 +488,9 @@ class ManualWeightsTuner:
         )
         self._status_label.pack(side=tk.BOTTOM, fill=tk.X)
 
-        # Connect mouse event for hover readout.
+        # Connect mouse events: hover readout + leave to hide the annotation.
         self._canvas.mpl_connect("motion_notify_event", self._on_mouse_move)
+        self._canvas.mpl_connect("axes_leave_event",    self._on_mouse_leave)
 
     def _build_weights_panel(self, parent: tk.Frame) -> None:
         """Build the scrollable element-weights panel.
@@ -1119,15 +1134,17 @@ class ManualWeightsTuner:
             metrics_array_factor = af_copol
 
         # ── 3) Build display grid + colorbar limits by display mode ──
+        # Always compute the absolute dBi grid — reused for the hover readout
+        # regardless of which display mode is active.
+        # [MATLAB] dbi_grid = _compute_directivity_dbi_grid(metrics_af, theta, phi, p_total);
+        self._dbi_grid = _compute_directivity_dbi_grid(
+            metrics_array_factor, self._theta_deg, self._phi_deg,
+            normalizer_power=p_total,
+        )
+
         display_mode = self._display_mode_var.get()
         if display_mode == DISPLAY_ABSOLUTE:
-            # Absolute directivity in dBi using CST-convention total-power denominator.
-            # D_copol(θ,φ) = 4π|AF_copol|² / (P_copol+P_cross) — partial directivity.
-            # [MATLAB] grid = _compute_directivity_dbi_grid(metrics_af, theta, phi, p_total);
-            grid_display = _compute_directivity_dbi_grid(
-                metrics_array_factor, self._theta_deg, self._phi_deg,
-                normalizer_power=p_total,
-            )
+            grid_display = self._dbi_grid
             # Parse the user-supplied clim; fall back to defaults on bad input.
             try:
                 clim_min = float(self._dbi_min_var.get())
@@ -1298,18 +1315,24 @@ class ManualWeightsTuner:
     # ── MOUSE / POV HANDLERS ──────────────────────────────────────
 
     def _on_mouse_move(self, event) -> None:
-        """Show pattern value under cursor in the status bar (hover readout)."""
-        if event.inaxes != self._ax or event.xdata is None or self._last_display_grid is None:
+        """Update the in-axes cursor annotation with position and dBi value."""
+        if event.inaxes != self._ax or event.xdata is None or self._dbi_grid is None:
             return
         phi_idx   = int(np.argmin(np.abs(self._phi_deg   - event.xdata)))
         theta_idx = int(np.argmin(np.abs(self._theta_deg - event.ydata)))
-        val  = self._last_display_grid[theta_idx, phi_idx]
-        unit = "dBi" if self._display_mode_var.get() == DISPLAY_ABSOLUTE else "dB"
-        self._set_status(
-            f"θ={self._theta_deg[theta_idx]:.1f}°  "
-            f"φ={self._phi_deg[phi_idx]:.1f}°  "
-            f"value={val:.2f} {unit}"
+        val_dbi = self._dbi_grid[theta_idx, phi_idx]
+        self._hover_text.set_text(
+            f"θ = {self._theta_deg[theta_idx]:.1f}°   "
+            f"φ = {self._phi_deg[phi_idx]:.1f}°   "
+            f"D = {val_dbi:+.2f} dBi"
         )
+        self._hover_text.set_visible(True)
+        self._canvas.draw_idle()
+
+    def _on_mouse_leave(self, _) -> None:
+        """Hide the cursor annotation when the mouse leaves the axes."""
+        self._hover_text.set_visible(False)
+        self._canvas.draw_idle()
 
     # ── HELPERS ───────────────────────────────────────────────────
 
