@@ -208,14 +208,21 @@ or `ValueError` — never silently fall back to a hardcoded default.
 ### 2026-05-26 — manual_weights.py GUI enhancements (hover, HPBW, axis invert)
 
 **Implemented**:
-- `src/metrics/metrics.py` — `evaluate_metrics` now returns four new keys:
-  `global_peak_theta_deg`, `global_peak_phi_deg` (location of the global peak),
-  `hpbw_theta_deg`, `hpbw_phi_deg` (3 dB half-power beamwidth in the θ-cut and φ-cut
-  at the peak). Helper `_compute_hpbw` uses outward scan from the peak with linear
-  interpolation; φ-cut is roll-centred to handle 0°/360° wrap-around.
-- `scripts/manual_weights.py` — five GUI enhancements:
-  1. **Mouse-hover readout**: `motion_notify_event` updates the status bar with
-     `θ=X° φ=Y° value=Z dB(i)` at the cursor position.
+- `src/metrics/metrics.py`:
+  - `evaluate_metrics` now returns four new keys: `global_peak_theta_deg`,
+    `global_peak_phi_deg` (location of the global peak), `hpbw_theta_deg`,
+    `hpbw_phi_deg` (3 dB half-power beamwidth in the θ-cut and φ-cut at the peak).
+  - `_compute_hpbw` extended with an optional `opposite_cut` parameter. When the
+    left (or right) scan reaches the grid boundary without finding a 3 dB crossing,
+    the search continues in the θ-cut at φ+180° (the other side of the pole). The
+    virtual crossing index is set to `−opp_extra` (north pole) or `(n−1)+opp_extra`
+    (south pole), so `right − left` gives the correct full beamwidth. Fixes HPBW for
+    beams pointing near θ=0° or θ=180°. φ-cut wrap-around handled via `np.roll` (unchanged).
+- `scripts/manual_weights.py`:
+  1. **In-axes cursor annotation**: a semi-transparent text box overlaid in the top-left
+     corner of the heatmap shows `θ=X° φ=Y° D=Z dB(i)` as the mouse moves. Value is in
+     the active display mode's units (dB relative or dBi absolute). Hidden when the mouse
+     leaves the axes (`axes_leave_event`).
   2. **θ-axis inversion**: `set_ylim(180.0, 0.0)` so 0° (boresight/zenith) is at the top
      (standard antenna convention).
   3. **Power-normalized weights**: before computing the array factor, weights are divided by
@@ -225,20 +232,21 @@ or `ValueError` — never silently fall back to a hardcoded default.
   4. **Metrics panel**: removed "Peak-to-null" row; added "Peak angle" (θ,φ of global peak)
      and "3 dB HPBW" (θ/φ beamwidths from `evaluate_metrics`).
   5. **Directive inline results**: each directive row now shows its live gain (for peaks) or
-     `gain (null_depth)` (for nulls) in green/red next to the × button. The per-directive
-     metric rows previously appended to the Metrics panel are removed.
-  6. **Status bar**: moved inside the "2-D Radiation Pattern" LabelFrame (below the canvas).
+     `gain (null_depth_db)` (for nulls) in green/red next to the × button.
+  6. **Status bar**: relocated inside the "2-D Radiation Pattern" LabelFrame (below canvas).
 
 **Decisions made**:
 - Power-normalization in the GUI: directivity `D = 4π|AF|²/P_total` is invariant to any
   overall amplitude scaling, so normalizing weights does not alter any visual output. The
   change only affects the Total J value, making it numerically consistent with the optimizer.
+- Hover annotation uses the display-mode grid (`_last_display_grid`) so the shown value
+  matches the colorbar exactly. The absolute dBi grid (`_dbi_grid`) is computed in parallel
+  for metrics but not shown separately in the hover.
 - `_compute_hpbw` returns 0 when the beam never drops 3 dB within the grid (e.g., isotropic
-  radiator); this is correct and callers should handle it as "HPBW > grid extent".
+  radiator or omnidirectional pattern); this is correct — callers treat it as "HPBW > grid extent".
 
 **Open questions / known issues**:
-- HPBW for a beam straddling θ=0° or θ=180° (pole-pointing) may be reported as the grid
-  extent (180°) rather than the true width; the θ-cut is linear (no wrap-around for θ).
+- None.
 
 ### 2026-05-19 — Solid-angle weighting in cost/metrics; flat-θ visualization
 
