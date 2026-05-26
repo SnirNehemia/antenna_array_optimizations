@@ -23,9 +23,6 @@ from matplotlib.figure import Figure
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from matplotlib.patches import Rectangle
 
-from scipy.interpolate import RegularGridInterpolator
-from scipy.spatial.transform import Rotation as SciRotation
-
 import yaml
 
 # Add project root to sys.path so src/ modules are importable
@@ -130,50 +127,6 @@ ENTRY_WIDTH_DBI = 6
 # Colorbar text shown in each display mode
 COLORBAR_LABEL_RELATIVE = "dB (normalized to peak)"
 COLORBAR_LABEL_ABSOLUTE = "dBi (absolute directivity)"
-
-# ────────────────────────── SPHERE ROTATION HELPERS ──────────────
-
-
-def _sph_to_cart(theta_deg, phi_deg):
-    """Convert spherical (θ°, φ°) to a unit Cartesian vector [x, y, z]."""
-    t = np.deg2rad(theta_deg)
-    p = np.deg2rad(phi_deg)
-    return np.array([np.sin(t) * np.cos(p), np.sin(t) * np.sin(p), np.cos(t)])
-
-
-def _build_view_rotation(view_theta_deg, view_phi_deg):
-    """Build the minimal scipy Rotation that maps (view_θ, view_φ) to display centre (90°, 180°).
-
-    The display centre (90°, 180°) corresponds to Cartesian direction (-1, 0, 0).
-    The returned rotation R satisfies: R @ d_view ≈ d_centre.
-
-    Args:
-        view_theta_deg (float): Elevation of the direction to centre. Units: degrees.
-        view_phi_deg (float): Azimuth of the direction to centre. Units: degrees.
-
-    Returns:
-        scipy.spatial.transform.Rotation: Rotation object.
-    """
-    d_view   = _sph_to_cart(view_theta_deg, view_phi_deg)
-    d_centre = _sph_to_cart(90.0, 180.0)   # (-1, 0, 0)
-
-    cross      = np.cross(d_view, d_centre)
-    cross_norm = np.linalg.norm(cross)
-    dot        = float(np.dot(d_view, d_centre))
-
-    if cross_norm < 1e-9:
-        if dot > 0.0:
-            return SciRotation.identity()
-        # Antiparallel: 180° around any perpendicular axis
-        perp = np.array([0., 0., 1.]) if abs(d_view[0]) < 0.9 else np.array([0., 1., 0.])
-        axis = np.cross(d_view, perp)
-        axis = axis / np.linalg.norm(axis)
-        return SciRotation.from_rotvec(axis * np.pi)
-
-    axis  = cross / cross_norm
-    angle = np.arctan2(cross_norm, dot)
-    return SciRotation.from_rotvec(axis * angle)
-
 
 # ────────────────────────── CONFIG HELPERS ────────────────────────
 
@@ -306,23 +259,7 @@ class ManualWeightsTuner:
         # plus "_frame" → tk.Frame (used for identity-based removal)
         self._directive_rows: list[dict] = []
 
-        # ── POV / hover state ──────────────────────────────────────
-        # Direction in original data coordinates shown at the display centre (90°, 180°).
-        self._view_theta: float = 90.0
-        self._view_phi:   float = 180.0
-
-        # Drag tracking: set on button-press, cleared on button-release.
-        self._is_dragging:      bool = False
-        self._drag_start:       tuple | None = None       # (phi_data, theta_data)
-        self._drag_view_start:  tuple | None = None       # (view_theta, view_phi)
-
-        # Cached RegularGridInterpolator for the current display grid (rebuilt on
-        # full recompute, reused every drag step to avoid the setup cost).
-        self._display_interp: object | None = None
-        self._unrotated_display_grid: np.ndarray | None = None
-        self._last_clim: tuple = (-float(DYNAMIC_RANGE_DB), 0.0)
-
-        # Most recently displayed grid (after rotation) — used by the hover handler.
+        # Most recently displayed grid — used by the hover handler.
         self._last_display_grid: np.ndarray | None = None
 
         # Frames set during UI build (assigned in _build_* methods)
@@ -402,10 +339,6 @@ class ManualWeightsTuner:
 
         ttk.Button(
             toolbar, text="Uniform Weights", command=self._on_uniform
-        ).pack(side=tk.RIGHT, padx=2, pady=4)
-
-        ttk.Button(
-            toolbar, text="Reset View", command=self._on_reset_view
         ).pack(side=tk.RIGHT, padx=2, pady=4)
 
         ttk.Separator(toolbar, orient="vertical").pack(
@@ -541,11 +474,8 @@ class ManualWeightsTuner:
         )
         self._status_label.pack(side=tk.BOTTOM, fill=tk.X)
 
-        # Connect mouse events for hover readout and POV drag.
-        self._canvas.mpl_connect("motion_notify_event",  self._on_mouse_move)
-        self._canvas.mpl_connect("button_press_event",   self._on_drag_start)
-        self._canvas.mpl_connect("motion_notify_event",  self._on_drag_motion)
-        self._canvas.mpl_connect("button_release_event", self._on_drag_end)
+        # Connect mouse event for hover readout.
+        self._canvas.mpl_connect("motion_notify_event", self._on_mouse_move)
 
     def _build_weights_panel(self, parent: tk.Frame) -> None:
         """Build the scrollable element-weights panel.
@@ -1237,45 +1167,19 @@ class ManualWeightsTuner:
 
     def _update_heatmap(self, grid: np.ndarray,
                         clim_min: float, clim_max: float) -> None:
-        """Cache the raw grid, rebuild the rotation interpolator, apply rotation, and push to the mesh.
+        """Push the display grid to the mesh and update the colorbar limits.
 
         Args:
-            grid (np.ndarray): Unrotated display grid, shape (N_theta, N_phi).
+            grid (np.ndarray): Display grid, shape (N_theta, N_phi).
                 Either normalised-to-peak dB or absolute dBi.
             clim_min (float): Lower colorbar limit.
             clim_max (float): Upper colorbar limit.
         """
-        self._unrotated_display_grid = grid
-        self._last_clim = (clim_min, clim_max)
-        # Rebuild the interpolator each time the underlying data changes.
-        # This is the expensive step (~few ms); it is reused for every drag event.
-        self._display_interp = RegularGridInterpolator(
-            (self._theta_deg, self._phi_deg),
-            grid,
-            method="linear",
-            bounds_error=False,
-            fill_value=float(np.min(grid)),
-        )
-        display_grid = self._apply_view_rotation(grid)
-        self._last_display_grid = display_grid
-        # QuadMesh.set_array expects a flattened (row-major) 1-D array.
-        # [MATLAB] set(mesh_handle, 'CData', display_grid)
-        self._mesh.set_array(display_grid.ravel())
-        self._mesh.set_clim(clim_min, clim_max)
-        self._canvas.draw_idle()
-
-    def _update_heatmap_no_rebuild(self, grid: np.ndarray) -> None:
-        """Push a pre-rotated grid to the mesh without rebuilding the interpolator.
-
-        Used during drag events where only the view direction changes, not the
-        underlying pattern data.
-
-        Args:
-            grid (np.ndarray): Rotated display grid, shape (N_theta, N_phi).
-        """
         self._last_display_grid = grid
+        # QuadMesh.set_array expects a flattened (row-major) 1-D array.
+        # [MATLAB] set(mesh_handle, 'CData', grid)
         self._mesh.set_array(grid.ravel())
-        self._mesh.set_clim(*self._last_clim)
+        self._mesh.set_clim(clim_min, clim_max)
         self._canvas.draw_idle()
 
     def _update_directive_overlays(self, directives: list[dict]) -> None:
@@ -1293,14 +1197,6 @@ class ManualWeightsTuner:
                 pass
         self._directive_artists.clear()
 
-        # When the view is at the default centre (90°, 180°) draw full rectangles.
-        # When rotated, rectangles transform non-rectangularly under spherical
-        # projection, so only centre markers are drawn at the transformed position.
-        is_default_view = (
-            abs(self._view_theta - 90.0) < 0.5
-            and abs((self._view_phi % 360.0) - 180.0) < 0.5
-        )
-
         for d in directives:
             color = (
                 PEAK_OVERLAY_COLOR if d["type"] == "peak" else NULL_OVERLAY_COLOR
@@ -1309,35 +1205,25 @@ class ManualWeightsTuner:
             theta_hw = d.get("theta_width", sym_w) / 2.0
             phi_hw   = d.get("phi_width",   sym_w) / 2.0
 
-            if is_default_view:
-                # Rectangle in flat θ (degrees) coordinates.
-                # [MATLAB] rectangle('Position', [phi-phi_hw, theta-theta_hw, 2*phi_hw, 2*theta_hw], ...);
-                rect = Rectangle(
-                    (d["phi"] - phi_hw, d["theta"] - theta_hw),
-                    2.0 * phi_hw,
-                    2.0 * theta_hw,
-                    linewidth=PATCH_LINEWIDTH,
-                    edgecolor=color,
-                    facecolor=color,
-                    alpha=WINDOW_ALPHA,
-                    zorder=4,
-                )
-                self._ax.add_patch(rect)
-                self._directive_artists.append(rect)
-                disp_phi, disp_theta = d["phi"], d["theta"]
-            else:
-                # Rotated view: transform directive centre to display coordinates.
-                rot    = _build_view_rotation(self._view_theta, self._view_phi)
-                d_orig = _sph_to_cart(d["theta"], d["phi"])
-                d_disp = rot.apply(d_orig)
-                z_disp     = float(np.clip(d_disp[2], -1.0, 1.0))
-                disp_theta = np.degrees(np.arccos(z_disp))
-                disp_phi   = float(np.degrees(np.arctan2(d_disp[1], d_disp[0])) % 360.0)
+            # Rectangle in flat θ (degrees) coordinates.
+            # [MATLAB] rectangle('Position', [phi-phi_hw, theta-theta_hw, 2*phi_hw, 2*theta_hw], ...);
+            rect = Rectangle(
+                (d["phi"] - phi_hw, d["theta"] - theta_hw),
+                2.0 * phi_hw,
+                2.0 * theta_hw,
+                linewidth=PATCH_LINEWIDTH,
+                edgecolor=color,
+                facecolor=color,
+                alpha=WINDOW_ALPHA,
+                zorder=4,
+            )
+            self._ax.add_patch(rect)
+            self._directive_artists.append(rect)
 
             # Cross marker at directive target.
             scatter = self._ax.scatter(
-                disp_phi,
-                disp_theta,
+                d["phi"],
+                d["theta"],
                 marker="+",
                 s=SCATTER_MARKER_SIZE,
                 color=color,
@@ -1412,12 +1298,7 @@ class ManualWeightsTuner:
     # ── MOUSE / POV HANDLERS ──────────────────────────────────────
 
     def _on_mouse_move(self, event) -> None:
-        """Show pattern value under cursor in the status bar (hover readout).
-
-        Skipped during drag so the drag handler's status messages take priority.
-        """
-        if self._is_dragging:
-            return
+        """Show pattern value under cursor in the status bar (hover readout)."""
         if event.inaxes != self._ax or event.xdata is None or self._last_display_grid is None:
             return
         phi_idx   = int(np.argmin(np.abs(self._phi_deg   - event.xdata)))
@@ -1429,103 +1310,6 @@ class ManualWeightsTuner:
             f"φ={self._phi_deg[phi_idx]:.1f}°  "
             f"value={val:.2f} {unit}"
         )
-
-    def _on_drag_start(self, event) -> None:
-        """Record the mouse-down position and current view centre for drag tracking."""
-        if event.inaxes != self._ax or event.xdata is None:
-            return
-        self._is_dragging     = True
-        self._drag_start      = (event.xdata, event.ydata)   # (φ, θ) display coords
-        self._drag_view_start = (self._view_theta, self._view_phi)
-
-    def _on_drag_end(self, event) -> None:
-        """Clear dragging state on mouse button release."""
-        self._is_dragging = False
-
-    def _on_drag_motion(self, event) -> None:
-        """Update view centre and redisplay during a mouse drag.
-
-        Grab-and-drag semantics: the grabbed point follows the cursor, so the
-        view centre shifts opposite to the drag direction.
-        """
-        if not self._is_dragging or event.inaxes != self._ax or event.xdata is None:
-            return
-        delta_phi   = event.xdata - self._drag_start[0]
-        delta_theta = event.ydata - self._drag_start[1]
-        self._view_phi   = (self._drag_view_start[1] - delta_phi) % 360.0
-        self._view_theta = float(np.clip(
-            self._drag_view_start[0] - delta_theta, 0.5, 179.5
-        ))
-        if self._unrotated_display_grid is not None and self._display_interp is not None:
-            rotated = self._apply_view_rotation(self._unrotated_display_grid)
-            self._update_heatmap_no_rebuild(rotated)
-        self._update_directive_overlays(self._get_directives_from_ui())
-        self._set_status(
-            f"View centre: θ={self._view_theta:.1f}°  φ={self._view_phi:.1f}°"
-        )
-
-    def _on_reset_view(self) -> None:
-        """Snap the view back to the default centre (θ=90°, φ=180°) and redraw."""
-        self._view_theta = 90.0
-        self._view_phi   = 180.0
-        self._is_dragging = False
-        self._ax.set_title("Array Factor — manual weights", fontsize=10)
-        if self._unrotated_display_grid is not None:
-            self._update_heatmap(
-                self._unrotated_display_grid, *self._last_clim
-            )
-        self._update_directive_overlays(self._get_directives_from_ui())
-        self._update_status_count()
-
-    def _apply_view_rotation(self, data_grid: np.ndarray) -> np.ndarray:
-        """Rotate ``data_grid`` so that (view_theta, view_phi) appears at display centre.
-
-        For the default view centre (θ=90°, φ=180°) the grid is returned unchanged.
-        Otherwise a spherical rotation is applied via ``scipy.spatial.transform.Rotation``
-        and the result is interpolated back onto the regular (θ, φ) display grid.
-
-        Args:
-            data_grid (np.ndarray): Unrotated display grid, shape (N_theta, N_phi).
-
-        Returns:
-            np.ndarray: Rotated display grid, shape (N_theta, N_phi).
-        """
-        is_default = (
-            abs(self._view_theta - 90.0) < 0.5
-            and abs((self._view_phi % 360.0) - 180.0) < 0.5
-        )
-        if is_default:
-            return data_grid
-
-        rot = _build_view_rotation(self._view_theta, self._view_phi)
-
-        # Build a flat list of all display-grid directions in Cartesian coordinates.
-        theta_g, phi_g = np.meshgrid(self._theta_deg, self._phi_deg, indexing="ij")
-        t = np.deg2rad(theta_g.ravel())
-        p = np.deg2rad(phi_g.ravel())
-        xyz = np.stack(
-            [np.sin(t) * np.cos(p), np.sin(t) * np.sin(p), np.cos(t)], axis=1
-        )  # shape (N_theta*N_phi, 3)
-
-        # Inverse rotation: for each output display pixel find the original direction.
-        # [MATLAB] xyz_orig = (R^{-1}) * xyz';
-        xyz_orig = rot.inv().apply(xyz)
-
-        z_orig   = np.clip(xyz_orig[:, 2], -1.0, 1.0)
-        th_orig  = np.degrees(np.arccos(z_orig))
-        ph_orig  = np.degrees(np.arctan2(xyz_orig[:, 1], xyz_orig[:, 0])) % 360.0
-
-        query  = np.stack([th_orig, ph_orig], axis=1)
-        result = self._display_interp(query).reshape(
-            len(self._theta_deg), len(self._phi_deg)
-        )
-
-        # Update plot title to reflect the current view centre.
-        self._ax.set_title(
-            f"Array Factor — view: θ={self._view_theta:.1f}° φ={self._view_phi:.1f}°",
-            fontsize=10,
-        )
-        return result
 
     # ── HELPERS ───────────────────────────────────────────────────
 

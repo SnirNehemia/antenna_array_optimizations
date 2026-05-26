@@ -205,7 +205,7 @@ or `ValueError` — never silently fall back to a hardcoded default.
 > Claude Code must append an entry here at the end of every working session.
 > Format shown below. Newest entry at the top.
 
-### 2026-05-26 — manual_weights.py GUI enhancements (hover, HPBW, POV rotation, axis invert)
+### 2026-05-26 — manual_weights.py GUI enhancements (hover, HPBW, axis invert)
 
 **Implemented**:
 - `src/metrics/metrics.py` — `evaluate_metrics` now returns four new keys:
@@ -213,46 +213,32 @@ or `ValueError` — never silently fall back to a hardcoded default.
   `hpbw_theta_deg`, `hpbw_phi_deg` (3 dB half-power beamwidth in the θ-cut and φ-cut
   at the peak). Helper `_compute_hpbw` uses outward scan from the peak with linear
   interpolation; φ-cut is roll-centred to handle 0°/360° wrap-around.
-- `scripts/manual_weights.py` — six GUI enhancements:
+- `scripts/manual_weights.py` — five GUI enhancements:
   1. **Mouse-hover readout**: `motion_notify_event` updates the status bar with
-     `θ=X° φ=Y° value=Z dB(i)` at the cursor position. Suppressed during drag.
+     `θ=X° φ=Y° value=Z dB(i)` at the cursor position.
   2. **θ-axis inversion**: `set_ylim(180.0, 0.0)` so 0° (boresight/zenith) is at the top
      (standard antenna convention).
   3. **Power-normalized weights**: before computing the array factor, weights are divided by
      `||w||₂` to match the optimizer's `cost_fn` convention; Total J in the GUI now equals
      the optimizer's objective. Directivity is scale-invariant so the displayed pattern is
      unchanged.
-  4. **POV drag-to-rotate**: `_on_drag_start/motion/end` + `_apply_view_rotation` implement
-     grab-and-drag sphere rotation using `scipy.spatial.transform.Rotation` (minimal-arc
-     rotation mapping the grabbed direction to the display centre (90°, 180°)) and
-     `scipy.interpolate.RegularGridInterpolator` for bilinear resampling. The interpolator is
-     rebuilt only on full recompute (weight/directive change), not on every drag step.
-     "Reset View" toolbar button snaps back to the default centre. When rotated, directive
-     rectangles are replaced by centre-point markers (rectangles do not transform
-     rectangularly under spherical projection).
-  5. **Metrics panel**: removed "Peak-to-null" row; added "Peak angle" (θ,φ of global peak)
+  4. **Metrics panel**: removed "Peak-to-null" row; added "Peak angle" (θ,φ of global peak)
      and "3 dB HPBW" (θ/φ beamwidths from `evaluate_metrics`).
-  6. **Directive inline results**: each directive row now shows its live gain (for peaks) or
+  5. **Directive inline results**: each directive row now shows its live gain (for peaks) or
      `gain (null_depth)` (for nulls) in green/red next to the × button. The per-directive
      metric rows previously appended to the Metrics panel are removed.
+  6. **Status bar**: moved inside the "2-D Radiation Pattern" LabelFrame (below the canvas).
 
 **Decisions made**:
 - Power-normalization in the GUI: directivity `D = 4π|AF|²/P_total` is invariant to any
   overall amplitude scaling, so normalizing weights does not alter any visual output. The
   change only affects the Total J value, making it numerically consistent with the optimizer.
-- POV drag direction convention: "grab and drag" — the grabbed data point follows the cursor
-  (`Δview = −Δmouse`). This matches the feel of physically rotating a globe.
-- During POV rotation, directive rectangles are dropped (only `+` markers shown) because
-  rectangular window shapes become non-rectangular under the spherical projection, and
-  rendering correct spherical polygons would require significant additional complexity.
 - `_compute_hpbw` returns 0 when the beam never drops 3 dB within the grid (e.g., isotropic
   radiator); this is correct and callers should handle it as "HPBW > grid extent".
 
 **Open questions / known issues**:
 - HPBW for a beam straddling θ=0° or θ=180° (pole-pointing) may be reported as the grid
   extent (180°) rather than the true width; the θ-cut is linear (no wrap-around for θ).
-- Drag sensitivity near the poles (very small θ or θ near 180°) can cause rapid φ changes
-  since all φ values converge to the same physical direction; no special handling yet.
 
 ### 2026-05-19 — Solid-angle weighting in cost/metrics; flat-θ visualization
 
