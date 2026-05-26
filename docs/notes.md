@@ -205,6 +205,71 @@ or `ValueError` — never silently fall back to a hardcoded default.
 > Claude Code must append an entry here at the end of every working session.
 > Format shown below. Newest entry at the top.
 
+### 2026-05-26 — compare_classical.py: benchmark script, CST steering fix, dBi display
+
+**Implemented**:
+- `scripts/compare_classical.py` — new standalone benchmark script. Compares eight
+  classical tapering/steering techniques (uniform, Hamming, Hanning, Kaiser β=3/6,
+  Chebyshev 25/40 dB, Taylor 25 dB) against the L-BFGS-B optimizer on a configurable
+  N×N URA. Outputs a two-column figure per scenario: left = principal-plane pattern
+  overlay in absolute dBi, right = per-directive whisker chart showing min/mean/max
+  gain inside each directive window.
+- `scripts/test_config.yaml` — companion config file. Every test variable is exposed:
+  `n_side`, `d_over_lambda`, angular grid steps, `element_source` (`"synthetic"` or
+  `"folder"`), `element_patterns_dir`, `polarization`, optimizer settings
+  (`n_restarts`, `max_iterations`, `cost_tolerance`), `plot_dynamic_range_db`, and a
+  `scenarios` list (each scenario specifies `steer_theta_deg`, `steer_phi_deg`,
+  `null_theta_deg`, and a `directives` list with the same schema as `config.yaml`).
+- **Two element-source modes**:
+  - `"synthetic"` — builds ideal isotropic URA phase-factor patterns from `n_side`
+    and `d_over_lambda`. No real data required.
+  - `"folder"` — loads CST Studio far-field exports via `src/io/cst_parser.py`.
+    Infers `n_side` from `sqrt(n_elements)`. Theta/phi grids come from the files;
+    `theta_step_deg`/`phi_step_deg` are ignored. Field component selected by
+    `polarization` key.
+- **Element pattern normalization** (`_load_folder_element_patterns`): after stacking,
+  all patterns are divided by the global peak amplitude. CST exports have
+  simulation-dependent absolute V/m amplitudes; without this step a 4×4 array would
+  show ~30 dBi instead of the correct ~12 dBi bound for 16 isotropic-equivalent
+  elements. The normalization preserves all relative phase and inter-element amplitude
+  information.
+- **Data-driven steering** (`_data_driven_steering_vector`): evaluates each element's
+  pattern at the target direction and conjugates the phase. Used instead of the
+  geometric `_steering_phase_vector` whenever real element patterns are provided. CST
+  exports are phased relative to each element's own feed, not the array centre, so the
+  geometric formula gives no inter-element progressive phase — classical techniques
+  produced an unsteered broadside beam until this fix. Data-driven steering works for
+  both synthetic and real patterns.
+- **Absolute-dBi overlay plot** (`_plot_pattern_overlay`): all techniques plotted on a
+  shared dBi y-axis so gain loss from tapering is immediately visible (e.g., Hamming
+  at 7.6 dBi vs uniform at 12 dBi). Y-range: `[max_peak − dynamic_range_db,
+  max_peak + 2]`. A −3 dB reference line is drawn.
+- **Right-panel whisker charts** (`_plot_directive_whiskers`): y-axis changed from
+  "dB relative to pattern peak" to absolute "Gain (dBi)" by adding each technique's
+  `peak_dbi` back to the stored `min_db`/`mean_db`/`max_db` values. A dashed
+  reference line marks the highest `peak_dbi` across all techniques. Critical-tip
+  markers (▼ for peak-directive min, ▲ for null-directive max) now carry a small
+  numerical label (1 decimal place in dBi) placed just below/above the marker.
+
+**Decisions made**:
+- Element pattern normalization is applied only in the folder-loading path, not to
+  synthetic patterns (which are already unit-amplitude). This keeps the synthetic path
+  as a clean mathematical reference.
+- Data-driven steering is used unconditionally whenever element patterns are provided
+  (both synthetic and folder). For synthetic patterns it yields identical results to
+  the geometric formula, so there is no regression.
+- The benchmark optimizer config always sets `use_single_element_init: False` to keep
+  run time predictable; users control `n_restarts` from `test_config.yaml`.
+- Critical-marker text is colored the same as the marker (darkorange for classical,
+  crimson for optimized) for visual grouping.
+
+**Open questions / known issues**:
+- The "dBi" reported after element-pattern normalization is referenced to the
+  simulation's peak-amplitude element, not a true isotropic radiator with 1 W input.
+  For relative technique comparison this is self-consistent; absolute gain claims
+  against a calibrated reference would need the CST patterns to carry a known input
+  power normalization.
+
 ### 2026-05-26 — manual_weights.py GUI enhancements (hover, HPBW, axis invert)
 
 **Implemented**:

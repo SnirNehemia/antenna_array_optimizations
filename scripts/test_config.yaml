@@ -1,0 +1,119 @@
+# ══════════════════════════════════════════════════════════════════
+# test_config.yaml — compare_classical.py test settings
+#
+# Every variable that controls the comparison test is set here.
+# Run:  python scripts/compare_classical.py
+#       python scripts/compare_classical.py --config path/to/other.yaml
+#       python scripts/compare_classical.py --n 8     # overrides n_side
+# ══════════════════════════════════════════════════════════════════
+
+
+# ─────────────── ARRAY GEOMETRY ───────────────────────────────────
+
+# Number of elements per side.  Total elements = n_side × n_side.
+# Ignored when element_source is "folder" (inferred from file count).
+n_side: 4
+
+# Element spacing in wavelengths.  0.5 = half-wavelength (standard).
+# Used for the steering phase vector in all modes.
+d_over_lambda: 0.9
+
+
+# ─────────────── ANGULAR GRID ─────────────────────────────────────
+# Used only when element_source is "synthetic".
+# When element_source is "folder" the grid comes from the CST files.
+
+theta_step_deg: 1.0    # Elevation step from 0° to 90°. Units: degrees.
+phi_step_deg:   5.0    # Azimuth step from 0° to 355°.  Units: degrees.
+
+
+# ─────────────── ELEMENT PATTERNS ─────────────────────────────────
+
+# element_source controls how element patterns are generated:
+#   "synthetic" — build an ideal isotropic URA phase model (no real data needed)
+#   "folder"    — load CST Studio far-field exports from element_patterns_dir
+element_source: "folder"
+
+# Path to CST element-pattern .txt files.
+# Relative to the project root (same convention as config.yaml).
+# Used only when element_source is "folder".
+element_patterns_dir: "data/spacing0.9/"
+
+# Polarization component to extract from CST files.
+# Used only when element_source is "folder".
+#   "copol"  — co-polarization: E_complex = Abs(Copol) * exp(j * Phase(Copol))
+#   "cross"  — cross-polarization
+#   "total"  — total E-field magnitude (Abs only; phase is set to zero)
+polarization: "cross"
+
+
+# ─────────────── OPTIMIZER SETTINGS ───────────────────────────────
+
+n_restarts:     5         # Independent optimizer restarts (multi-start).
+max_iterations: 500       # Max L-BFGS-B iterations per restart.
+cost_tolerance: 1.0e-9    # Relative cost improvement tolerance (scipy ftol).
+
+
+# ─────────────── PLOT SETTINGS ────────────────────────────────────
+
+# Dynamic range: floor below the global peak on the pattern overlay plot.
+# Units: dB.
+plot_dynamic_range_db: 60
+
+
+# ─────────────── TEST SCENARIOS ───────────────────────────────────
+# Each scenario defines:
+#   label           — display name used in tables and figure titles.
+#   steer_theta_deg — classical beam-steering elevation angle. Units: degrees.
+#   steer_phi_deg   — classical beam-steering azimuth angle.   Units: degrees.
+#   null_theta_deg  — elevation of the null-target marker drawn on the plot
+#                     (set to null if the scenario has no null directive).
+#   directives      — list of optimizer directives (same schema as config.yaml):
+#       type        : "peak" or "null"
+#       theta       : directive centre elevation. Units: degrees.
+#       phi         : directive centre azimuth.  Units: degrees.
+#       theta_width : angular window in theta.   Units: degrees.
+#       phi_width   : angular window in phi.     Units: degrees.
+#       weight      : relative priority in the cost function.
+
+scenarios:
+
+  # ── Scenario A: broadside beam, SLL suppression only ────────────
+  # The directive window is centred at phi=180° with phi_width=360° so that
+  # angular_window_mask (which does not wrap phi) covers all azimuth angles.
+  - label:           "Scenario A - Broadside SLL suppression"
+    steer_theta_deg: 0.0
+    steer_phi_deg:   0.0
+    null_theta_deg:  20.0
+    directives:
+      - type:        "peak"
+        theta:       0.0
+        phi:         180.0
+        theta_width: 15.0
+        phi_width:   360.0
+        weight:      1.0
+      - type:        "null"
+        theta:       20.0
+        phi:         0.0
+        theta_width: 5.0
+        phi_width:   180.0
+        weight:      3.0
+
+  # # ── Scenario B: steered beam with a directed null ────────────────
+  # - label:           "Scenario B - Steered 20deg, null at 0deg"
+  #   steer_theta_deg: 20.0
+  #   steer_phi_deg:   0.0
+  #   null_theta_deg:  0.0
+  #   directives:
+  #     - type:        "peak"
+  #       theta:       20.0
+  #       phi:         0.0
+  #       theta_width: 20.0
+  #       phi_width:   30.0
+  #       weight:      1.0
+  #     - type:        "null"
+  #       theta:       0.0
+  #       phi:         0.0
+  #       theta_width: 5.0
+  #       phi_width:   360.0
+  #       weight:      3.0
