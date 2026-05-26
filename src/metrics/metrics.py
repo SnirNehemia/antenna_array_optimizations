@@ -100,8 +100,13 @@ def _compute_directivity_dbi_grid(array_factor, theta_deg, phi_deg,
 
 # ────────────────────────── HPBW HELPER ───────────────────────────
 
-def _compute_hpbw(cut_dbi, peak_idx):
+def _compute_hpbw(cut_dbi, peak_idx, opposite_cut=None):
     """3 dB beamwidth by scanning outward from peak_idx with linear interpolation.
+
+    When the scan reaches a grid boundary without finding a crossing and
+    ``opposite_cut`` is provided (the θ-cut at φ+180°), the beam is assumed to
+    wrap around the pole and the search continues in that cut.  This corrects
+    the HPBW for beams pointing near θ=0° or θ=180°.
 
     Returns the width in grid-index units; the caller multiplies by the angular
     step size to convert to degrees.
@@ -109,6 +114,8 @@ def _compute_hpbw(cut_dbi, peak_idx):
     Args:
         cut_dbi (np.ndarray): 1-D directivity cut in dBi.
         peak_idx (int): Index of the global peak within ``cut_dbi``.
+        opposite_cut (np.ndarray | None): θ-cut at azimuth φ+180° for pole
+            wrap-around correction.  None disables wrap-around (φ-cut usage).
 
     Returns:
         float: Full 3 dB beamwidth in grid-index units.
@@ -116,28 +123,53 @@ def _compute_hpbw(cut_dbi, peak_idx):
     threshold = float(cut_dbi[peak_idx]) - 3.0
     n = len(cut_dbi)
 
-    # Left (decreasing index) crossing.
-    # At the crossing: cut[i] < threshold ≤ cut[i+1].  Slope is positive (values
-    # increase toward the peak), so denom > 0 and t ∈ [0, 1] naturally.
+    # ── Left (decreasing-index) crossing ──────────────────────────
+    # cut[i] < threshold ≤ cut[i+1] at crossing; denom > 0, t ∈ [0, 1].
     left = float(peak_idx)
+    left_found = False
     for i in range(peak_idx - 1, -1, -1):
         if cut_dbi[i] < threshold:
             denom = float(cut_dbi[i + 1] - cut_dbi[i])   # > 0
             t = (threshold - float(cut_dbi[i])) / (denom if abs(denom) > 1e-30 else 1e-30)
             left = float(i) + float(np.clip(t, 0.0, 1.0))
+            left_found = True
             break
 
-    # Right (increasing index) crossing.
-    # At the crossing: cut[i-1] ≥ threshold > cut[i].  Slope is negative (values
-    # decrease away from the peak), so denom < 0; t = (neg) / (neg) is positive.
-    # Using abs() here would flip the sign → wrong t → must use signed denom.
+    if not left_found and opposite_cut is not None:
+        # Beam extends past θ=0° (north pole).  Continue in the opposite-azimuth
+        # cut, scanning outward from index 0.  The virtual left crossing is
+        # opp_extra steps before the pole (index −opp_extra in extended coords).
+        for i in range(1, n):
+            if opposite_cut[i] < threshold:
+                denom = float(opposite_cut[i] - opposite_cut[i - 1])   # < 0
+                t = (threshold - float(opposite_cut[i - 1])) / (denom if abs(denom) > 1e-30 else -1e-30)
+                opp_extra = float(i - 1) + float(np.clip(t, 0.0, 1.0))
+                left = -opp_extra
+                break
+
+    # ── Right (increasing-index) crossing ─────────────────────────
+    # cut[i-1] ≥ threshold > cut[i] at crossing; denom < 0; must use signed.
     right = float(peak_idx)
+    right_found = False
     for i in range(peak_idx + 1, n):
         if cut_dbi[i] < threshold:
             denom = float(cut_dbi[i] - cut_dbi[i - 1])   # < 0
             t = (threshold - float(cut_dbi[i - 1])) / (denom if abs(denom) > 1e-30 else -1e-30)
             right = float(i - 1) + float(np.clip(t, 0.0, 1.0))
+            right_found = True
             break
+
+    if not right_found and opposite_cut is not None:
+        # Beam extends past θ=180° (south pole).  Continue in the opposite-azimuth
+        # cut, scanning backward from index n-1.  The virtual right crossing is
+        # opp_extra steps past the pole (index (n-1) + opp_extra in extended coords).
+        for i in range(n - 2, -1, -1):
+            if opposite_cut[i] < threshold:
+                denom = float(opposite_cut[i + 1] - opposite_cut[i])   # > 0
+                t = (threshold - float(opposite_cut[i])) / (denom if abs(denom) > 1e-30 else 1e-30)
+                opp_extra = float(n - 1) - (float(i) + float(np.clip(t, 0.0, 1.0)))
+                right = float(n - 1) + opp_extra
+                break
 
     return right - left
 
@@ -232,13 +264,18 @@ def evaluate_metrics(element_patterns_stacked, theta_deg, phi_deg,
     global_peak_theta_deg = float(theta_deg[theta_peak_idx])
     global_peak_phi_deg   = float(phi_deg[phi_peak_idx])
 
-    # θ-HPBW: 1-D cut at peak φ
-    theta_step      = float(theta_deg[1] - theta_deg[0]) if len(theta_deg) > 1 else 1.0
-    theta_cut       = directivity_dbi_grid[:, phi_peak_idx]
-    hpbw_theta_deg  = _compute_hpbw(theta_cut, int(theta_peak_idx)) * theta_step
+    # θ-HPBW: 1-D cut at peak φ, with pole wrap-around via opposite azimuth.
+    # When the beam points near θ=0° or θ=180°, one side of the 3 dB contour
+    # extends past the pole; the opposite-azimuth cut (φ+180°) continues it.
+    n_phi         = len(phi_deg)
+    theta_step    = float(theta_deg[1] - theta_deg[0]) if len(theta_deg) > 1 else 1.0
+    theta_cut     = directivity_dbi_grid[:, phi_peak_idx]
+    opp_phi_idx   = (int(phi_peak_idx) + n_phi // 2) % n_phi
+    opp_theta_cut = directivity_dbi_grid[:, opp_phi_idx]
+    hpbw_theta_deg = _compute_hpbw(theta_cut, int(theta_peak_idx),
+                                   opposite_cut=opp_theta_cut) * theta_step
 
     # φ-HPBW: 1-D cut at peak θ, rolled so peak is at centre (handles wrap-around)
-    n_phi       = len(phi_deg)
     phi_step    = float(phi_deg[1] - phi_deg[0]) if n_phi > 1 else 1.0
     phi_cut_raw = directivity_dbi_grid[theta_peak_idx, :]
     roll_shift  = n_phi // 2 - int(phi_peak_idx)

@@ -259,9 +259,11 @@ class ManualWeightsTuner:
         # plus "_frame" → tk.Frame (used for identity-based removal)
         self._directive_rows: list[dict] = []
 
-        # Absolute dBi directivity grid — always computed in _recompute_and_redraw
-        # so hover readout shows dBi regardless of the active display mode.
+        # Absolute dBi directivity grid — always computed in _recompute_and_redraw.
         self._dbi_grid: np.ndarray | None = None
+
+        # Most recently displayed grid (in current display-mode units) — used by hover.
+        self._last_display_grid: np.ndarray | None = None
 
         # Frames set during UI build (assigned in _build_* methods)
         self._directives_inner_frame: tk.Frame
@@ -1315,16 +1317,17 @@ class ManualWeightsTuner:
     # ── MOUSE / POV HANDLERS ──────────────────────────────────────
 
     def _on_mouse_move(self, event) -> None:
-        """Update the in-axes cursor annotation with position and dBi value."""
-        if event.inaxes != self._ax or event.xdata is None or self._dbi_grid is None:
+        """Update the in-axes cursor annotation with position and pattern value."""
+        if event.inaxes != self._ax or event.xdata is None or self._last_display_grid is None:
             return
         phi_idx   = int(np.argmin(np.abs(self._phi_deg   - event.xdata)))
         theta_idx = int(np.argmin(np.abs(self._theta_deg - event.ydata)))
-        val_dbi = self._dbi_grid[theta_idx, phi_idx]
+        val  = self._last_display_grid[theta_idx, phi_idx]
+        unit = "dBi" if self._display_mode_var.get() == DISPLAY_ABSOLUTE else "dB"
         self._hover_text.set_text(
             f"θ = {self._theta_deg[theta_idx]:.1f}°   "
             f"φ = {self._phi_deg[phi_idx]:.1f}°   "
-            f"D = {val_dbi:+.2f} dBi"
+            f"D = {val:+.2f} {unit}"
         )
         self._hover_text.set_visible(True)
         self._canvas.draw_idle()
