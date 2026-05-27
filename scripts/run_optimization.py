@@ -191,7 +191,9 @@ def _save_run_report(metrics, optimizer_result, elapsed_sec, config, output_path
         lines.append(
             f"  [{i}] {d['type']:<4}  theta={d['theta']:.1f}°  "
             f"phi={d.get('phi', 0.0):.1f}°  "
-            f"width={d['width']:.1f}°  weight={d.get('weight', 1.0)}"
+            f"theta_width={d.get('theta_width', d.get('width', '?'))!s}°  "
+            f"phi_width={d.get('phi_width', d.get('width', '?'))!s}°  "
+            f"weight={d.get('weight', 1.0)}"
         )
 
     lines += [

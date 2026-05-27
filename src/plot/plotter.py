@@ -11,7 +11,7 @@ import matplotlib
 matplotlib.use("Agg")   # non-interactive backend — safe for headless script use
 import matplotlib.pyplot as plt
 import matplotlib.animation as animation
-from matplotlib.patches import Rectangle
+from matplotlib.patches import Rectangle, Patch
 from pathlib import Path
 
 from src.cost.cost_function import compute_array_factor
@@ -424,7 +424,7 @@ def save_2d_projection_plot(array_factor_db_grid, theta_deg, phi_deg,
     else:
         y_coords = theta_deg
         y_label  = "Elevation θ (°)"
-        y_lim    = (0.0, 180.0)
+        y_lim    = (180.0, 0.0)  # inverted: θ=0° (boresight) at top
         tick_theta  = None
         tick_y      = None
         tick_labels = None
@@ -444,48 +444,39 @@ def save_2d_projection_plot(array_factor_db_grid, theta_deg, phi_deg,
         ax.set_yticks(tick_y)
         ax.set_yticklabels(tick_labels)
 
-    # Overlay each directive as a rectangle showing the full angular window.
-    for directive in directives:
+    # Overlay each directive's actual optimization window on the heatmap.
+    # Physical masks are built with the same extended-grid logic used by the
+    # cost function, so wrap-around at φ=0°/360° and pole-crossing at θ=0°/180°
+    # are shown exactly as the optimizer sees them.
+    from src.cost.cost_function import build_directive_physical_masks  # local import avoids circular dep
+    phys_masks = build_directive_physical_masks(theta_deg, phi_deg, directives)
+
+    legend_handles = []
+    for directive, phys_mask in zip(directives, phys_masks):
         d_theta   = directive["theta"]
         d_phi     = directive.get("phi", 0.0)
-        sym_width = directive.get("width", None)
-        theta_hw  = directive.get("theta_width", sym_width) / 2.0
-        phi_hw    = directive.get("phi_width",   sym_width) / 2.0
         color     = PEAK_WINDOW_COLOR if directive["type"] == "peak" else NULL_WINDOW_COLOR
         type_str  = "Peak" if directive["type"] == "peak" else "Null"
         label_str = f'{type_str} window  θ={d_theta:.0f}°, φ={d_phi:.0f}°'
 
-        if equal_area:
-            # Map θ bounds through cos — cos is decreasing so lo/hi swap.
-            cos_bot = np.cos(np.deg2rad(d_theta + theta_hw))  # lower y in cos coords
-            cos_top = np.cos(np.deg2rad(d_theta - theta_hw))  # upper y in cos coords
-            cos_ctr = np.cos(np.deg2rad(d_theta))
-            rect = Rectangle(
-                (d_phi - phi_hw, cos_bot),
-                2 * phi_hw, cos_top - cos_bot,
-                linewidth=2, edgecolor=color, facecolor=color,
-                alpha=0.30, zorder=4, label=label_str,
-            )
-            ax.add_patch(rect)
-            ax.scatter(d_phi, cos_ctr, marker="+", s=120, color=color,
-                       linewidths=2, zorder=5)
-        else:
-            rect = Rectangle(
-                (d_phi - phi_hw, d_theta - theta_hw),
-                2 * phi_hw, 2 * theta_hw,
-                linewidth=2, edgecolor=color, facecolor=color,
-                alpha=0.30, zorder=4, label=label_str,
-            )
-            ax.add_patch(rect)
-            ax.scatter(d_phi, d_theta, marker="+", s=120, color=color,
-                       linewidths=2, zorder=5)
-        # [MATLAB] rectangle('Position', [d_phi-phi_hw, y_bot, 2*phi_hw, y_top-y_bot], ...
-        # [MATLAB]   'EdgeColor', color, 'FaceColor', color, 'FaceAlpha', 0.30);
+        if phys_mask.any():
+            mask_f = phys_mask.astype(float)
+            ax.contourf(phi_deg, y_coords, mask_f, levels=[0.5, 1.5],
+                        colors=[color], alpha=0.30, zorder=4)
+            ax.contour(phi_deg, y_coords, mask_f, levels=[0.5],
+                       colors=[color], linewidths=2, zorder=5)
+            # [MATLAB] ... use imagesc overlay or patch array for mask visualization
+
+        d_y = float(np.cos(np.deg2rad(d_theta))) if equal_area else d_theta
+        ax.scatter(d_phi, d_y, marker="+", s=120, color=color, linewidths=2, zorder=6)
+        legend_handles.append(
+            Patch(facecolor=color, edgecolor=color, alpha=0.30, label=label_str)
+        )
 
     ax.set_xlabel("Phi (deg)")
     ax.set_ylabel(y_label)
     ax.set_title("Array Pattern — 2D Projection")
-    ax.legend(fontsize=8, loc="upper right")
+    ax.legend(handles=legend_handles, fontsize=8, loc="upper right")
     ax.grid(True, alpha=0.2, color="white")
 
     ax.set_xlim(0.0, 360.0)
@@ -639,29 +630,27 @@ def save_pattern_gif(weights_history, element_patterns_stacked,
     ax_map.set_xlabel("Phi (deg)")
     ax_map.set_ylabel("Elevation θ (°)")
     ax_map.set_xlim(0.0, 360.0)
-    ax_map.set_ylim(0.0, 180.0)
+    ax_map.set_ylim(180.0, 0.0)  # inverted: θ=0° (boresight) at top
     ax_map.grid(True, alpha=0.2, color="white")
     title_text = ax_map.set_title("")
 
-    # Directive overlay artists (created once, updated each frame via set_xy / set_height).
-    overlay_patches = []
-    overlay_scatters = []
-    for directive in directives:
-        d_theta   = directive["theta"]
-        d_phi     = directive.get("phi", 0.0)
-        sym_width = directive.get("width", None)
-        theta_hw  = directive.get("theta_width", sym_width) / 2.0
-        phi_hw    = directive.get("phi_width",   sym_width) / 2.0
-        color     = PEAK_WINDOW_COLOR if directive["type"] == "peak" else NULL_WINDOW_COLOR
-        rect = Rectangle(
-            (d_phi - phi_hw, d_theta - theta_hw), 2 * phi_hw, 2 * theta_hw,
-            linewidth=2, edgecolor=color, facecolor=color, alpha=0.30, zorder=4,
-        )
-        ax_map.add_patch(rect)
-        sc = ax_map.scatter(d_phi, d_theta, marker="+", s=100, color=color,
-                            linewidths=2, zorder=5)
-        overlay_patches.append(rect)
-        overlay_scatters.append(sc)
+    # Directive overlays — static artists drawn once onto the background.
+    # Physical masks match the cost function windows exactly, including
+    # phi 0°/360° wrap-around and theta pole-crossing at both poles.
+    from src.cost.cost_function import build_directive_physical_masks  # local import
+    phys_masks = build_directive_physical_masks(theta_deg, phi_deg, directives)
+    for directive, phys_mask in zip(directives, phys_masks):
+        d_theta = directive["theta"]
+        d_phi   = directive.get("phi", 0.0)
+        color   = PEAK_WINDOW_COLOR if directive["type"] == "peak" else NULL_WINDOW_COLOR
+        if phys_mask.any():
+            mask_f = phys_mask.astype(float)
+            ax_map.contourf(phi_deg, theta_deg, mask_f, levels=[0.5, 1.5],
+                            colors=[color], alpha=0.30, zorder=4)
+            ax_map.contour(phi_deg, theta_deg, mask_f, levels=[0.5],
+                           colors=[color], linewidths=2, zorder=5)
+        ax_map.scatter(d_phi, d_theta, marker="+", s=100, color=color,
+                       linewidths=2, zorder=6)
 
     # ── Initialise cost plot on ax_cost ───────────────────────────────
     cost_arr = np.array(cost_history)

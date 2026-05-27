@@ -11,7 +11,7 @@
 # Path to the folder containing all CST element pattern .txt files.
 # One file per array element. All files in this folder are loaded.
 # The number of elements is inferred from the number of files found.
-element_patterns_dir: "data/spacing0.9/"
+element_patterns_dir: "data/patch_back2back/"
 
 
 # ────────────────────────── POLARIZATION ──────────────────────────
@@ -22,7 +22,7 @@ element_patterns_dir: "data/spacing0.9/"
 #   "cross"       — Cross-polarization (Abs(Cross) + Phase(Cross)).
 #   "total"       — Total E-field power |E_copol|² + |E_xpol|².
 #                   Manual tuner only (not wired through run_optimization.py).
-polarization: "cross"
+polarization: "total"
 
 
 # ────────────────────────── OPTIMIZATION DIRECTIVES ───────────────
@@ -42,8 +42,12 @@ polarization: "cross"
 #                 Ignored when theta_width / phi_width are both set.
 #   theta_width : [optional] independent elevation window width (overrides width).
 #   phi_width   : [optional] independent azimuth window width (overrides width).
-#   weight  : [optional, default: 1.0] relative priority in the composite cost function.
-#             Higher weight = stronger enforcement of this directive.
+#   weight      : [optional, default: 1.0] relative priority in the composite cost function.
+#                 Higher weight = stronger enforcement of this directive.
+#   aggregation : [optional, default: "mean"] how power is summarised across the window.
+#                 "mean" — solid-angle-weighted mean power (smooth gradients, default)
+#                 "max"  — max power in window (null: drive down worst-case sidelobe)
+#                 "min"  — min power in window (peak: enforce flat / filled beam)
 
 directives:
   # - type:   "peak"
@@ -54,18 +58,20 @@ directives:
   #   weight: 5.0
 
   - type:   "peak"
-    theta:  30.0          # degrees — boresight
+    theta:  0.0          # degrees — boresight
     phi:    45.0          # degrees
-    width:  2.0         # degrees — desired HMBW
-    level:  null         # dBi — set to null if unknown; metrics will report achieved value
+    width:  20.0         # degrees — desired HMBW
+    level:  25.0         # dBi — set to null if unknown; metrics will report achieved value
     weight: 1.0
 
   - type:   "null"
-    theta:  30.0         # degrees — interference direction
+    theta:  45.0         # degrees — interference direction
     phi:    345.0          # degrees
-    width:  50.0         # degrees — total suppression window
+    theta_width:  5.0         # degrees — total suppression window in theta
+    phi_width:    360.0         # degrees — total suppression window in phi
     level:  -20.0        # dB — desired null depth relative to peak
-    weight: 2.5          # higher weight: 2.0 for null enforcement is twice as important as peak
+    weight: 100.0          # higher weight: 2.0 for null enforcement is twice as important as peak
+    aggregation: "mean"
 
   # - type:   "null"
   #   theta:  180.0         # degrees — interference direction
@@ -87,7 +93,7 @@ optimizer:
   # Stops when: |J_k - J_{k+1}| / max(|J_k|, 1) < cost_tolerance
   # Smaller = finer convergence, slower.
   # Suggested range: 1e-6 (fast/exploratory) → 1e-10 (production accuracy).
-  cost_tolerance: 1.0e-8
+  cost_tolerance: 1.0e-6
 
   # Number of independent optimization runs (multi-start).
   # Run 1 always starts from uniform weights [amplitude=1, phase=0] — deterministic.
@@ -165,7 +171,7 @@ output:
 
   # Save animated GIF showing the radiation pattern evolving over optimizer
   # iterations for the best restart. Requires pillow (pip install pillow).
-  save_pattern_gif: false
+  save_pattern_gif: true
 
   # Maximum number of frames in the GIF. Strides automatically when the
   # iteration count exceeds this value.

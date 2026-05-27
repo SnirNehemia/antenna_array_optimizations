@@ -19,9 +19,9 @@ from tkinter import ttk, filedialog, messagebox
 
 import matplotlib
 matplotlib.use("TkAgg")  # [MATLAB] MATLAB has its own figure framework (App Designer)
+import matplotlib.colors as mcolors
 from matplotlib.figure import Figure
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
-from matplotlib.patches import Rectangle
 
 import yaml
 
@@ -30,7 +30,7 @@ import yaml
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from src.io.cst_parser import load_element_patterns
-from src.cost.cost_function import compute_array_factor
+from src.cost.cost_function import compute_array_factor, build_directive_physical_masks
 from src.metrics.metrics import evaluate_metrics, _compute_directivity_dbi_grid
 
 # ────────────────────────── CONSTANTS ─────────────────────────────
@@ -1204,50 +1204,77 @@ class ManualWeightsTuner:
     def _update_directive_overlays(self, directives: list[dict]) -> None:
         """Remove old directive artists and redraw for the current directive list.
 
+        Uses the same extended-grid physical masks as the cost function so that
+        phi 0°/360° wrap-around and theta pole-crossing are displayed correctly.
+
         Args:
             directives (list[dict]): Directive dicts with keys type (str),
-                theta (float, deg), phi (float, deg), width (float, deg).
+                theta (float, deg), phi (float, deg), theta_width / phi_width
+                or width (float, deg).
         """
-        # Remove all previously drawn patches and scatter markers
+        # Remove all previously drawn artists.
+        # ContourSet removal API changed in matplotlib 3.8; try .remove() first
+        # and fall back to iterating .collections for older versions.
         for artist in self._directive_artists:
             try:
                 artist.remove()
-            except (ValueError, NotImplementedError):
-                pass
+            except (ValueError, NotImplementedError, AttributeError):
+                if hasattr(artist, "collections"):
+                    for coll in artist.collections:
+                        try:
+                            coll.remove()
+                        except (ValueError, NotImplementedError):
+                            pass
         self._directive_artists.clear()
 
-        for d in directives:
-            color = (
-                PEAK_OVERLAY_COLOR if d["type"] == "peak" else NULL_OVERLAY_COLOR
-            )
-            sym_w    = d.get("width", None)
-            theta_hw = d.get("theta_width", sym_w) / 2.0
-            phi_hw   = d.get("phi_width",   sym_w) / 2.0
+        if not directives:
+            self._canvas.draw_idle()
+            return
 
-            # Rectangle in flat θ (degrees) coordinates.
-            # [MATLAB] rectangle('Position', [phi-phi_hw, theta-theta_hw, 2*phi_hw, 2*theta_hw], ...);
-            rect = Rectangle(
-                (d["phi"] - phi_hw, d["theta"] - theta_hw),
-                2.0 * phi_hw,
-                2.0 * theta_hw,
-                linewidth=PATCH_LINEWIDTH,
-                edgecolor=color,
-                facecolor=color,
-                alpha=WINDOW_ALPHA,
-                zorder=4,
-            )
-            self._ax.add_patch(rect)
-            self._directive_artists.append(rect)
+        phys_masks = build_directive_physical_masks(
+            self._theta_deg, self._phi_deg, directives
+        )
 
-            # Cross marker at directive target.
+        for d, phys_mask in zip(directives, phys_masks):
+            color = PEAK_OVERLAY_COLOR if d["type"] == "peak" else NULL_OVERLAY_COLOR
+
+            if phys_mask.any():
+                mask_f = phys_mask.astype(float)
+
+                # Semi-transparent fill using a two-stop colormap:
+                # 0 (outside window) → fully transparent, 1 (inside) → color + alpha.
+                # pcolormesh returns a QuadMesh whose .remove() is reliable across
+                # all matplotlib versions (unlike ContourSet in older releases).
+                # [MATLAB] use imagesc / patch overlay for mask visualization
+                rgba = mcolors.to_rgba(color)
+                cmap_ov = mcolors.LinearSegmentedColormap.from_list(
+                    "", [(0, 0, 0, 0), (*rgba[:3], WINDOW_ALPHA)]
+                )
+                mesh_ov = self._ax.pcolormesh(
+                    self._phi_deg, self._theta_deg, mask_f,
+                    cmap=cmap_ov, vmin=0, vmax=1, zorder=4, shading="auto",
+                )
+                self._directive_artists.append(mesh_ov)
+
+                # Solid border outline at the mask boundary.
+                cs = self._ax.contour(
+                    self._phi_deg, self._theta_deg, mask_f,
+                    levels=[0.5], colors=[color],
+                    linewidths=PATCH_LINEWIDTH, zorder=5,
+                )
+                # Store contour line collections for removal; handle both old
+                # matplotlib (.collections) and new (ContourSet.remove()).
+                try:
+                    self._directive_artists.extend(cs.collections)
+                except AttributeError:
+                    self._directive_artists.append(cs)
+
+            # Cross marker at directive target centre.
+            # [MATLAB] plot(d_phi, d_theta, '+', 'MarkerSize', 10, 'Color', color);
             scatter = self._ax.scatter(
-                d["phi"],
-                d["theta"],
-                marker="+",
-                s=SCATTER_MARKER_SIZE,
-                color=color,
-                linewidths=PATCH_LINEWIDTH,
-                zorder=5,
+                d["phi"], d["theta"],
+                marker="+", s=SCATTER_MARKER_SIZE,
+                color=color, linewidths=PATCH_LINEWIDTH, zorder=6,
             )
             self._directive_artists.append(scatter)
 

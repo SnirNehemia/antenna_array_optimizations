@@ -205,6 +205,61 @@ or `ValueError` — never silently fall back to a hardcoded default.
 > Claude Code must append an entry here at the end of every working session.
 > Format shown below. Newest entry at the top.
 
+### 2026-05-27 — Extended-grid angle wrap-around, aggregation mode, theta-axis flip, physical mask overlays
+
+**Implemented**:
+
+- **Phi 0°/360° and theta pole-crossing wrap-around** (`src/cost/cost_function.py`):
+  Extended-grid approach mirrors the physical pattern at both poles (θ<0°, θ>180°)
+  and tiles phi three times. Masks are computed on the extended grid with a plain
+  `abs(angle − target) ≤ hw` comparison — no special-case code needed.
+  Physical-index maps (`theta_phys_idx`, `phi_offset`) are precomputed once;
+  `cost_fn` samples `power_grid` at sparse mask-True points only
+  (`power_grid[phys_theta, phys_phi]`), so per-iteration overhead is O(K) where K
+  is the number of in-window samples rather than O(9·N_theta·N_phi).
+  Phi offset for mirrored theta rows = `N_phi // 2` (180° shift, valid for the
+  standard 1°-step 360-point phi grid).
+  Theta pole-crossing known limitation: wrap is handled correctly but requires both
+  theta halves to be distinct grid entries; no special handling for directives
+  exactly at the poles.
+
+- **`aggregation` per-directive config key** (`src/cost/cost_function.py`, `config.yaml`):
+  `"mean"` (default, solid-angle-weighted, current behaviour), `"max"` (worst-case
+  point — best for null suppression), `"min"` (best-case point — best for flat-beam
+  enforcement). Validated at `build_cost_function` call time.
+
+- **`build_directive_physical_masks`** (`src/cost/cost_function.py`):
+  Standalone public function returning one `(N_theta, N_phi)` bool array per
+  directive, built with the same extended-grid logic as `build_cost_function`.
+  Used by the plotter and manual tuner to display exactly the area the optimizer
+  sees, including wrapped regions.
+
+- **2D heatmap theta axis flipped** (`src/plot/plotter.py`): `y_lim = (180.0, 0.0)`
+  so θ=0° (boresight) is at the top in both the static PNG and the GIF animation.
+  Equal-area mode was already correct.
+
+- **Physical mask overlays replace rectangles** (`src/plot/plotter.py`,
+  `scripts/manual_weights.py`): `save_2d_projection_plot` and `save_pattern_gif`
+  now call `build_directive_physical_masks` and draw `contourf` fill +
+  `contour` border on the physical grid. The manual tuner (`_update_directive_overlays`)
+  uses `pcolormesh` for the fill (reliable `.remove()` across all matplotlib versions)
+  and `contour` for the border with a `.collections` fallback for pre-3.8 matplotlib.
+  All three views show the same wrapped/pole-crossing window that the optimizer uses.
+
+- **Run report `width` fix** (`scripts/run_optimization.py`): report line now reads
+  `theta_width` / `phi_width` from the directive instead of the removed `width` key,
+  so configs using per-axis widths no longer crash.
+
+**Decisions made**:
+- Extended grid is always built (not conditionally when wrapping is needed) — keeps
+  code uniform and the precomputation cost is negligible (~microseconds).
+- `aggregation: "max"` does not use solid-angle weighting (raw max over mask points)
+  because the intent is to drive down the worst-case sidelobe regardless of its
+  angular area. Same rationale for `"min"`.
+- Theta pole-crossing wraps the physical phi to `phi + 180°` using integer index
+  shift (`N_phi // 2`), which is exact for a uniform 1° grid; a comment marks this
+  assumption for future datasets with different resolutions.
+
 ### 2026-05-26 — compare_classical.py: benchmark script, CST steering fix, dBi display
 
 **Implemented**:

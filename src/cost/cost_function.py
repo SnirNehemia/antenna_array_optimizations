@@ -22,6 +22,9 @@ VALID_MODES = ("standard", "phase_only", "amplitude_only")
 # Valid directive types.
 VALID_DIRECTIVE_TYPES = ("peak", "null")
 
+# Valid cost aggregation methods per directive.
+VALID_AGGREGATIONS = ("mean", "max", "min")
+
 
 # ────────────────────────── VARIABLE ENCODING ─────────────────────
 
@@ -103,6 +106,10 @@ def angular_window_mask(theta_deg, phi_deg,
     Elevation and azimuth half-widths are specified independently so the window
     can be asymmetric (e.g. narrow in phi, wide in theta).
 
+    This function operates on whatever theta/phi arrays are passed in.  Callers
+    that need pole-crossing or 0°/360° wrap-around should pass the pre-built
+    extended grids from build_cost_function rather than the raw physical grids.
+
     Args:
         theta_deg (np.ndarray): Elevation angle grid, shape (N_theta,). Units: degrees.
         phi_deg (np.ndarray): Azimuth angle grid, shape (N_phi,). Units: degrees.
@@ -132,53 +139,130 @@ def angular_window_mask(theta_deg, phi_deg,
 
 # ────────────────────────── DIRECTIVE COST ────────────────────────
 
-def _directive_cost(power_grid, mask, directive_type, sin_theta):
+def _directive_cost(masked_power, sin_weights, directive_type, aggregation="mean"):
     """Compute the scalar cost contribution for a single beam-shaping directive.
 
-    All cost terms are formulated as quantities to **minimize** so that
-    L-BFGS-B (a minimizer) drives the array pattern toward the desired shape.
+    Operates on the sparse set of angular-window sample points (pre-extracted
+    by build_cost_function from the extended grid).  All cost terms are
+    formulated as quantities to **minimize**.
 
-    - Peak:  C = -mean_sa(|AF|²) in window  (negative → minimizing increases gain)
-    - Null:  C = +mean_sa(|AF|²) in window  (positive → minimizing suppresses gain)
-
-    The window mean is weighted by solid angle (sin θ · Δθ · Δφ) so that pixels
-    near the poles (where sin θ ≈ 0) do not over-contribute relative to their
-    actual angular area.
+    - Peak:  C = -metric  (negative → minimizing increases gain)
+    - Null:  C = +metric  (positive → minimizing suppresses gain)
 
     Args:
-        power_grid (np.ndarray): |AF|² over the full grid, shape (N_theta, N_phi).
-            Units: (V/m)². Pre-computed by the caller once per cost evaluation.
-        mask (np.ndarray): Boolean angular window mask, shape (N_theta, N_phi).
-        directive_type (str): Either ``"peak"`` or ``"null"``.
-        sin_theta (np.ndarray): sin(θ) for each elevation sample, shape (N_theta,).
-            Used as the solid-angle weighting factor.
+        masked_power (np.ndarray): |AF|² at each in-window sample, shape (K,).
+            Units: (V/m)².
+        sin_weights (np.ndarray): |sin(θ)| solid-angle weight per sample, shape (K,).
+            Used only when aggregation == "mean".
+        directive_type (str): ``"peak"`` or ``"null"``.
+        aggregation (str): ``"mean"``, ``"max"``, or ``"min"``.
 
     Returns:
-        float: Scalar cost contribution for this directive. Units: (V/m)².
+        float: Scalar cost contribution. Units: (V/m)².
 
     Raises:
-        ValueError: If ``directive_type`` is not ``"peak"`` or ``"null"``.
+        ValueError: If ``directive_type`` or ``aggregation`` is invalid.
     """
     if directive_type not in VALID_DIRECTIVE_TYPES:
         raise ValueError(
             f"Unknown directive type '{directive_type}'. "
             f"Valid types: {VALID_DIRECTIVE_TYPES}."
         )
+    if aggregation not in VALID_AGGREGATIONS:
+        raise ValueError(
+            f"Unknown aggregation '{aggregation}'. "
+            f"Valid options: {VALID_AGGREGATIONS}."
+        )
 
-    # Solid-angle-weighted mean power inside the window.
-    # weights_sa[i,j] = sin(θ_i) when mask[i,j] is True, 0 otherwise.
-    # [MATLAB] weights_sa = mask .* sin(deg2rad(theta_deg))';
-    weights_sa   = mask * sin_theta[:, np.newaxis]
-    total_weight = float(np.sum(weights_sa))
-    mean_power   = float(np.sum(power_grid * weights_sa)) / max(total_weight, 1e-30)
-    # [MATLAB] mean_power = sum(power_grid(:) .* weights_sa(:)) / max(sum(weights_sa(:)), 1e-30);
+    if len(masked_power) == 0:
+        return 0.0
+
+    if aggregation == "mean":
+        # Solid-angle-weighted mean power.
+        total_w = float(np.sum(sin_weights))
+        metric  = float(np.dot(masked_power, sin_weights)) / max(total_w, 1e-30)
+        # [MATLAB] metric = sum(masked_power .* sin_weights) / max(sum(sin_weights), 1e-30);
+    elif aggregation == "max":
+        # Worst-case (maximum) power in window.
+        # Best for nulls: drives down the highest sidelobe inside the window.
+        metric = float(np.max(masked_power))
+        # [MATLAB] metric = max(masked_power);
+    else:  # "min"
+        # Best-case (minimum) power in window.
+        # Best for peaks: enforces a flat beam by maximising the lowest point.
+        metric = float(np.min(masked_power))
+        # [MATLAB] metric = min(masked_power);
 
     if directive_type == "peak":
-        # Maximizing gain = minimizing the negative of mean power in the beam window.
-        return -mean_power
+        return -metric
     else:  # "null"
-        # Suppressing gain = minimizing mean power in the null window.
-        return mean_power
+        return +metric
+
+
+
+# ────────────────────────── PHYSICAL MASK BUILDER ─────────────────
+
+def build_directive_physical_masks(theta_deg, phi_deg, directives):
+    """Build the physical-grid boolean mask for each directive.
+
+    Uses the same extended-grid logic as build_cost_function so the returned
+    masks exactly match the angular windows used during optimization, including
+    phi 0°/360° wrap-around and theta pole-crossing at both poles.
+
+    Args:
+        theta_deg (np.ndarray): Elevation angle grid, shape (N_theta,). Units: degrees.
+        phi_deg (np.ndarray): Azimuth angle grid, shape (N_phi,). Units: degrees.
+        directives (list[dict]): Beam-shaping directives (same format as
+            build_cost_function).
+
+    Returns:
+        list[np.ndarray]: One boolean (N_theta, N_phi) array per directive.
+            True where the directive's angular window covers that physical grid point.
+    """
+    N_theta = len(theta_deg)
+    N_phi   = len(phi_deg)
+    PHI_180_SHIFT = N_phi // 2
+
+    theta_ext_deg = np.concatenate([
+        -theta_deg[1:][::-1],
+        theta_deg,
+        360.0 - theta_deg[N_theta - 2::-1],
+    ])
+    phi_ext_deg = np.concatenate([phi_deg - 360.0, phi_deg, phi_deg + 360.0])
+
+    theta_phys_idx = np.concatenate([
+        np.arange(N_theta - 1, 0, -1),
+        np.arange(N_theta),
+        np.arange(N_theta - 2, -1, -1),
+    ])
+    phi_offset = np.concatenate([
+        np.full(N_theta - 1, PHI_180_SHIFT, dtype=int),
+        np.zeros(N_theta, dtype=int),
+        np.full(N_theta - 1, PHI_180_SHIFT, dtype=int),
+    ])
+
+    masks = []
+    for directive in directives:
+        target_theta_deg = directive["theta"]
+        target_phi_deg   = directive.get("phi", DEFAULT_TARGET_PHI_DEG)
+        sym_width        = directive.get("width", None)
+        theta_width_deg  = directive.get("theta_width", sym_width)
+        phi_width_deg    = directive.get("phi_width",   sym_width)
+
+        ext_mask = angular_window_mask(
+            theta_ext_deg, phi_ext_deg,
+            target_theta_deg, target_phi_deg,
+            theta_width_deg, phi_width_deg,
+        )
+        ext_t, ext_p = np.nonzero(ext_mask)
+        phys_theta = theta_phys_idx[ext_t]
+        phys_phi   = (ext_p % N_phi + phi_offset[ext_t]) % N_phi
+        # [MATLAB] phys_mask = false(N_theta, N_phi); phys_mask(sub2ind([N_theta,N_phi], phys_theta+1, phys_phi+1)) = true;
+        phys_mask = np.zeros((N_theta, N_phi), dtype=bool)
+        phys_mask[phys_theta, phys_phi] = True
+        masks.append(phys_mask)
+
+    return masks
 
 
 # ────────────────────────── COST FUNCTION BUILDER ─────────────────
@@ -187,8 +271,14 @@ def build_cost_function(element_patterns_stacked, theta_deg, phi_deg,
                         directives, mode="standard"):
     """Build and return the composite cost function J(x) as a callable.
 
-    Pre-computes angular window masks for all directives (constant throughout
-    optimization) and returns a closure that evaluates J(x) on every call.
+    Constructs an extended (θ, φ) grid that mirrors the physical pattern at the
+    north pole (θ<0°) and south pole (θ>180°) and tiles it three times in φ.
+    Angular window masks are computed on this extended grid so that rectangular
+    windows near the poles or straddling the φ=0°/360° seam are handled
+    correctly without special-case logic.
+
+    Each directive's mask is then reduced to a sparse list of physical (θ, φ)
+    indices so the closure only touches the relevant grid points on every call.
 
     The composite cost is:
         J(x) = sum_k  lambda_k * C_k(x)
@@ -199,7 +289,9 @@ def build_cost_function(element_patterns_stacked, theta_deg, phi_deg,
         element_patterns_stacked (np.ndarray): Complex element patterns,
             shape (N_elements, N_theta, N_phi). Units: V/m.
         theta_deg (np.ndarray): Elevation angle grid, shape (N_theta,). Units: degrees.
+            Expected range: 0° to 180°, uniformly spaced.
         phi_deg (np.ndarray): Azimuth angle grid, shape (N_phi,). Units: degrees.
+            Expected range: 0° to <360°, uniformly spaced, N_phi even.
         directives (list[dict]): Beam-shaping directives. Each dict must have:
             - ``type`` (str): ``"peak"`` or ``"null"``.
             - ``theta`` (float): Target elevation angle. Units: degrees.
@@ -210,6 +302,7 @@ def build_cost_function(element_patterns_stacked, theta_deg, phi_deg,
             - ``phi_width`` (float): Azimuth window width (overrides ``width``).
             - ``phi`` (float): Target azimuth angle (default 0.0). Units: degrees.
             - ``weight`` (float): Directive weight lambda_k (default 1.0).
+            - ``aggregation`` (str): ``"mean"`` | ``"max"`` | ``"min"`` (default ``"mean"``).
         mode (str): Optimization mode. One of:
 
             - ``"standard"``: x has length 2N; weights decoded as complex Re/Im pairs.
@@ -221,32 +314,110 @@ def build_cost_function(element_patterns_stacked, theta_deg, phi_deg,
 
     Raises:
         ValueError: If ``mode`` is not one of the valid modes, or if any directive
-            has an unknown ``type``.
+            has an unknown ``type`` or ``aggregation``.
     """
     if mode not in VALID_MODES:
         raise ValueError(
             f"Unknown optimization mode '{mode}'. Valid modes: {VALID_MODES}."
         )
 
-    # Pre-compute angular window masks — these are fixed for the entire optimization.
-    # theta_width / phi_width are independent; "width" is the symmetric fallback.
-    directive_masks = []
+    N_theta = len(theta_deg)
+    N_phi   = len(phi_deg)
+    # Assumes a uniform phi grid with N_phi points covering 360° (step = 360°/N_phi).
+    # PHI_180_SHIFT is the number of phi columns that corresponds to a 180° rotation.
+    PHI_180_SHIFT = N_phi // 2  # [MATLAB] PHI_180_SHIFT = N_phi / 2;
+
+    # ── Extended grids ────────────────────────────────────────────────
+    # Theta is mirrored at both poles so windows near θ=0° or θ=180° wrap
+    # correctly into the back hemisphere.
+    #
+    # theta_ext layout (3N-2 points):
+    #   top mirror  : -180°, ..., -1°  → physical (|θ|, φ+180°)
+    #   main        :    0°, ..., 180° → physical (θ, φ)
+    #   bottom mirror: 181°, ..., 360° → physical (360°-θ, φ+180°)
+    #
+    # phi_ext layout (3*N_phi points):
+    #   left tile : φ-360°  → physical φ (mod N_phi)
+    #   centre    : φ       → physical φ
+    #   right tile: φ+360°  → physical φ (mod N_phi)
+    #
+    # [MATLAB] theta_ext_deg = [-fliplr(theta_deg(2:end)), theta_deg, 360 - fliplr(theta_deg(1:end-1))];
+    # [MATLAB] phi_ext_deg   = [phi_deg-360, phi_deg, phi_deg+360];
+    theta_ext_deg = np.concatenate([
+        -theta_deg[1:][::-1],              # top mirror:    -180°, ..., -1°
+        theta_deg,                         # main:              0°, ..., 180°
+        360.0 - theta_deg[N_theta - 2::-1],  # bottom mirror: 181°, ..., 360°
+    ])
+    phi_ext_deg = np.concatenate([
+        phi_deg - 360.0, phi_deg, phi_deg + 360.0,
+    ])
+
+    # Physical theta row index for each row of the extended grid.
+    # [MATLAB] theta_phys_idx = [N_theta:-1:2, 1:N_theta, N_theta-1:-1:1];  (1-based)
+    theta_phys_idx = np.concatenate([
+        np.arange(N_theta - 1, 0, -1),   # top mirror:    N-1 down to 1
+        np.arange(N_theta),              # main:              0 to N-1
+        np.arange(N_theta - 2, -1, -1), # bottom mirror: N-2 down to 0
+    ])  # shape (3N-2,)
+
+    # Phi column offset (in indices) applied to physical phi for mirrored theta rows.
+    # Mirror rows shift phi by 180° to reach the back hemisphere.
+    # [MATLAB] phi_offset = [repmat(PHI_180_SHIFT, 1, N_theta-1), zeros(1, N_theta), repmat(PHI_180_SHIFT, 1, N_theta-1)];
+    phi_offset = np.concatenate([
+        np.full(N_theta - 1, PHI_180_SHIFT, dtype=int),  # top mirror
+        np.zeros(N_theta, dtype=int),                     # main
+        np.full(N_theta - 1, PHI_180_SHIFT, dtype=int),  # bottom mirror
+    ])  # shape (3N-2,)
+
+    # |sin(θ)| on the extended grid — solid-angle weight.
+    # Absolute value keeps mirror rows (negative θ_ext) positive.
+    # [MATLAB] sin_theta_ext = abs(sin(deg2rad(theta_ext_deg)));
+    sin_theta_ext = np.abs(np.sin(np.deg2rad(theta_ext_deg)))
+
+    # ── Sparse mask pre-computation ───────────────────────────────────
+    # For each directive compute the angular-window mask on the extended grid,
+    # then convert the True positions to physical (theta, phi) index pairs.
+    # This allows cost_fn to sample power_grid at only the relevant points.
+    directive_mask_data = []
     for directive in directives:
         target_theta_deg = directive["theta"]
         target_phi_deg   = directive.get("phi", DEFAULT_TARGET_PHI_DEG)
         sym_width        = directive.get("width", None)
         theta_width_deg  = directive.get("theta_width", sym_width)
         phi_width_deg    = directive.get("phi_width",   sym_width)
-        mask = angular_window_mask(
-            theta_deg, phi_deg, target_theta_deg, target_phi_deg,
-            theta_width_deg, phi_width_deg,
-        )
-        directive_masks.append(mask)
 
-    # Pre-compute solid-angle weights: sin(θ) for each elevation sample.
-    # Captured by the cost_fn closure; computed once per build_cost_function call.
-    # [MATLAB] sin_theta = sin(deg2rad(theta_deg));
-    sin_theta = np.sin(np.deg2rad(theta_deg))
+        mask = angular_window_mask(
+            theta_ext_deg, phi_ext_deg,
+            target_theta_deg, target_phi_deg,
+            theta_width_deg, phi_width_deg,
+        )  # shape (3N-2, 3*N_phi)
+
+        ext_t, ext_p = np.nonzero(mask)   # row / col indices in extended grid
+
+        # Map extended indices → physical grid indices.
+        phys_theta = theta_phys_idx[ext_t]
+        # ext_p % N_phi gives the base column in the centre phi tile;
+        # adding phi_offset then wrapping by N_phi applies the 180° hemisphere shift.
+        phys_phi = (ext_p % N_phi + phi_offset[ext_t]) % N_phi
+        # [MATLAB] phys_phi = mod(mod(ext_p-1, N_phi) + phi_offset(ext_t), N_phi) + 1;
+
+        sin_w       = sin_theta_ext[ext_t]
+        aggregation = directive.get("aggregation", "mean")
+        d_type      = directive["type"]
+        d_weight    = directive.get("weight", DEFAULT_DIRECTIVE_WEIGHT)
+
+        # Validate here so errors are raised at build time, not inside the hot loop.
+        if d_type not in VALID_DIRECTIVE_TYPES:
+            raise ValueError(
+                f"Unknown directive type '{d_type}'. Valid types: {VALID_DIRECTIVE_TYPES}."
+            )
+        if aggregation not in VALID_AGGREGATIONS:
+            raise ValueError(
+                f"Unknown aggregation '{aggregation}'. Valid options: {VALID_AGGREGATIONS}."
+            )
+
+        directive_mask_data.append((phys_theta, phys_phi, sin_w,
+                                    aggregation, d_type, d_weight))
 
     def cost_fn(x):
         """Evaluate the composite cost J(x) for a given variable vector x."""
@@ -285,12 +456,12 @@ def build_cost_function(element_patterns_stacked, theta_deg, phi_deg,
         power_grid = np.abs(array_factor) ** 2
 
         # Composite cost: weighted sum over all directives.
+        # For each directive, sample power_grid at the pre-computed sparse mask indices.
         total_cost = 0.0
-        for directive, mask in zip(directives, directive_masks):
-            directive_type   = directive["type"]
-            directive_weight = directive.get("weight", DEFAULT_DIRECTIVE_WEIGHT)
-            term = _directive_cost(power_grid, mask, directive_type, sin_theta)
-            total_cost += directive_weight * term
+        for phys_theta, phys_phi, sin_w, aggregation, d_type, d_weight in directive_mask_data:
+            masked_power = power_grid[phys_theta, phys_phi]  # shape (K,), only mask pts
+            term = _directive_cost(masked_power, sin_w, d_type, aggregation)
+            total_cost += d_weight * term
 
         return float(total_cost)
 
