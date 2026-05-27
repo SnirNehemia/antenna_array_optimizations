@@ -3,10 +3,13 @@
 # Compare optimised array weights against classical tapering and
 # steering techniques for a synthetic N×N uniform rectangular array.
 #
-# Configuration is read from scripts/test_config.yaml (all variables
-# are exposed there).  Two element-pattern sources are supported:
+# Configuration is read from test_config.yaml at the project root.
+# Two element-pattern sources are supported:
 #   "synthetic" — ideal isotropic URA phase model (no real data needed)
 #   "folder"    — CST Studio far-field exports loaded from a directory
+#
+# Results (figure + console log + config snapshot) are saved to a
+# timestamped subfolder under results/compare_classical/.
 #
 # Usage:
 #   python scripts/compare_classical.py                          # default config
@@ -18,7 +21,9 @@
 
 # ────────────────────────── IMPORTS ───────────────────────────────
 import argparse
+import shutil
 import sys
+from datetime import datetime
 from pathlib import Path
 
 import warnings
@@ -1010,13 +1015,37 @@ def plot_comparison(all_scenario_results, theta_deg, n_side, cfg, output_path):
 
 # ────────────────────────── MAIN ──────────────────────────────────
 
+class _Tee:
+    """Forward write() calls to both the original stdout and a log file."""
+
+    def __init__(self, real_stdout, log_file):
+        self._stdout  = real_stdout
+        self._logfile = log_file
+
+    def write(self, text):
+        self._stdout.write(text)
+        self._logfile.write(text)
+
+    def flush(self):
+        self._stdout.flush()
+        self._logfile.flush()
+
+
+def _create_output_dir(base_dir):
+    """Create and return a timestamped subfolder under base_dir."""
+    timestamp  = datetime.now().strftime("%Y-%m-%d_%H%M%S")
+    output_dir = Path(base_dir) / timestamp
+    output_dir.mkdir(parents=True, exist_ok=True)
+    return output_dir
+
+
 def _parse_args():
     """Parse command-line arguments.
 
     Returns:
         argparse.Namespace: Parsed argument namespace.
     """
-    default_cfg = Path(__file__).parent / "test_config.yaml"
+    default_cfg = Path(__file__).resolve().parents[1] / "test_config.yaml"
     parser = argparse.ArgumentParser(
         description=(
             "Compare classical tapering / steering techniques against "
@@ -1046,67 +1075,85 @@ def main():
     if args.n is not None:
         cfg["n_side"] = args.n
 
-    d_over_lambda  = cfg["d_over_lambda"]
-    element_source = cfg["element_source"]
+    # ── Create timestamped output directory ────────────────────────
+    project_root = Path(__file__).resolve().parents[1]
+    output_dir   = _create_output_dir(project_root / "results" / "compare_classical")
+    print(f"Output directory: {output_dir}")
 
-    polarization = cfg.get("polarization", _DEFAULT_POLARIZATION)
+    # ── Tee stdout → log file for the rest of the run ─────────────
+    log_path        = output_dir / "console_output.txt"
+    original_stdout = sys.stdout
 
-    # ── Element patterns ───────────────────────────────────────────
-    if element_source == "folder":
-        element_patterns_complex, element_patterns_secondary, theta_deg, phi_deg, n_side = \
-            _load_folder_element_patterns(cfg)
-        cfg["n_side"] = n_side    # keep cfg consistent for figure title
-        n_elements    = element_patterns_complex.shape[0]
-        print(
-            f"\nLoaded {n_side}x{n_side} URA from folder "
-            f"({n_elements} elements, {len(theta_deg)} theta x {len(phi_deg)} phi points)."
-        )
-    elif element_source == "synthetic":
-        if polarization == "total":
-            raise ValueError(
-                "polarization: 'total' is not supported with element_source: 'synthetic'. "
-                "Synthetic patterns have no cross-polarization component. "
-                "Use element_source: 'folder' with real CST data, or set "
-                "polarization: 'copol'."
-            )
-        n_side    = cfg["n_side"]
-        theta_deg = np.arange(0.0, 90.0 + cfg["theta_step_deg"], cfg["theta_step_deg"])
-        phi_deg   = np.arange(0.0, 360.0, cfg["phi_step_deg"])
-        n_elements = n_side * n_side
-        print(
-            f"\nBuilding {n_side}x{n_side} URA element patterns "
-            f"({n_elements} elements, d = {d_over_lambda} lambda, "
-            f"{len(theta_deg)} theta x {len(phi_deg)} phi points) ..."
-        )
-        element_patterns_complex = build_ura_element_patterns(
-            n_side, d_over_lambda, theta_deg, phi_deg
-        )
-        element_patterns_secondary = None
-        print(f"  Element patterns shape: {element_patterns_complex.shape}")
-    else:
-        raise ValueError(
-            f"Unknown element_source '{element_source}'. "
-            "Valid options: 'synthetic', 'folder'."
-        )
+    with open(log_path, "w", encoding="utf-8") as log_file:
+        sys.stdout = _Tee(original_stdout, log_file)
+        try:
+            d_over_lambda  = cfg["d_over_lambda"]
+            element_source = cfg["element_source"]
+            polarization   = cfg.get("polarization", _DEFAULT_POLARIZATION)
 
-    # ── Scenario loop ──────────────────────────────────────────────
-    n_side   = cfg["n_side"]
-    all_scenario_results = []
-    for scenario in cfg["scenarios"]:
-        print(f"\n{'=' * 68}")
-        print(f"  {scenario['label']}")
-        print(f"{'=' * 68}")
-        results = run_scenario(
-            scenario, element_patterns_complex,
-            theta_deg, phi_deg, n_side, d_over_lambda, cfg,
-            element_patterns_secondary=element_patterns_secondary,
-        )
-        print_metrics_table(scenario["label"], results, scenario["directives"])
-        all_scenario_results.append((scenario, results))
+            # ── Element patterns ───────────────────────────────────
+            if element_source == "folder":
+                element_patterns_complex, element_patterns_secondary, theta_deg, phi_deg, n_side = \
+                    _load_folder_element_patterns(cfg)
+                cfg["n_side"] = n_side    # keep cfg consistent for figure title
+                n_elements    = element_patterns_complex.shape[0]
+                print(
+                    f"\nLoaded {n_side}x{n_side} URA from folder "
+                    f"({n_elements} elements, {len(theta_deg)} theta x {len(phi_deg)} phi points)."
+                )
+            elif element_source == "synthetic":
+                if polarization == "total":
+                    raise ValueError(
+                        "polarization: 'total' is not supported with element_source: 'synthetic'. "
+                        "Synthetic patterns have no cross-polarization component. "
+                        "Use element_source: 'folder' with real CST data, or set "
+                        "polarization: 'copol'."
+                    )
+                n_side    = cfg["n_side"]
+                theta_deg = np.arange(0.0, 90.0 + cfg["theta_step_deg"], cfg["theta_step_deg"])
+                phi_deg   = np.arange(0.0, 360.0, cfg["phi_step_deg"])
+                n_elements = n_side * n_side
+                print(
+                    f"\nBuilding {n_side}x{n_side} URA element patterns "
+                    f"({n_elements} elements, d = {d_over_lambda} lambda, "
+                    f"{len(theta_deg)} theta x {len(phi_deg)} phi points) ..."
+                )
+                element_patterns_complex = build_ura_element_patterns(
+                    n_side, d_over_lambda, theta_deg, phi_deg
+                )
+                element_patterns_secondary = None
+                print(f"  Element patterns shape: {element_patterns_complex.shape}")
+            else:
+                raise ValueError(
+                    f"Unknown element_source '{element_source}'. "
+                    "Valid options: 'synthetic', 'folder'."
+                )
 
-    # ── Figure ─────────────────────────────────────────────────────
-    output_path = Path(__file__).parent / f"compare_classical_{n_side}x{n_side}.png"
-    plot_comparison(all_scenario_results, theta_deg, n_side, cfg, output_path)
+            # ── Scenario loop ──────────────────────────────────────
+            n_side   = cfg["n_side"]
+            all_scenario_results = []
+            for scenario in cfg["scenarios"]:
+                print(f"\n{'=' * 68}")
+                print(f"  {scenario['label']}")
+                print(f"{'=' * 68}")
+                results = run_scenario(
+                    scenario, element_patterns_complex,
+                    theta_deg, phi_deg, n_side, d_over_lambda, cfg,
+                    element_patterns_secondary=element_patterns_secondary,
+                )
+                print_metrics_table(scenario["label"], results, scenario["directives"])
+                all_scenario_results.append((scenario, results))
+
+            # ── Figure ────────────────────────────────────────────
+            figure_path = output_dir / f"compare_classical_{n_side}x{n_side}.png"
+            plot_comparison(all_scenario_results, theta_deg, n_side, cfg, figure_path)
+
+            # ── Config snapshot ────────────────────────────────────
+            shutil.copy(args.config, output_dir / "test_config.yaml")
+            print(f"\nFiles saved to: {output_dir}")
+
+        finally:
+            sys.stdout = original_stdout
 
 
 if __name__ == "__main__":

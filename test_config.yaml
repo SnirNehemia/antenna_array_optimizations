@@ -81,7 +81,26 @@ scenarios:
   # ── Scenario A: broadside beam, SLL suppression only ────────────
   # The directive window is centred at phi=180° with phi_width=360° so that
   # angular_window_mask (which does not wrap phi) covers all azimuth angles.
-  - label:           "Scenario A - Broadside SLL suppression"
+
+  # - label:           "Scenario A - Broadside only, null weight 3.0"
+  #   steer_theta_deg: 0.0
+  #   steer_phi_deg:   0.0
+  #   null_theta_deg:  20.0
+  #   directives:
+  #     - type:        "peak"
+  #       theta:       0.0
+  #       phi:         180.0
+  #       theta_width: 5.0
+  #       phi_width:   360.0
+  #       weight:      1.0
+  #     - type:        "null"
+  #       theta:       20.0
+  #       phi:         0.0
+  #       theta_width: 5.0
+  #       phi_width:   360.0
+  #       weight:      3.0
+
+  - label:           "Scenario B - Broadside only, null weight 30.0"
     steer_theta_deg: 0.0
     steer_phi_deg:   0.0
     null_theta_deg:  20.0
@@ -89,15 +108,15 @@ scenarios:
       - type:        "peak"
         theta:       0.0
         phi:         180.0
-        theta_width: 15.0
+        theta_width: 5.0
         phi_width:   360.0
         weight:      1.0
       - type:        "null"
         theta:       20.0
         phi:         0.0
         theta_width: 5.0
-        phi_width:   180.0
-        weight:      3.0
+        phi_width:   360.0
+        weight:      30.0
 
   # # ── Scenario B: steered beam with a directed null ────────────────
   # - label:           "Scenario B - Steered 20deg, null at 0deg"
