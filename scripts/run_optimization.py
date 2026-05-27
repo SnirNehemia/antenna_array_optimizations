@@ -37,9 +37,11 @@ from src.plot.plotter import save_all_plots, save_pattern_gif
 # "copol" → E_complex (co-pol), "cross" → cross_complex (cross-pol).
 # "total" is supported only in the interactive manual_weights tool, where the
 # power-sum |AF_copol|² + |AF_xpol|² is rendered without a single coherent AF.
-SUPPORTED_POLARIZATIONS = ("copol", "cross")
+SUPPORTED_POLARIZATIONS = ("copol", "cross", "total")
 
-# Mapping from polarization name → pattern dict key used to build the stack.
+# Mapping from single-stack polarization name → pattern dict key.
+# "total" is handled separately: it loads both E_complex and cross_complex and
+# passes the cross stack as element_patterns_secondary to run_optimizer.
 POLARIZATION_TO_PATTERN_KEY = {
     "copol": "E_complex",
     "cross": "cross_complex",
@@ -274,16 +276,30 @@ def main():
     print("Loading element patterns...")
     patterns = load_element_patterns(config["element_patterns_dir"])
 
-    # Pick the per-element complex pattern according to the chosen polarization.
+    # Pick the per-element complex pattern(s) according to the chosen polarization.
     polarization = config.get("polarization", "copol")
-    pattern_key  = POLARIZATION_TO_PATTERN_KEY[polarization]
-    print(f"  Polarization: {polarization} (using '{pattern_key}')")
+    print(f"  Polarization: {polarization}")
 
-    # Stack individual element patterns into a single 3D array.
-    element_patterns_stacked = np.stack([p[pattern_key] for p in patterns], axis=0)
-    # [MATLAB] element_patterns_stacked = cat(3, patterns{:}.(pattern_key));
     theta_deg = patterns[0]["theta_deg"]
     phi_deg   = patterns[0]["phi_deg"]
+
+    if polarization == "total":
+        # Total field: incoherent power sum |AF_copol|² + |AF_cross|².
+        # Both stacks share the same weights; the cross stack is passed as secondary.
+        element_patterns_stacked = np.stack(
+            [p["E_complex"] for p in patterns], axis=0
+        )
+        element_patterns_secondary = np.stack(
+            [p["cross_complex"] for p in patterns], axis=0
+        )
+        print("  Using E_complex (copol) + cross_complex (cross) → total power sum.")
+    else:
+        pattern_key = POLARIZATION_TO_PATTERN_KEY[polarization]
+        print(f"  Using '{pattern_key}'")
+        # Stack individual element patterns into a single 3D array.
+        element_patterns_stacked = np.stack([p[pattern_key] for p in patterns], axis=0)
+        # [MATLAB] element_patterns_stacked = cat(3, patterns{:}.(pattern_key));
+        element_patterns_secondary = None
 
     n_elements, n_theta, n_phi = element_patterns_stacked.shape
     print(f"  Loaded {n_elements} elements, grid {n_theta}×{n_phi}")
@@ -295,6 +311,7 @@ def main():
     optimizer_result = run_optimizer(
         element_patterns_stacked, theta_deg, phi_deg,
         directives, config["optimizer"],
+        element_patterns_secondary=element_patterns_secondary,
     )
     elapsed_sec     = time.perf_counter() - t_start
     weights_complex    = optimizer_result["weights_complex"]
@@ -303,19 +320,32 @@ def main():
     best_run_index     = optimizer_result["best_run_index"]
     all_run_labels     = optimizer_result["all_run_labels"]
 
+    # ── Compute power grid (used for both metrics and plotting) ───────
+    # For "total" polarisation: incoherent sum |AF_copol|² + |AF_cross|².
+    # For single-stack modes: |AF|² from the primary stack only.
+    af_primary = compute_array_factor(weights_complex, element_patterns_stacked)
+    if element_patterns_secondary is not None:
+        af_secondary = compute_array_factor(weights_complex, element_patterns_secondary)
+        power_linear = np.abs(af_primary) ** 2 + np.abs(af_secondary) ** 2
+        # [MATLAB] power_linear = abs(af_primary).^2 + abs(af_secondary).^2;
+        # evaluate_metrics cannot express a power-sum as a single coherent AF, so
+        # pass sqrt(total_power) as a synthetic real-valued AF: |sqrt(P)|² == P.
+        metrics_af = np.sqrt(power_linear)
+    else:
+        power_linear = np.abs(af_primary) ** 2
+        # [MATLAB] power_linear = abs(af_primary) .^ 2;
+        metrics_af = None   # evaluate_metrics computes the AF internally
+
+    # Guard against log(0) before converting to dB.
+    array_factor_db_grid = 10.0 * np.log10(np.maximum(power_linear, 1e-30))
+    # [MATLAB] array_factor_db_grid = 10 * log10(max(power_linear, 1e-30));
+
     # ── Stage 5: Evaluate metrics ──────────────────────────────────
     metrics = evaluate_metrics(
         element_patterns_stacked, theta_deg, phi_deg,
         weights_complex, directives, cost_history,
+        precomputed_array_factor=metrics_af,
     )
-
-    # ── Compute array factor dB grid for plotting ──────────────────
-    # Array factor: coherent superposition of weighted element patterns.
-    array_factor = compute_array_factor(weights_complex, element_patterns_stacked)
-    power_linear = np.abs(array_factor) ** 2
-    # Guard against log(0) before converting to dB.
-    array_factor_db_grid = 10.0 * np.log10(np.maximum(power_linear, 1e-30))
-    # [MATLAB] array_factor_db_grid = 10 * log10(max(abs(array_factor).^2, 1e-30));
 
     # ── Stage 6: Save plots ────────────────────────────────────────
     print("Saving plots...")
@@ -334,6 +364,7 @@ def main():
             element_patterns_stacked,
             theta_deg, phi_deg, directives,
             cost_history, config["output"], output_dir,
+            element_patterns_secondary=element_patterns_secondary,
         )
 
     # ── Save weights and metrics ───────────────────────────────────

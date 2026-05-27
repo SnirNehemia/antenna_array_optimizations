@@ -196,7 +196,8 @@ def _run_single_optimization(cost_fn, x_initial, bounds, max_iterations, cost_to
 # ────────────────────────── PUBLIC INTERFACE ──────────────────────
 
 def run_optimizer(element_patterns_stacked, theta_deg, phi_deg,
-                  directives, optimizer_config):
+                  directives, optimizer_config,
+                  element_patterns_secondary=None):
     """Run multi-start L-BFGS-B optimization to find the best complex element weights.
 
     Executes ``n_restarts`` optimization runs. The first restart always uses uniform
@@ -225,6 +226,11 @@ def run_optimizer(element_patterns_stacked, theta_deg, phi_deg,
               Default True. If False, run 0 uses random phases like all others.
             - ``use_single_element_init`` (bool): Add one run per element with only that
               element active. Default True. Disable to reduce total run count.
+        element_patterns_secondary (np.ndarray | None): Optional cross-polarisation
+            pattern stack, shape (N_elements, N_theta, N_phi). When provided the cost
+            function minimises ``|AF_copol|² + |AF_cross|²`` (total field power).
+            Forwarded directly to :func:`~src.cost.cost_function.build_cost_function`.
+            Default: None.
 
     Returns:
         dict: Optimization result with keys:
@@ -273,7 +279,8 @@ def run_optimizer(element_patterns_stacked, theta_deg, phi_deg,
 
     # ── Build cost function and bounds ─────────────────────────────
     cost_fn = build_cost_function(
-        element_patterns_stacked, theta_deg, phi_deg, directives, mode=mode
+        element_patterns_stacked, theta_deg, phi_deg, directives, mode=mode,
+        element_patterns_secondary=element_patterns_secondary,
     )
 
     bounds = _build_lbfgsb_bounds(n_elements, amplitude_bounds, mode)

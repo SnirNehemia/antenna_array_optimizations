@@ -575,7 +575,8 @@ def save_cost_history_plot(all_cost_histories, best_run_index, all_run_labels, o
 
 def save_pattern_gif(weights_history, element_patterns_stacked,
                      theta_deg, phi_deg, directives,
-                     cost_history, output_config, output_dir):
+                     cost_history, output_config, output_dir,
+                     element_patterns_secondary=None):
     """Save an animated GIF showing the radiation pattern evolving over optimizer iterations.
 
     Each frame renders the 2D heatmap (equal-area projection) with directive overlays
@@ -597,6 +598,9 @@ def save_pattern_gif(weights_history, element_patterns_stacked,
         output_config (dict): Output section from config.yaml. Reads
             ``gif_max_frames`` (int, default 100) and ``plot_dynamic_range_db``.
         output_dir (Path): Directory where the GIF is saved.
+        element_patterns_secondary (np.ndarray | None): Cross-pol element patterns,
+            shape (N_elements, N_theta, N_phi). When provided, each frame renders
+            total field power ``|AF_copol|² + |AF_cross|²``. Default: None.
     """
     if not weights_history:
         return
@@ -667,8 +671,13 @@ def save_pattern_gif(weights_history, element_patterns_stacked,
     def _update(frame_idx):
         weights = weights_history[frame_idx]
         # Compute normalised dB grid for this weight vector.
-        af         = compute_array_factor(weights, element_patterns_stacked)
-        power      = np.abs(af) ** 2
+        af_primary = compute_array_factor(weights, element_patterns_stacked)
+        if element_patterns_secondary is not None:
+            af_secondary = compute_array_factor(weights, element_patterns_secondary)
+            power = np.abs(af_primary) ** 2 + np.abs(af_secondary) ** 2
+            # [MATLAB] power = abs(af_primary).^2 + abs(af_secondary).^2;
+        else:
+            power = np.abs(af_primary) ** 2
         power_db   = 10.0 * np.log10(np.maximum(power, 1e-30))
         grid_norm  = np.clip(power_db - power_db.max(), -dynamic_range, 0.0)
         mesh.set_array(grid_norm.ravel())

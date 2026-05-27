@@ -240,8 +240,10 @@ def _load_folder_element_patterns(cfg):
         cfg (dict): Loaded test configuration (see :func:`_load_test_config`).
 
     Returns:
-        tuple[np.ndarray, np.ndarray, np.ndarray, int]:
+        tuple[np.ndarray, np.ndarray | None, np.ndarray, np.ndarray, int]:
             - ``element_patterns_complex``, shape (n_elements, N_theta, N_phi).
+            - ``element_patterns_secondary``: cross-pol stack of the same shape when
+              ``polarization == "total"``; ``None`` otherwise.
             - ``theta_deg``, shape (N_theta,). Units: degrees.
             - ``phi_deg``, shape (N_phi,). Units: degrees.
             - ``n_side`` (int): inferred from sqrt(n_elements).
@@ -275,22 +277,29 @@ def _load_folder_element_patterns(cfg):
     theta_deg = raw_patterns[0]["theta_deg"]    # (N_theta,)
     phi_deg   = raw_patterns[0]["phi_deg"]      # (N_phi,)
 
-    # Select the field component to stack.
+    # Select and stack the field component(s).
+    # "total" loads both copol and cross stacks so the cost function can use the
+    # physically correct power sum |AF_copol|² + |AF_cross|² instead of the
+    # approximate E_abs (magnitude-only) approach.
+    ep_secondary = None
     if polarization == "copol":
-        field_key = "E_complex"
+        ep = np.stack([p["E_complex"] for p in raw_patterns], axis=0)
     elif polarization == "cross":
-        field_key = "cross_complex"
+        ep = np.stack([p["cross_complex"] for p in raw_patterns], axis=0)
     elif polarization == "total":
-        field_key = "E_abs"     # real-valued; promoted to complex below
+        ep          = np.stack([p["E_complex"]    for p in raw_patterns], axis=0)
+        ep_secondary = np.stack([p["cross_complex"] for p in raw_patterns], axis=0)
+        # Normalise both stacks together so the copol/cross power ratio is preserved.
+        peak_amp = float(np.max([np.max(np.abs(ep)), np.max(np.abs(ep_secondary))]))
+        if peak_amp > 1e-30:
+            ep          = ep          / peak_amp
+            ep_secondary = ep_secondary / peak_amp
+        return ep, ep_secondary, theta_deg, phi_deg, n_side
     else:
         raise ValueError(
             f"Unknown polarization '{polarization}'. "
             "Valid options: 'copol', 'cross', 'total'."
         )
-
-    ep = np.stack([p[field_key] for p in raw_patterns], axis=0)    # (n_elements, N_theta, N_phi)
-    if not np.iscomplexobj(ep):
-        ep = ep.astype(complex)
 
     # Normalise to peak amplitude = 1 across all elements and angles.
     # CST exports have simulation-dependent absolute amplitudes; this makes the
@@ -299,7 +308,7 @@ def _load_folder_element_patterns(cfg):
     if peak_amp > 1e-30:
         ep = ep / peak_amp
 
-    return ep, theta_deg, phi_deg, n_side
+    return ep, None, theta_deg, phi_deg, n_side
 
 
 # ────────────────────────── STEERING PHASE ────────────────────────
@@ -646,7 +655,8 @@ def evaluate_directive_metrics(af_norm_mag_vm, theta_deg, phi_deg, directive):
 # ────────────────────────── SCENARIO RUNNER ───────────────────────
 
 def run_scenario(scenario, element_patterns_complex, theta_deg, phi_deg,
-                 n_side, d_over_lambda, cfg):
+                 n_side, d_over_lambda, cfg,
+                 element_patterns_secondary=None):
     """Compute classical and optimised patterns for one scenario.
 
     Args:
@@ -658,6 +668,9 @@ def run_scenario(scenario, element_patterns_complex, theta_deg, phi_deg,
         n_side (int): Array dimension.
         d_over_lambda (float): Element spacing in wavelengths. Units: dimensionless.
         cfg (dict): Full test configuration (supplies optimizer settings).
+        element_patterns_secondary (np.ndarray | None): Cross-pol element patterns,
+            shape (N_elements, N_theta, N_phi). When provided, pattern power is
+            computed as ``|AF_copol|² + |AF_cross|²``. Default: None.
 
     Returns:
         dict: Mapping technique_name → {
@@ -673,12 +686,20 @@ def run_scenario(scenario, element_patterns_complex, theta_deg, phi_deg,
     results: dict = {}
 
     def _process(weights_complex):
-        """Compute AF, principal-plane cut, and per-directive metrics."""
+        """Compute AF magnitude (or total-power magnitude), principal-plane cut, and per-directive metrics."""
         weights_norm = _power_normalize_weights(weights_complex)
-        af_complex   = compute_array_factor(weights_norm, element_patterns_complex)
-        af_mag_vm    = np.abs(af_complex)                         # (N_theta, N_phi)
-        cut_vm       = principal_plane_cut(af_complex, phi_deg)   # (N_cut,)
-        dir_metrics  = [
+        af_copol     = compute_array_factor(weights_norm, element_patterns_complex)
+        if element_patterns_secondary is not None:
+            af_cross  = compute_array_factor(weights_norm, element_patterns_secondary)
+            # Effective magnitude: sqrt(|AF_copol|² + |AF_cross|²).
+            # np.abs() on this real non-negative array is a no-op, so
+            # principal_plane_cut and evaluate_directive_metrics work unchanged.
+            af_mag_vm = np.sqrt(np.abs(af_copol) ** 2 + np.abs(af_cross) ** 2)
+            # [MATLAB] af_mag_vm = sqrt(abs(af_copol).^2 + abs(af_cross).^2);
+        else:
+            af_mag_vm = np.abs(af_copol)
+        cut_vm      = principal_plane_cut(af_mag_vm, phi_deg)   # (N_cut,)
+        dir_metrics = [
             evaluate_directive_metrics(af_mag_vm, theta_deg, phi_deg, d)
             for d in directives
         ]
@@ -709,6 +730,7 @@ def run_scenario(scenario, element_patterns_complex, theta_deg, phi_deg,
     print(f"  Running optimizer ({n_restarts} restarts)...")
     opt_result = run_optimizer(
         element_patterns_complex, theta_deg, phi_deg, directives, optimizer_config,
+        element_patterns_secondary=element_patterns_secondary,
     )
     weights_opt, cut_opt_vm, dir_metrics_opt = _process(opt_result["weights_complex"])
     results["optimized"] = {
@@ -1027,9 +1049,11 @@ def main():
     d_over_lambda  = cfg["d_over_lambda"]
     element_source = cfg["element_source"]
 
+    polarization = cfg.get("polarization", _DEFAULT_POLARIZATION)
+
     # ── Element patterns ───────────────────────────────────────────
     if element_source == "folder":
-        element_patterns_complex, theta_deg, phi_deg, n_side = \
+        element_patterns_complex, element_patterns_secondary, theta_deg, phi_deg, n_side = \
             _load_folder_element_patterns(cfg)
         cfg["n_side"] = n_side    # keep cfg consistent for figure title
         n_elements    = element_patterns_complex.shape[0]
@@ -1038,6 +1062,13 @@ def main():
             f"({n_elements} elements, {len(theta_deg)} theta x {len(phi_deg)} phi points)."
         )
     elif element_source == "synthetic":
+        if polarization == "total":
+            raise ValueError(
+                "polarization: 'total' is not supported with element_source: 'synthetic'. "
+                "Synthetic patterns have no cross-polarization component. "
+                "Use element_source: 'folder' with real CST data, or set "
+                "polarization: 'copol'."
+            )
         n_side    = cfg["n_side"]
         theta_deg = np.arange(0.0, 90.0 + cfg["theta_step_deg"], cfg["theta_step_deg"])
         phi_deg   = np.arange(0.0, 360.0, cfg["phi_step_deg"])
@@ -1050,6 +1081,7 @@ def main():
         element_patterns_complex = build_ura_element_patterns(
             n_side, d_over_lambda, theta_deg, phi_deg
         )
+        element_patterns_secondary = None
         print(f"  Element patterns shape: {element_patterns_complex.shape}")
     else:
         raise ValueError(
@@ -1067,6 +1099,7 @@ def main():
         results = run_scenario(
             scenario, element_patterns_complex,
             theta_deg, phi_deg, n_side, d_over_lambda, cfg,
+            element_patterns_secondary=element_patterns_secondary,
         )
         print_metrics_table(scenario["label"], results, scenario["directives"])
         all_scenario_results.append((scenario, results))

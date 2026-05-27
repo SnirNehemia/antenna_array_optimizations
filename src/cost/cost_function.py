@@ -268,7 +268,8 @@ def build_directive_physical_masks(theta_deg, phi_deg, directives):
 # ────────────────────────── COST FUNCTION BUILDER ─────────────────
 
 def build_cost_function(element_patterns_stacked, theta_deg, phi_deg,
-                        directives, mode="standard"):
+                        directives, mode="standard",
+                        element_patterns_secondary=None):
     """Build and return the composite cost function J(x) as a callable.
 
     Constructs an extended (θ, φ) grid that mirrors the physical pattern at the
@@ -308,6 +309,12 @@ def build_cost_function(element_patterns_stacked, theta_deg, phi_deg,
             - ``"standard"``: x has length 2N; weights decoded as complex Re/Im pairs.
             - ``"phase_only"``: x has length 2N; weights are normalized to unit amplitude.
             - ``"amplitude_only"``: x has length N; weights are real (phase = 0).
+        element_patterns_secondary (np.ndarray | None): Optional second polarisation
+            stack, shape (N_elements, N_theta, N_phi). When provided, the cost
+            function operates on total field power:
+            ``|AF_primary|² + |AF_secondary|²``.
+            Pass ``cross_complex`` here for ``polarization: "total"`` mode.
+            Default: None (single-stack, single-polarisation).
 
     Returns:
         callable: A function ``cost_fn(x) -> float`` that evaluates J(x).
@@ -449,11 +456,17 @@ def build_cost_function(element_patterns_stacked, theta_deg, phi_deg,
         weights_complex = weights_complex / np.sqrt(safe_power)
 
         # Array factor: coherent superposition of power-normalized element patterns.
-        array_factor = compute_array_factor(weights_complex, element_patterns_stacked)
+        af_primary = compute_array_factor(weights_complex, element_patterns_stacked)
 
         # Pre-compute power grid once; reused for every directive this call.
-        # [MATLAB] power_grid = abs(array_factor) .^ 2;
-        power_grid = np.abs(array_factor) ** 2
+        # For "total" polarisation, power is the incoherent sum of both polarisations.
+        if element_patterns_secondary is not None:
+            af_secondary = compute_array_factor(weights_complex, element_patterns_secondary)
+            power_grid = np.abs(af_primary) ** 2 + np.abs(af_secondary) ** 2
+            # [MATLAB] power_grid = abs(af_primary).^2 + abs(af_secondary).^2;
+        else:
+            power_grid = np.abs(af_primary) ** 2
+            # [MATLAB] power_grid = abs(af_primary) .^ 2;
 
         # Composite cost: weighted sum over all directives.
         # For each directive, sample power_grid at the pre-computed sparse mask indices.
