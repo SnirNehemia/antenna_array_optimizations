@@ -1,0 +1,17 @@
+# Antenna Array Pattern Optimization — dependencies
+# Generated from: pip freeze (direct project dependencies only — transitive
+# sub-dependencies are resolved and downloaded automatically by pip download).
+# Python: 3.13.2
+# Platform: Windows 11 x64
+#
+# Stdlib (no pip install needed):
+#   argparse, csv, json, re, shutil, sys, time, tkinter, warnings, pathlib, datetime
+
+matplotlib==3.9.2
+numpy==2.1.3
+pillow==11.3.0
+PyYAML==6.0.3
+scipy==1.16.2
+
+# Testing only
+pytest==8.3.3

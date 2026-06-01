@@ -106,13 +106,13 @@ scenarios:
     null_theta_deg:  20.0
     directives:
       - type:        "peak"
-        theta:       0.0
-        phi:         180.0
-        theta_width: 5.0
+        theta:       30.0
+        phi:         10.0
+        theta_width: 10.0
         phi_width:   360.0
         weight:      1.0
       - type:        "null"
-        theta:       20.0
+        theta:       00.0
         phi:         0.0
         theta_width: 5.0
         phi_width:   360.0

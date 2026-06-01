@@ -11,7 +11,7 @@
 # Path to the folder containing all CST element pattern .txt files.
 # One file per array element. All files in this folder are loaded.
 # The number of elements is inferred from the number of files found.
-element_patterns_dir: "data/patch_back2back/"
+element_patterns_dir: "data/spacing0.6_disturbed3/"
 
 
 # ────────────────────────── POLARIZATION ──────────────────────────
@@ -22,7 +22,7 @@ element_patterns_dir: "data/patch_back2back/"
 #   "cross"       — Cross-polarization (Abs(Cross) + Phase(Cross)).
 #   "total"       — Total E-field power |E_copol|² + |E_xpol|².
 #                   Manual tuner only (not wired through run_optimization.py).
-polarization: "total"
+polarization: "cross"
 
 
 # ────────────────────────── OPTIMIZATION DIRECTIVES ───────────────
@@ -58,20 +58,29 @@ directives:
   #   weight: 5.0
 
   - type:   "peak"
-    theta:  0.0          # degrees — boresight
-    phi:    45.0          # degrees
-    width:  20.0         # degrees — desired HMBW
-    level:  25.0         # dBi — set to null if unknown; metrics will report achieved value
+    theta:  30.0          # degrees — boresight
+    phi:    0.0          # degrees
+    theta_width:  10.0         # degrees — total suppression window in theta
+    phi_width:    10.0         # degrees — total suppression window in phi
+    level:  null         # dBi — set to null if unknown; metrics will report achieved value
     weight: 1.0
 
   - type:   "null"
-    theta:  45.0         # degrees — interference direction
-    phi:    345.0          # degrees
-    theta_width:  5.0         # degrees — total suppression window in theta
-    phi_width:    360.0         # degrees — total suppression window in phi
-    level:  -20.0        # dB — desired null depth relative to peak
-    weight: 100.0          # higher weight: 2.0 for null enforcement is twice as important as peak
-    aggregation: "mean"
+    theta:  -30.0          # degrees — boresight
+    phi:    0.0          # degrees
+    theta_width:  10.0         # degrees — total suppression window in theta
+    phi_width:    10.0         # degrees — total suppression window in phi
+    level:  null         # dBi — set to null if unknown; metrics will report achieved value
+    weight: 10.0
+
+  # - type:   "null"
+  #   theta:  60.0         # degrees — interference direction
+  #   phi:    345.0          # degrees
+  #   theta_width:  5.0         # degrees — total suppression window in theta
+  #   phi_width:    360.0         # degrees — total suppression window in phi
+  #   level:  -20.0        # dB — desired null depth relative to peak
+  #   weight: 100.0          # higher weight: 2.0 for null enforcement is twice as important as peak
+  #   aggregation: "mean"
 
   # - type:   "null"
   #   theta:  180.0         # degrees — interference direction

@@ -107,7 +107,7 @@ def _create_output_dir(results_dir):
     """
     timestamp  = datetime.now().strftime("%Y-%m-%d_%H%M%S")
     # [MATLAB] timestamp = datestr(now, 'yyyy-mm-dd_HHMMSS');
-    output_dir = Path(results_dir) / timestamp
+    output_dir = Path(results_dir) / "optimizations" / timestamp
     output_dir.mkdir(parents=True, exist_ok=True)
     return output_dir
 

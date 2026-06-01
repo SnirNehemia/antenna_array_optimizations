@@ -67,6 +67,4 @@ Module boundaries are strict: no plotting in `optimize/`, no optimization in `pl
 ## Out of Scope (do not implement unless asked)
 
 - Mutual coupling correction
-- Cross-polarization optimization
 - Dynamic jammer tracking (future project, separate codebase)
-- Full 3D pattern optimization (current scope is 2D azimuth cut)
