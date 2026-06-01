@@ -8,7 +8,7 @@
 # ────────────────────────── IMPORTS ───────────────────────────────
 import numpy as np
 
-from src.cost.cost_function import compute_array_factor, angular_window_mask
+from src.cost.cost_function import compute_array_factor, build_directive_physical_masks
 
 # ────────────────────────── CONSTANTS ─────────────────────────────
 
@@ -226,7 +226,9 @@ def evaluate_metrics(element_patterns_stacked, theta_deg, phi_deg,
                 - ``type`` (str): ``"peak"`` or ``"null"``.
                 - ``theta_deg`` (float): Target elevation. Units: degrees.
                 - ``phi_deg`` (float): Target azimuth. Units: degrees.
-                - ``gain_dbi`` (float): Directivity at the nearest grid point. Units: dBi.
+                - ``gain_dbi`` (float): Peak directivity inside the directive's
+                  angular window — the strongest point of the on-screen window box.
+                  Resolves pole-crossing (θ<0° or θ>180°) and φ wrap-around. Units: dBi.
                 - ``null_depth_db`` (float | None): gain_dbi − global_peak_dbi (≤ 0).
                   Present only for null directives; None for peak directives.
                 - ``cost_term`` (float): lambda_k × C_k, signed as in the cost function.
@@ -288,35 +290,39 @@ def evaluate_metrics(element_patterns_stacked, theta_deg, phi_deg,
     # [MATLAB] sin_theta_grid = sin(deg2rad(theta_deg))';  % column vector, broadcast over phi
     sin_theta_grid = np.sin(np.deg2rad(theta_deg))[:, np.newaxis]
 
+    # Physical-grid window masks — identical to the cost function and the GUI
+    # overlay box. These resolve pole-crossing (θ<0° or θ>180°) and φ 0°/360°
+    # wrap-around, so a directive at e.g. θ=−30° is mapped to its physical mirror
+    # location (θ=30°, φ+180°) instead of being clamped to the grid edge.
+    # [MATLAB] phys_masks = build_directive_physical_masks(theta_deg, phi_deg, directives);
+    phys_masks = build_directive_physical_masks(theta_deg, phi_deg, directives)
+
     directive_metrics  = []
     total_cost         = 0.0
     first_peak_dbi     = None
     first_null_dbi     = None
 
-    for directive in directives:
+    for directive, mask in zip(directives, phys_masks):
         directive_type   = directive["type"]
         target_theta_deg = directive["theta"]
         target_phi_deg   = directive.get("phi",    DEFAULT_TARGET_PHI_DEG)
         directive_weight = directive.get("weight", DEFAULT_DIRECTIVE_WEIGHT)
 
-        # Directivity at the nearest grid point to the target angle.
-        theta_idx = _nearest_index(theta_deg, target_theta_deg)
-        phi_idx   = _nearest_index(phi_deg,   target_phi_deg)
-        gain_dbi  = float(directivity_dbi_grid[theta_idx, phi_idx])
-        # [MATLAB] [~, ti] = min(abs(theta_deg - target_theta_deg));
-        # [MATLAB] [~, pi] = min(abs(phi_deg   - target_phi_deg));
-        # [MATLAB] gain_dbi = directivity_dbi_grid(ti, pi);
+        # Realized directivity: the strongest point inside the directive's physical
+        # window. For a peak this is the achieved gain; for a null it is the
+        # worst-case leakage — both match the brightest pixel of the on-screen box.
+        # Falls back to the mapped-centre nearest grid point only if the window
+        # somehow covers no grid points (degenerate width).
+        if mask.any():
+            gain_dbi = float(np.max(directivity_dbi_grid[mask]))
+            # [MATLAB] gain_dbi = max(directivity_dbi_grid(mask));
+        else:
+            theta_idx = _nearest_index(theta_deg, target_theta_deg)
+            phi_idx   = _nearest_index(phi_deg,   target_phi_deg)
+            gain_dbi  = float(directivity_dbi_grid[theta_idx, phi_idx])
 
-        # Mean power in the angular window — used for the cost term (matches cost function).
-        # theta_width / phi_width are independent; "width" is the symmetric fallback.
-        sym_width       = directive.get("width", None)
-        theta_width_deg = directive.get("theta_width", sym_width)
-        phi_width_deg   = directive.get("phi_width",   sym_width)
-        mask            = angular_window_mask(
-            theta_deg, phi_deg, target_theta_deg, target_phi_deg,
-            theta_width_deg, phi_width_deg,
-        )
-        # Solid-angle-weighted mean power — matches the cost function weighting.
+        # Solid-angle-weighted mean power over the same physical window — matches
+        # the cost function's default "mean" aggregation.
         # Near-pole pixels (sin θ ≈ 0) are de-emphasized proportional to their solid angle.
         # [MATLAB] w = mask .* sin_theta_grid; mean_window_power = sum(power_linear(:).*w(:)) / max(sum(w(:)), 1e-30);
         weights_sa        = mask.astype(float) * sin_theta_grid

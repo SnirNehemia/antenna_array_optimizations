@@ -220,6 +220,15 @@ class ManualWeightsTuner:
         # both stacks together and cannot be represented by a single one.
         self._active_polarization: str = POLARIZATION_COPOL
 
+        # Model name: basename of element_patterns_dir — shown in toolbar and figure title
+        self._model_name: str = Path(self._config["element_patterns_dir"]).name
+
+        # Path of the last loaded weights CSV; None until the user loads one
+        self._loaded_weights_path: str | None = None
+
+        # Config path for the next session; set by _on_load_config, consumed by main()
+        self._next_config_path: Path | None = None
+
         # Ground-truth weight vector: complex (N_elements,), dimensionless V/V
         self._weights_complex: np.ndarray = np.ones(
             self._n_elements, dtype=complex
@@ -266,6 +275,7 @@ class ManualWeightsTuner:
         self._last_display_grid: np.ndarray | None = None
 
         # Frames set during UI build (assigned in _build_* methods)
+        self._source_label: tk.Label   # two-line toolbar block, line 2 (config/weights dir)
         self._directives_inner_frame: tk.Frame
         self._metrics_inner_frame: tk.Frame
         self._ax: object            # matplotlib Axes
@@ -328,13 +338,36 @@ class ManualWeightsTuner:
         toolbar = tk.Frame(self._root, bg=PANEL_BG, relief=tk.FLAT, bd=1)
         toolbar.pack(side=tk.TOP, fill=tk.X)
 
+        # ── Left info block: two-line label + Load Config button ────────
+        # Line 1: config filename + model name (bold)
+        # Line 2: absolute source directories, updated when a weights CSV is loaded
+        info_frame = tk.Frame(toolbar, bg=PANEL_BG)
+        info_frame.pack(side=tk.LEFT, padx=4, pady=2)
+
         tk.Label(
-            toolbar,
-            text=f"  Config: {self._config_path}",
+            info_frame,
+            text=f"Config: {self._config_path.name}  ·  Model: {self._model_name}",
+            font=HEADER_FONT,
+            bg=PANEL_BG,
+            fg="#333333",
+        ).pack(anchor="w")
+
+        self._source_label = tk.Label(
+            info_frame,
+            text=f"  {self._config_path.resolve().parent}",
             font=LABEL_FONT,
             bg=PANEL_BG,
-            fg="#555555",
-        ).pack(side=tk.LEFT, padx=4, pady=5)
+            fg="#888888",
+        )
+        self._source_label.pack(anchor="w")
+
+        ttk.Button(
+            toolbar, text="Load Config…", command=self._on_load_config,
+        ).pack(side=tk.LEFT, padx=(2, 0), pady=4)
+
+        ttk.Separator(toolbar, orient="vertical").pack(
+            side=tk.LEFT, fill=tk.Y, padx=8, pady=4
+        )
 
         # Load CSV and Uniform buttons on the right
         ttk.Button(
@@ -456,7 +489,7 @@ class ManualWeightsTuner:
 
         self._ax.set_xlabel("Azimuth  φ (°)")
         self._ax.set_ylabel("Elevation θ (°)")
-        self._ax.set_title("Array Factor — manual weights", fontsize=10)
+        self._ax.set_title(f"Array Factor — {self._model_name}", fontsize=10)
         self._ax.grid(
             True, alpha=GRID_ALPHA, color="white", linewidth=GRID_LINEWIDTH
         )
@@ -667,7 +700,7 @@ class ManualWeightsTuner:
         header.pack(fill=tk.X, padx=4, pady=(2, 0))
         col_specs = [
             ("Type", 5), ("θ (°)", 5), ("φ (°)", 5), ("θW(°)", 5), ("φW(°)", 5),
-            ("wt", 4), ("", 2), ("Result", 14),
+            ("wt", 4), ("", 2), ("Result", 24),
         ]
         for col_text, col_width in col_specs:
             tk.Label(
@@ -819,7 +852,7 @@ class ManualWeightsTuner:
         # Inline live metric readout (gain in dBi, or gain + null depth for nulls)
         metric_label = tk.Label(
             row_frame, text="—", font=METRIC_FONT, bg=BG_COLOR,
-            anchor="w", width=14,
+            anchor="w", width=24,
         )
         metric_label.pack(side=tk.LEFT, padx=(4, 0))
         vars_dict["metric_label"] = metric_label
@@ -921,6 +954,32 @@ class ManualWeightsTuner:
         self._sync_entries_to_weights()
         self._recompute_and_redraw()
         self._set_status(f"Weights loaded from: {filepath}")
+
+        self._loaded_weights_path = filepath
+        config_dir   = str(self._config_path.resolve().parent)
+        weights_dir  = str(Path(filepath).resolve().parent)
+        if weights_dir == config_dir:
+            self._source_label.config(text=f"  {config_dir}")
+        else:
+            self._source_label.config(
+                text=f"  Config: {config_dir}   Weights: {weights_dir}"
+            )
+
+    def _on_load_config(self) -> None:
+        """Open a file dialog, store the new config path, and close the window.
+
+        main() detects a non-None _next_config_path after mainloop() returns
+        and opens a fresh ManualWeightsTuner with the chosen config.
+        """
+        filepath = filedialog.askopenfilename(
+            title="Load Config YAML",
+            filetypes=[("YAML files", "*.yaml *.yml"), ("All files", "*.*")],
+            initialdir=str(self._config_path.resolve().parent),
+        )
+        if not filepath:
+            return
+        self._next_config_path = Path(filepath)
+        self._root.destroy()
 
     def _on_directive_change(self) -> None:
         """Recompute and redraw after any change to the directives table."""
@@ -1334,7 +1393,9 @@ class ManualWeightsTuner:
                     text  = f"{dm['gain_dbi']:+.2f} dBi"
                     color = PEAK_OVERLAY_COLOR
                 else:
-                    text  = f"{dm['gain_dbi']:+.2f} ({dm['null_depth_db']:.1f})"
+                    # gain_dbi: max directivity inside the null window (dBi)
+                    # null_depth_db: gain_dbi − global_peak_dbi (≤ 0 dB, relative to peak)
+                    text  = f"{dm['gain_dbi']:+.2f} dBi ({dm['null_depth_db']:+.1f}dBr)"
                     color = NULL_OVERLAY_COLOR
                 row_vars["metric_label"].config(text=text, fg=color)
                 metrics_idx += 1
@@ -1462,8 +1523,13 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    tuner = ManualWeightsTuner(config_path=Path(args.config))
-    tuner.run()
+    config_path = Path(args.config)
+    while True:
+        tuner = ManualWeightsTuner(config_path=config_path)
+        tuner.run()
+        if tuner._next_config_path is None:
+            break
+        config_path = tuner._next_config_path
 
 
 if __name__ == "__main__":

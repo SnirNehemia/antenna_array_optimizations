@@ -205,6 +205,38 @@ or `ValueError` — never silently fall back to a hardcoded default.
 > Claude Code must append an entry here at the end of every working session.
 > Format shown below. Newest entry at the top.
 
+### 2026-06-01 — Fix evaluate_metrics for pole-crossing directives
+
+**Problem**: For a null directive at θ=−30°, φ=0° (back hemisphere via pole),
+the run report and GUI inline label showed `gain_dbi = +11.47 dBi` and
+`null_depth = −4.80 dB`, while the displayed red-box max was ~−8 dBi. The null
+was actually achieved (~24 dB deep); only the metric was wrong.
+
+**Root cause** (`src/metrics/metrics.py`, `evaluate_metrics`): the metric sampled
+the directive on the **raw** physical θ∈[0,180°] grid, unlike the cost function and
+the GUI overlay which both use the extended grid. `_nearest_index(θ, −30)` clamped
+to θ=0° (boresight, next to the main beam) → bogus +11 dBi. The window mask
+(`angular_window_mask` on the raw grid, window θ∈[−35,−25]) was entirely off-grid →
+empty → `mean_window_power = 0` → `cost_term = 0.0` and a meaningless null depth.
+
+**Fix**: `evaluate_metrics` now builds masks via `build_directive_physical_masks`
+(the same extended-grid masks the optimizer and overlay use), so θ=−30°,φ=0° maps
+to its physical mirror θ=30°,φ=180°. `gain_dbi` is reported as the **max
+directivity inside the physical window** (peak → achieved gain; null → worst-case
+leakage), matching the brightest pixel of the on-screen box. Window mean power for
+`cost_term` uses the same mask. Verified against the
+`2026-06-01_094337` run: null now reads −7.90 dBi / depth −23.95 dB / cost_term 19.1,
+peak 16.06 dBi, peak-to-null 23.95 dB.
+
+**Decisions made**:
+- `gain_dbi` semantics changed from "value at nearest center grid point" to
+  "max inside the angular window" for **both** peak and null, so every inline
+  directive label matches the brightest pixel of its on-screen window box.
+  Kept a nearest-mapped-center fallback only for a degenerate (empty) window.
+- `cost_term` still uses solid-angle-weighted mean (the default `"mean"`
+  aggregation); per-directive `aggregation: max/min` is still not reflected in the
+  reported `cost_term` (pre-existing limitation, unchanged).
+
 ### 2026-05-27 — Extended-grid angle wrap-around, aggregation mode, theta-axis flip, physical mask overlays
 
 **Implemented**:
