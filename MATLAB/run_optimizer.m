@@ -85,6 +85,9 @@ all_cost_histories = {};
 all_run_labels     = {};
 run_index          = 0;
 
+n_single = n_elements * use_single_element_init;
+n_total  = n_restarts + n_single;
+
 % ── Phase 1: user-configured restarts ─────────────────────────────
 for restart_index = 0:(n_restarts - 1)
     if restart_index == 0 && use_uniform_init
@@ -96,8 +99,12 @@ for restart_index = 0:(n_restarts - 1)
     end
     run_index = run_index + 1;
 
+    t0 = tic;
     [xopt, fval, success, cost_history, xk_history] = run_single( ...
         cost_fn, x_initial, lb, ub, max_iterations, cost_tolerance);
+    elapsed = toc(t0);
+    print_run_status(run_index, n_total, run_label, fval, numel(cost_history), success, elapsed);
+
     all_cost_histories{end + 1, 1} = cost_history; %#ok<AGROW>
     all_run_labels{end + 1, 1}     = run_label;    %#ok<AGROW>
 
@@ -117,8 +124,12 @@ if use_single_element_init
         run_label = sprintf('Element %d init', element_idx);
         run_index = run_index + 1;
 
+        t0 = tic;
         [xopt, fval, success, cost_history, xk_history] = run_single( ...
             cost_fn, x_initial, lb, ub, max_iterations, cost_tolerance);
+        elapsed = toc(t0);
+        print_run_status(run_index, n_total, run_label, fval, numel(cost_history), success, elapsed);
+
         all_cost_histories{end + 1, 1} = cost_history; %#ok<AGROW>
         all_run_labels{end + 1, 1}     = run_label;    %#ok<AGROW>
 
@@ -137,12 +148,14 @@ if isempty(best_result)
         'No optimization runs were performed. Set n_restarts >= 1 or enable single-element init.');
 end
 
-% ── Decode best solution (no power-normalisation here) ────────────
-weights_complex = decode_x(best_result.x, mode);
+% ── Decode best solution and power-normalise ──────────────────────
+% Normalisation matches the internal scale used by build_cost_function so
+% that downstream J values (metrics, CSV, plots) are consistent.
+weights_complex = power_normalize_weights(decode_x(best_result.x, mode));
 
 weights_history = cell(numel(best_xk_history), 1);
 for i = 1:numel(best_xk_history)
-    weights_history{i} = decode_x(best_xk_history{i}, mode);
+    weights_history{i} = power_normalize_weights(decode_x(best_xk_history{i}, mode));
 end
 
 result = struct();
@@ -232,6 +245,13 @@ if strcmp(mode, 'phase_only')
     safe(~(a > 0)) = 1.0;
     w = w ./ safe;
 end
+end
+
+
+function print_run_status(run_idx, n_total, label, fval, n_iters, success, elapsed)
+if success, conv_str = 'converged'; else, conv_str = 'not converged'; end
+fprintf('  [%d/%d] %-22s  J = %.6g   iters = %4d   %-14s  %.1f s\n', ...
+    run_idx, n_total, label, fval, n_iters, conv_str, elapsed);
 end
 
 

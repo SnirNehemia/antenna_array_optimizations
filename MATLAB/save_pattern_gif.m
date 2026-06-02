@@ -51,7 +51,7 @@ ax_cost = subplot(1, 2, 2, 'Parent', fig);
 cost_arr = cost_history(:);
 plot(ax_cost, 0:(numel(cost_arr) - 1), cost_arr, 'Color', [0.5 0.5 0.5]);
 hold(ax_cost, 'on');
-cost_dot = plot(ax_cost, NaN, NaN, 'bo', 'MarkerSize', 6);
+cost_dot = plot(ax_cost, NaN, NaN, 'ro', 'MarkerSize', 8, 'MarkerFaceColor', 'r');
 xlabel(ax_cost, 'Iteration'); ylabel(ax_cost, 'Cost J');
 title(ax_cost, 'Convergence'); grid(ax_cost, 'on');
 

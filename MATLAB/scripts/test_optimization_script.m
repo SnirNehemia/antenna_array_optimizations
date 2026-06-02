@@ -12,4 +12,4 @@ addpath(matlab_dir);
 % Config names are resolved against the repo root by the scripts themselves,
 % so bare filenames work regardless of the current folder.
 run_optimization('../../config.yaml');         % full optimize pipeline -> results/optimizations/<ts>/
-compare_classical('../../test_config.yaml');   % classical vs optimizer -> results/compare_classical/<ts>/
+% compare_classical('../../test_config.yaml');   % classical vs optimizer -> results/compare_classical/<ts>/

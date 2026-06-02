@@ -11,7 +11,7 @@
 # Path to the folder containing all CST element pattern .txt files.
 # One file per array element. All files in this folder are loaded.
 # The number of elements is inferred from the number of files found.
-element_patterns_dir: "data/spacing0.6_disturbed3/"
+element_patterns_dir: "data/spacing0.9/"
 
 
 # ────────────────────────── POLARIZATION ──────────────────────────
@@ -22,7 +22,7 @@ element_patterns_dir: "data/spacing0.6_disturbed3/"
 #   "cross"       — Cross-polarization (Abs(Cross) + Phase(Cross)).
 #   "total"       — Total E-field power |E_copol|² + |E_xpol|².
 #                   Manual tuner only (not wired through run_optimization.py).
-polarization: "cross"
+polarization: "total"
 
 
 # ────────────────────────── OPTIMIZATION DIRECTIVES ───────────────

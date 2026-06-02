@@ -205,6 +205,49 @@ or `ValueError` — never silently fall back to a hardcoded default.
 > Claude Code must append an entry here at the end of every working session.
 > Format shown below. Newest entry at the top.
 
+### 2026-06-02 — MATLAB fixes: fmincon stub, status prints, plot improvements, weight normalization
+
+**Implemented**:
+- `MATLAB/+coder/+internal/get_eml_option.m`: stub that returns `false`. In MATLAB
+  R2026a, `fmincon` calls `optim.coder.validate.checkProducts` which calls
+  `coder.internal.get_eml_option` — a MATLAB Coder internal — even in normal
+  interpreter mode. Without Coder installed the call fails. The stub signals
+  "not in code-generation mode" and lets the validation pass.
+- `MATLAB/run_optimizer.m`: per-run status line printed to the command window after
+  each `fmincon` call — shows `[k/N]`, init label, final J, iteration count,
+  convergence status (`converged` / `not converged`), and wall-clock time. Timing via
+  `tic`/`toc` around `run_single`. Total run count `n_total` computed upfront from
+  `n_restarts + n_elements × use_single_element_init`.
+- `MATLAB/save_all_plots.m` — `save_cost_history`: figure widened to 1200 px; now
+  renders two subplots side-by-side: linear cost (left) and `log10|J|` (right). Using
+  `abs` before `log10` avoids complex-number warnings when J is negative (peak-seeking
+  objective). Both subplots share the same color/legend scheme.
+- `MATLAB/save_pattern_gif.m`: convergence cursor marker changed from open blue circle
+  (`'bo'`) to solid red filled circle (`'ro'`, `MarkerFaceColor','r'`, size 8) for
+  better visibility against the grey convergence line.
+- Power normalization at optimizer output (`src/optimize/optimizer.py`,
+  `MATLAB/run_optimizer.m`): `weights_complex` and every frame of `weights_history`
+  are now passed through `power_normalize_weights` immediately after decoding. This
+  makes all downstream consumers (metrics `total_cost`, `weights.csv`, GIF frames,
+  weight amplitude/phase plots) consistent with the cost function's internal
+  normalization — the model is "fixed total power divided among elements." Previously
+  the returned weights had an arbitrary amplitude scale set by the optimizer.
+
+**Decisions made**:
+- Normalization applied inside `run_optimizer` (not in `run_optimization`) so any
+  caller gets normalized weights automatically. `compare_classical` already
+  normalizes everything entering its `_process` helper; double-normalization of
+  unit-norm weights is a no-op.
+- `log10|J|` for the log-scale subplot: when J is negative (dominant peak objective)
+  the magnitude increases as the optimizer converges, so the log plot trends upward
+  — noted in the axis label `log₁₀|J|`.
+
+**Open questions / known issues**:
+- Runs that hit `MaxIterations` (exitflag = 0) can still show the same final J as
+  converged runs: the function value settled at the minimum but the gradient
+  criterion was not formally satisfied within the iteration budget. Raising
+  `max_iterations` or relaxing `OptimalityTolerance` in config would eliminate these.
+
 ### 2026-06-02 — MATLAB port of the full pipeline (MATLAB/ + tests)
 
 **Implemented**:

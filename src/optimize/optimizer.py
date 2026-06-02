@@ -379,9 +379,16 @@ def run_optimizer(element_patterns_stacked, theta_deg, phi_deg,
             # [MATLAB] weights_complex = weights_complex ./ max(abs(weights_complex), eps);
 
     # Decode the per-iteration variable history for the best run into complex weights.
-    # Used for GIF animation in save_pattern_gif(); pattern shape is unaffected
-    # by the per-call power normalisation inside cost_fn.
     weights_history = [_decode_x(xk) for xk in best_xk_history]
+
+    # Power-normalise final weights and history so downstream code (metrics,
+    # plots, CSV) sees the same scale as the cost function's internal normalisation.
+    def _power_normalize(w):
+        power = float(np.sum(np.abs(w) ** 2))
+        return w / np.sqrt(max(power, 1e-30))
+
+    weights_complex = _power_normalize(weights_complex)
+    weights_history = [_power_normalize(w) for w in weights_history]
 
     return {
         "weights_complex":    weights_complex,

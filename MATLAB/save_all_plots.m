@@ -279,21 +279,32 @@ end
 
 
 function save_cost_history(all_cost_histories, best_run_index, all_run_labels, outpath)
-fig = figure('Visible', 'off', 'Position', [100 100 800 400]);
-ax  = axes(fig); hold(ax, 'on');
+fig = figure('Visible', 'off', 'Position', [100 100 1200 400]);
+ax1 = subplot(1, 2, 1, 'Parent', fig); hold(ax1, 'on');
+ax2 = subplot(1, 2, 2, 'Parent', fig); hold(ax2, 'on');
+
 for i = 1:numel(all_cost_histories)
-    hist = all_cost_histories{i};
+    hist  = all_cost_histories{i};
     iters = 0:(numel(hist) - 1);
     if i == best_run_index
-        plot(ax, iters, hist, 'LineWidth', 2, 'Color', [0 0.45 0.74]);
+        lw = 2; col = [0 0.45 0.74];
     else
-        plot(ax, iters, hist, 'LineWidth', 0.7, 'Color', [0.5 0.5 0.5]);
+        lw = 0.7; col = [0.5 0.5 0.5];
     end
+    plot(ax1, iters, hist,               'LineWidth', lw, 'Color', col);
+    plot(ax2, iters, log10(abs(hist)),   'LineWidth', lw, 'Color', col);
 end
-xlabel(ax, 'Iteration'); ylabel(ax, 'Cost J');
-title(ax, 'Optimizer Convergence - All Restarts'); grid(ax, 'on');
+
+xlabel(ax1, 'Iteration'); ylabel(ax1, 'Cost J');
+title(ax1, 'Optimizer Convergence (linear)'); grid(ax1, 'on');
+
+xlabel(ax2, 'Iteration'); ylabel(ax2, 'log_{10}|J|');
+title(ax2, 'Optimizer Convergence (log scale)'); grid(ax2, 'on');
+
 if best_run_index >= 1 && best_run_index <= numel(all_run_labels)
-    legend(ax, {sprintf('Best - %s', all_run_labels{best_run_index})}, 'Location', 'best');
+    leg_str = {sprintf('Best - %s', all_run_labels{best_run_index})};
+    legend(ax1, leg_str, 'Location', 'best');
+    legend(ax2, leg_str, 'Location', 'best');
 end
 exportgraphics(fig, outpath, 'Resolution', 150);
 close(fig);
