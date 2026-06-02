@@ -205,6 +205,69 @@ or `ValueError` — never silently fall back to a hardcoded default.
 > Claude Code must append an entry here at the end of every working session.
 > Format shown below. Newest entry at the top.
 
+### 2026-06-02 — MATLAB port of the full pipeline (MATLAB/ + tests)
+
+**Implemented**:
+- New `MATLAB/` directory: a complete port of the three `scripts/` entry points
+  and every repository dependency they pull in, built bottom-up and validated
+  against Python via the MATLAB MCP server.
+- IO: `parse_cst_file.m`, `load_element_patterns.m`. Reshape uses
+  `reshape(flat, n_theta, n_phi)` (column-major) == Python `flat.reshape(n_phi,
+  n_theta).T` (verified on real `data/spacing0.9` slices, both axis orderings).
+- Cost: `x_to_weights`, `weights_to_x`, `compute_array_factor`,
+  `angular_window_mask`, `build_directive_physical_masks`, `build_cost_function`
+  (returns a function handle), plus shared `extended_grid_maps`. J(x) matches
+  Python to 1e-9 across standard / phase_only / amplitude_only / total modes,
+  including pole-crossing and phi-wrap masks.
+- Metrics: `evaluate_metrics`, `compute_directivity_dbi_grid`, `compute_hpbw`
+  (incl. pole wrap-around), `nearest_index`. Verified on real CST data.
+- Optimizer: `run_optimizer.m` using **fmincon** (Optimization Toolbox) with an
+  `OutputFcn` recording per-iteration cost history + multi-start (uniform / random
+  / single-element inits). Converged cost matches scipy's global optimum to ~1e-4.
+- Windows: `window_1d.m` reimplements hamming/hanning/kaiser/chebwin/taylor from
+  the numpy/scipy definitions (`besseli` for Kaiser) — no Signal Processing
+  Toolbox. Matches scipy to 1e-9 for n = 3,4,5,8.
+- compare_classical math: `build_ura_element_patterns`, `steering_phase_vector`,
+  `data_driven_steering_vector`, `classical_weights`, `principal_plane_cut`,
+  `principal_plane_theta_axis`, `power_normalize_weights`,
+  `evaluate_directive_metrics`, `run_scenario`.
+- Config: `read_config_yaml.m` — a minimal recursive YAML reader for the project's
+  subset (scalars incl. `1.0e-6`, true/false→logical, null→[], inline lists,
+  nested maps, block sequences of maps incl. nested). Matches PyYAML on the two
+  real config files.
+- Plotting: `save_all_plots.m` (5 figures), `save_pattern_gif.m` (imwrite GIF),
+  `plot_comparison.m` — all render headless (`Visible='off'` + `exportgraphics`).
+- Scripts: `run_optimization.m`, `compare_classical.m`, `manual_weights_render.m`.
+- Tests: 12 `MATLAB/tests/test_*.m` files (33 tests) + `gen_reference_fixtures.py`
+  + `fixtures/*.json`. Full suite: **33 passed / 0 failed** via MCP `runtests`.
+- `MATLAB/README.md` documents structure, usage, and conventions.
+
+**Decisions made** (confirmed with user before implementing):
+- Scope = "core + saved plots": the 1500-line interactive tkinter GUI is replaced
+  by the non-interactive `manual_weights_render` (compute + save heatmap). No live
+  GUI.
+- Optimizer = `fmincon` (user installed Optimization Toolbox). Documented as not
+  bit-identical to scipy L-BFGS-B; `rng(0)` (Mersenne Twister) ≠ numpy PCG64, so
+  random restarts/iterates differ — consistency is asserted on J(x) value and the
+  converged global optimum, not the iterate path.
+- Directives represented as a **cell array of structs** (heterogeneous optional
+  keys) — the faithful analogue of Python `list[dict]`; struct arrays can't hold
+  heterogeneous fields.
+- Element stack kept in Python axis order `(N_elements, N_theta, N_phi)`.
+- Validation method: Python `gen_reference_fixtures.py` dumps reference outputs to
+  JSON; each MATLAB test asserts equality within tolerance. A file is "done" only
+  when its MCP test run is green.
+
+**Open questions / known issues**:
+- `manual_weights_render` on the copol patterns of `data/spacing0.9` shows the
+  global peak near θ=179° (back hemisphere) for uniform weights, so a θ=0 peak
+  directive reports a low gain — this is the dataset, not a bug.
+- Plot fidelity is functional, not pixel-identical to matplotlib (e.g. polar
+  window shading is drawn as boundary lines; `pcolor`+`shading flat` for heatmaps).
+- A full real-config run (`run_optimization('config.yaml')` with 16 single-element
+  restarts + GIF) is slow under fmincon finite differences; the smoke test uses a
+  reduced config. Not run end-to-end in this session.
+
 ### 2026-06-01 — Fix evaluate_metrics for pole-crossing directives
 
 **Problem**: For a null directive at θ=−30°, φ=0° (back hemisphere via pole),
