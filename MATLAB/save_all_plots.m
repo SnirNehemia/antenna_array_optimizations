@@ -142,12 +142,19 @@ else
     [angle_full, power_full, xlab] = extract_cut(grid_db, theta, phi, oc);
     cut_label = xlab;
 end
-power_norm = power_full - max(power_full);
+% Clamp to dynamic range BEFORE plotting. MATLAB reflects any rho outside
+% rlim across the origin (adds pi to its angle), so values below -dyn would
+% appear as phantom lobes on the opposite side.
+power_norm = max(power_full - max(power_full), -dyn);
 
 fig = figure('Visible', 'off', 'Position', [100 100 600 600]);
 pax = polaraxes(fig);
 pax.ThetaZeroLocation = 'top';
 pax.ThetaDir = 'clockwise';
+% rlim must be set BEFORE any polarplot call. If set after, MATLAB reflects
+% negative-rho data points across the origin (adds pi to their angle), which
+% maps back-hemisphere data onto the front side as a spurious lobe.
+rlim(pax, [-dyn 0]);
 hold(pax, 'on');
 polarplot(pax, deg2rad(angle_full), power_norm, 'LineWidth', 1.5);
 
@@ -156,14 +163,11 @@ for k = 1:numel(directives)
     if ~vis, continue; end
     [~, lo, hi, color] = directive_window_bounds(directives{k}, oc);
     if strcmp(oc.plot_cut_type, 'theta_cut') && ~on_front
-        lo = -hi; hi = -(-lo);   % mirror to back half (use negative angles)
-        [lo, hi] = deal(-abs(hi), -abs(lo));
+        [lo, hi] = deal(-hi, -lo);   % mirror front window to back half (negate and swap bounds)
     end
     polarplot(pax, deg2rad([lo lo]), [-dyn 0], '--', 'Color', color, 'LineWidth', 1);
     polarplot(pax, deg2rad([hi hi]), [-dyn 0], '--', 'Color', color, 'LineWidth', 1);
 end
-
-rlim(pax, [-dyn 0]);
 title(pax, sprintf('Array Pattern - %s', cut_label));
 exportgraphics(fig, outpath, 'Resolution', 150);
 close(fig);
@@ -279,9 +283,8 @@ end
 
 
 function save_cost_history(all_cost_histories, best_run_index, all_run_labels, outpath)
-fig = figure('Visible', 'off', 'Position', [100 100 1200 400]);
-ax1 = subplot(1, 2, 1, 'Parent', fig); hold(ax1, 'on');
-ax2 = subplot(1, 2, 2, 'Parent', fig); hold(ax2, 'on');
+fig = figure('Visible', 'off', 'Position', [100 100 800 400]);
+ax  = axes(fig); hold(ax, 'on');
 
 for i = 1:numel(all_cost_histories)
     hist  = all_cost_histories{i};
@@ -291,20 +294,14 @@ for i = 1:numel(all_cost_histories)
     else
         lw = 0.7; col = [0.5 0.5 0.5];
     end
-    plot(ax1, iters, hist,               'LineWidth', lw, 'Color', col);
-    plot(ax2, iters, log10(abs(hist)),   'LineWidth', lw, 'Color', col);
+    plot(ax, iters, hist, 'LineWidth', lw, 'Color', col);
 end
 
-xlabel(ax1, 'Iteration'); ylabel(ax1, 'Cost J');
-title(ax1, 'Optimizer Convergence (linear)'); grid(ax1, 'on');
-
-xlabel(ax2, 'Iteration'); ylabel(ax2, 'log_{10}|J|');
-title(ax2, 'Optimizer Convergence (log scale)'); grid(ax2, 'on');
+xlabel(ax, 'Iteration'); ylabel(ax, 'Cost J');
+title(ax, 'Optimizer Convergence'); grid(ax, 'on');
 
 if best_run_index >= 1 && best_run_index <= numel(all_run_labels)
-    leg_str = {sprintf('Best - %s', all_run_labels{best_run_index})};
-    legend(ax1, leg_str, 'Location', 'best');
-    legend(ax2, leg_str, 'Location', 'best');
+    legend(ax, {sprintf('Best - %s', all_run_labels{best_run_index})}, 'Location', 'best');
 end
 exportgraphics(fig, outpath, 'Resolution', 150);
 close(fig);

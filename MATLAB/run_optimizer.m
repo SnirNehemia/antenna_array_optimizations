@@ -49,6 +49,7 @@ end
 max_iterations = optimizer_config.max_iterations;
 cost_tolerance = optimizer_config.cost_tolerance;
 n_restarts     = optimizer_config.n_restarts;
+gradient_tolerance      = cfg_get(optimizer_config, 'gradient_tolerance', 1e-5);
 amplitude_bounds        = cfg_get(optimizer_config, 'amplitude_bounds', []);
 phase_only              = cfg_get(optimizer_config, 'phase_only', false);
 amplitude_only          = cfg_get(optimizer_config, 'amplitude_only', false);
@@ -101,7 +102,7 @@ for restart_index = 0:(n_restarts - 1)
 
     t0 = tic;
     [xopt, fval, success, cost_history, xk_history] = run_single( ...
-        cost_fn, x_initial, lb, ub, max_iterations, cost_tolerance);
+        cost_fn, x_initial, lb, ub, max_iterations, cost_tolerance, gradient_tolerance);
     elapsed = toc(t0);
     print_run_status(run_index, n_total, run_label, fval, numel(cost_history), success, elapsed);
 
@@ -156,6 +157,14 @@ weights_complex = power_normalize_weights(decode_x(best_result.x, mode));
 weights_history = cell(numel(best_xk_history), 1);
 for i = 1:numel(best_xk_history)
     weights_history{i} = power_normalize_weights(decode_x(best_xk_history{i}, mode));
+end
+
+% Fix global phase so element 0 is always real-positive.
+% Global phase has no physical meaning; fixing it makes results reproducible
+% and weight CSVs directly comparable across runs and between Python/MATLAB.
+weights_complex = weights_complex * exp(-1j * angle(weights_complex(1)));
+for i = 1:numel(weights_history)
+    weights_history{i} = weights_history{i} * exp(-1j * angle(weights_history{i}(1)));
 end
 
 result = struct();
@@ -256,19 +265,18 @@ end
 
 
 function [xopt, fval, success, cost_history, xk_history] = run_single( ...
-        cost_fn, x_initial, lb, ub, max_iterations, cost_tolerance)
+        cost_fn, x_initial, lb, ub, max_iterations, cost_tolerance, gradient_tolerance)
 % Single fmincon run with per-iteration cost/x recording via OutputFcn.
 cost_history = [];
 xk_history   = {};
 
 options = optimoptions('fmincon', ...
-    'Algorithm', 'interior-point', ...
+    'Algorithm', 'sqp', ...
     'Display', 'off', ...
     'MaxIterations', max_iterations, ...
     'MaxFunctionEvaluations', 1e6, ...
     'FunctionTolerance', cost_tolerance, ...
-    'OptimalityTolerance', cost_tolerance, ...
-    'StepTolerance', 1e-12, ...
+    'OptimalityTolerance', gradient_tolerance, ...
     'OutputFcn', @record_iterate);
 
 [xopt, fval, exitflag] = fmincon(cost_fn, x_initial, [], [], [], [], lb, ub, [], options);

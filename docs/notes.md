@@ -205,6 +205,67 @@ or `ValueError` — never silently fall back to a hardcoded default.
 > Claude Code must append an entry here at the end of every working session.
 > Format shown below. Newest entry at the top.
 
+### 2026-06-07 — Cross-run comparison: phase normalization, polar plot fix, SQP switch, convergence config
+
+**Context**: Compared Python run `2026-06-02_225800` with MATLAB run `2026-06-02_184309`
+on the same config. Both converged to cost −169.45 / 21.17 dBi peak, but with three
+differences that prompted fixes.
+
+**Implemented**:
+
+- **Global phase normalization** (`src/optimize/optimizer.py`, `MATLAB/run_optimizer.m`):
+  After power-normalization, all weights are rotated by `exp(-j·∠w₀)` so element 0 is
+  always real-positive. Applied to both `weights_complex` and every frame of
+  `weights_history`. Global phase is physically meaningless; fixing it makes `weights.csv`
+  reproducible and directly comparable across runs and between Python/MATLAB. The two
+  runs had a constant −64.65° phase offset between them — identical patterns, now
+  identical CSVs.
+
+- **Polar plot spurious-lobe fix** (`MATLAB/save_all_plots.m`, `src/plot/plotter.py`):
+  Two bugs fixed:
+  1. `rlim` must be set **before** `hold`/`polarplot`. If set after, MATLAB auto-scales
+     to `[0, 40]` for all-negative rho data, then reflects those points across the origin
+     (adds π to angle), mapping back-hemisphere data to front-hemisphere as a ghost lobe.
+     Confirmed experimentally via `pax.RLim` inspection.
+  2. `power_norm` clamped to `[-dyn, 0]` before plotting (`max(..., -dyn)` in MATLAB,
+     `np.clip` in Python). Deep nulls can reach −80 dB or below; any rho outside `rlim`
+     triggers the same reflection bug regardless of when `rlim` is set.
+  3. Directive window mirroring for back-half cut: original `lo = -hi; hi = -(-lo)` left
+     `lo == hi` (two dashed lines drawn at the same position). Fixed to
+     `[lo, hi] = deal(-hi, -lo)`.
+
+- **fmincon algorithm: interior-point → SQP** (`MATLAB/run_optimizer.m`):
+  Switched `'Algorithm'` from `'interior-point'` to `'sqp'`. SQP is a quasi-Newton
+  method (closest MATLAB equivalent to L-BFGS-B) and converges in far fewer iterations
+  on smooth bounded problems. Interior-point is a barrier method that must simultaneously
+  converge optimality and the barrier parameter, requiring many extra iterations.
+  Removed `StepTolerance = 1e-12` (was over-constraining step size).
+
+- **Convergence tolerances exposed in config** (`config.yaml`, `src/optimize/optimizer.py`,
+  `MATLAB/run_optimizer.m`):
+  Added `gradient_tolerance` (default `1e-5`) as a separate config key alongside the
+  existing `cost_tolerance`. Maps to `gtol` / `OptimalityTolerance` (gradient-norm
+  criterion) while `cost_tolerance` maps to `ftol` / `FunctionTolerance` (relative cost
+  improvement). The two criteria are dimensionally different and should be tuned
+  independently; whichever fires first stops the run. Previously `gtol` was hardcoded
+  at `1e-5` in Python (scipy default) and `OptimalityTolerance` was hardcoded at `1e-5`
+  in MATLAB.
+
+- **Cost history plot simplified** (`MATLAB/save_all_plots.m`):
+  Removed the `log10|J|` second subplot. Figure shrunk from 1200 × 400 to 800 × 400.
+  The Python plotter already had a single linear-scale plot; MATLAB now matches.
+
+**Decisions made**:
+- Phase normalization applied inside `run_optimizer` (after power-norm) so all callers
+  receive consistently oriented weights automatically.
+- `gradient_tolerance` is optional in config (default `1e-5`); existing configs without
+  the key continue to work unchanged.
+- `cost_tolerance` and `gradient_tolerance` intentionally have different suggested ranges
+  in the config comments because they measure different quantities with different scales.
+
+**Open questions / known issues**:
+- Fresh MATLAB run with SQP not yet timed; expected ~20–50 iterations vs previous 239.
+
 ### 2026-06-02 — MATLAB fixes: fmincon stub, status prints, plot improvements, weight normalization
 
 **Implemented**:

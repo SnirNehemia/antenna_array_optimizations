@@ -256,8 +256,11 @@ def save_polar_plot(array_factor_db_grid, theta_deg, phi_deg,
         fixed_phi_deg = None
 
     # Normalize so the pattern peak sits at 0 dB on the radial axis.
-    power_db_normalized = power_full_db - np.max(power_full_db)
-    # [MATLAB] power_db_normalized = power_full_db - max(power_full_db);
+    # Clamp to [-dynamic_range_db, 0]: matplotlib reflects any rho outside
+    # rlim in the same way MATLAB does, producing phantom lobes if not clipped.
+    power_db_normalized = np.clip(power_full_db - np.max(power_full_db),
+                                  -dynamic_range_db, 0.0)
+    # [MATLAB] power_db_normalized = max(power_full_db - max(power_full_db), -dyn);
 
     angle_full_rad = np.deg2rad(angle_full_deg)
     # [MATLAB] angle_full_rad = angle_full_deg * pi / 180;
