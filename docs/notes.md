@@ -837,3 +837,22 @@ peak 16.06 dBi, peak-to-null 23.95 dB.
 - `STYLE.md` reshape example remains contradictory (not corrected to keep that file authoritative). The working code uses the empirically verified form.
 - Bash tool failed on this platform (exit code 254, "stream closed before response"). All validation was run via PowerShell instead. Future scripts should prefer PowerShell on this machine.
 - Phase wrapping: `np.angle()` returns the principal value in (−π, π]. A parsed phase of +191.825° stored as a complex phasor correctly round-trips; `np.angle()` returns −168.175° (differs by 2π). Not a bug, but could confuse manual inspection of the CSV output.
+
+### 2026-06-07 — MATLAB port of manual_weights.py interactive UI
+
+**Implemented**:
+- `MATLAB/ManualWeightsTuner.m` — MATLAB `handle` class (uifigure-based), full interactive port of `scripts/manual_weights.py`. Capabilities: live pcolor heatmap (relative-to-peak dB + absolute dBi modes), scrollable per-element amplitude/phase editfield+slider rows with Solo button, dynamic add/remove directive table rows (type dropdown, θ/φ/θW/φW/weight editfields, inline gain/null-depth readout), polarisation selector (copol/cross/total), Load Weights CSV, Load Config (re-launch loop), Uniform Weights, hover cursor readout. All physics reuses existing MATLAB/ compute functions unchanged.
+- `MATLAB/scripts/manual_weights_app.m` — entry-point function; handles addpath, config-path resolution against repo root, and the re-launch loop for Load Config.
+
+**MATLAB-specific design decisions**:
+- Used `handle` class (not App Designer `.mlapp`) for version control as a plain `.m` file.
+- `uifigure` + `uigridlayout`/`uipanel` throughout; `Scrollable='on'` on the weights panel for large element counts.
+- Directive rows are stored as `directive_data` (plain structs) + `directive_widget_rows` (handle structs). On removal, all row widgets are deleted and rebuilt from saved data to keep captured row-index closures correct.
+- `uislider` fires both `ValueChangedFcn` (on release) and `ValueChangingFcn` (during drag) for live updates; guarded with `syncing_weight_display` flag to prevent recursive callbacks.
+- `pcolor` surface `CData` updated in-place (no full redraw) for performance; `drawnow limitrate` throttles repaints.
+- File-level `sep_panel` helper function defined after class `end` (valid in R2021a+).
+- Static private method `sph_power` replaces the file-level function used in `manual_weights_render.m`.
+
+**Open questions / known issues**:
+- Directive table removal rebuilds all rows (minor flicker on large directive lists); acceptable given infrequent use.
+- Phase editfield accepts values outside ±180° (slider clamps); consistent with Python behaviour.
