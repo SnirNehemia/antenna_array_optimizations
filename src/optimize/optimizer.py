@@ -22,6 +22,7 @@ DEFAULT_PHASE_ONLY               = False
 DEFAULT_AMPLITUDE_ONLY           = False
 DEFAULT_USE_UNIFORM_INIT         = True   # include uniform-weights starting point
 DEFAULT_USE_SINGLE_ELEMENT_INIT  = True   # include per-element single-active starting points
+DEFAULT_GRADIENT_TOLERANCE       = 1e-5   # gradient-norm stopping threshold (scipy gtol)
 
 # L-BFGS-B method string for scipy.optimize.minimize.
 LBFGSB_METHOD = "L-BFGS-B"
@@ -146,7 +147,8 @@ def _single_element_initial_x(n_elements, element_idx, mode):
         # [MATLAB] x0 = zeros(2*n_elements, 1); x0(2*element_idx+1) = 1;
 
 
-def _run_single_optimization(cost_fn, x_initial, bounds, max_iterations, cost_tolerance):
+def _run_single_optimization(cost_fn, x_initial, bounds,
+                             max_iterations, cost_tolerance, gradient_tolerance):
     """Run a single L-BFGS-B optimization from a given starting point.
 
     Tracks the cost value and the raw variable vector at the end of each
@@ -157,8 +159,11 @@ def _run_single_optimization(cost_fn, x_initial, bounds, max_iterations, cost_to
         x_initial (np.ndarray): Starting point for the optimization.
         bounds (list[tuple] | None): Variable bounds for L-BFGS-B, or None.
         max_iterations (int): Maximum number of L-BFGS-B iterations.
-        cost_tolerance (float): Convergence tolerance on the cost function value
-            (``ftol`` in scipy: stop when |f_{k+1} - f_k| / max(|f_k|, 1) < ftol).
+        cost_tolerance (float): Relative cost improvement threshold (``ftol``):
+            stops when |f_{k+1} - f_k| / max(|f_k|, 1) < ftol.
+        gradient_tolerance (float): Gradient-norm stopping threshold (``gtol``):
+            stops when the infinity norm of the projected gradient < gtol.
+            Independent of cost_tolerance; whichever fires first wins.
 
     Returns:
         tuple[scipy.optimize.OptimizeResult, list[float], list[np.ndarray]]:
@@ -184,10 +189,13 @@ def _run_single_optimization(cost_fn, x_initial, bounds, max_iterations, cost_to
         options={
             "maxiter": max_iterations,
             "ftol":    cost_tolerance,
+            "gtol":    gradient_tolerance,
         },
     )
-    # [MATLAB] options = optimoptions('fmincon', 'Algorithm', 'interior-point', ...
-    # [MATLAB]     'MaxIterations', max_iterations, 'FunctionTolerance', cost_tolerance);
+    # [MATLAB] options = optimoptions('fmincon', 'Algorithm', 'sqp', ...
+    # [MATLAB]     'MaxIterations', max_iterations, ...
+    # [MATLAB]     'FunctionTolerance', cost_tolerance, ...
+    # [MATLAB]     'OptimalityTolerance', gradient_tolerance);
     # [MATLAB] result = fmincon(cost_fn, x_initial, [], [], [], [], lb, ub, [], options);
 
     return result, cost_history, xk_history
@@ -255,6 +263,7 @@ def run_optimizer(element_patterns_stacked, theta_deg, phi_deg,
     max_iterations           = optimizer_config["max_iterations"]
     cost_tolerance           = optimizer_config["cost_tolerance"]
     n_restarts               = optimizer_config["n_restarts"]
+    gradient_tolerance       = optimizer_config.get("gradient_tolerance",       DEFAULT_GRADIENT_TOLERANCE)
     amplitude_bounds         = optimizer_config.get("amplitude_bounds",         DEFAULT_AMPLITUDE_BOUNDS)
     phase_only               = optimizer_config.get("phase_only",               DEFAULT_PHASE_ONLY)
     amplitude_only           = optimizer_config.get("amplitude_only",           DEFAULT_AMPLITUDE_ONLY)
@@ -312,7 +321,7 @@ def run_optimizer(element_patterns_stacked, theta_deg, phi_deg,
         # [MATLAB] % restart_index == 0 and use_uniform: uniform; else random
 
         result, cost_history, xk_history = _run_single_optimization(
-            cost_fn, x_initial, bounds, max_iterations, cost_tolerance
+            cost_fn, x_initial, bounds, max_iterations, cost_tolerance, gradient_tolerance
         )
         all_cost_histories.append(cost_history)
         all_run_labels.append(run_label)
@@ -379,9 +388,24 @@ def run_optimizer(element_patterns_stacked, theta_deg, phi_deg,
             # [MATLAB] weights_complex = weights_complex ./ max(abs(weights_complex), eps);
 
     # Decode the per-iteration variable history for the best run into complex weights.
-    # Used for GIF animation in save_pattern_gif(); pattern shape is unaffected
-    # by the per-call power normalisation inside cost_fn.
     weights_history = [_decode_x(xk) for xk in best_xk_history]
+
+    # Power-normalise final weights and history so downstream code (metrics,
+    # plots, CSV) sees the same scale as the cost function's internal normalisation.
+    def _power_normalize(w):
+        power = float(np.sum(np.abs(w) ** 2))
+        return w / np.sqrt(max(power, 1e-30))
+
+    weights_complex = _power_normalize(weights_complex)
+    weights_history = [_power_normalize(w) for w in weights_history]
+
+    # Normalise global phase so element 0 is always real-positive.
+    # Global phase has no physical meaning; fixing it makes results reproducible
+    # and weight CSVs directly comparable across runs and between Python/MATLAB.
+    phase0 = np.angle(weights_complex[0])
+    weights_complex = weights_complex * np.exp(-1j * phase0)
+    weights_history = [w * np.exp(-1j * np.angle(w[0])) for w in weights_history]
+    # [MATLAB] weights_complex = weights_complex * exp(-1j * angle(weights_complex(1)));
 
     return {
         "weights_complex":    weights_complex,

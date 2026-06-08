@@ -1,0 +1,24 @@
+{
+  "n_elements": 16,
+  "global_peak_dbi": 17.190410265023527,
+  "global_peak_theta_deg": 179.0,
+  "global_peak_phi_deg": 45.0,
+  "hpbw_theta_deg": 9.547011534599676,
+  "hpbw_phi_deg": 33.747646982774995,
+  "total_cost": 0.00393386618880661,
+  "peak_to_null_ratio_db": -8.18976304982613,
+  "directive_metrics": [
+    {
+      "type": "peak",
+      "gain_dbi": -15.442001351171415,
+      "null_depth_db": null,
+      "cost_term": -0.0001571241436962093
+    },
+    {
+      "type": "null",
+      "gain_dbi": -7.252238301345284,
+      "null_depth_db": -24.44264856636881,
+      "cost_term": 0.00409099033250282
+    }
+  ]
+}

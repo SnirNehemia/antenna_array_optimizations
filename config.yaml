@@ -11,7 +11,7 @@
 # Path to the folder containing all CST element pattern .txt files.
 # One file per array element. All files in this folder are loaded.
 # The number of elements is inferred from the number of files found.
-element_patterns_dir: "data/spacing0.6_disturbed3/"
+element_patterns_dir: "data/spacing0.9/"
 
 
 # ────────────────────────── POLARIZATION ──────────────────────────
@@ -22,7 +22,7 @@ element_patterns_dir: "data/spacing0.6_disturbed3/"
 #   "cross"       — Cross-polarization (Abs(Cross) + Phase(Cross)).
 #   "total"       — Total E-field power |E_copol|² + |E_xpol|².
 #                   Manual tuner only (not wired through run_optimization.py).
-polarization: "cross"
+polarization: "total"
 
 
 # ────────────────────────── OPTIMIZATION DIRECTIVES ───────────────
@@ -96,13 +96,19 @@ optimizer:
   # Maximum L-BFGS-B iterations allowed per restart.
   # The optimizer may stop earlier when cost_tolerance is satisfied.
   # Total iteration budget ≈ n_restarts × max_iterations (upper bound).
-  max_iterations: 500
+  max_iterations: 20
 
-  # Relative cost improvement tolerance (scipy ftol).
+  # Relative cost improvement tolerance (scipy ftol / fmincon FunctionTolerance).
   # Stops when: |J_k - J_{k+1}| / max(|J_k|, 1) < cost_tolerance
   # Smaller = finer convergence, slower.
   # Suggested range: 1e-6 (fast/exploratory) → 1e-10 (production accuracy).
   cost_tolerance: 1.0e-6
+
+  # Gradient-norm stopping threshold (scipy gtol / fmincon OptimalityTolerance).
+  # Stops when the infinity norm of the projected gradient < gradient_tolerance.
+  # Independent of cost_tolerance — whichever fires first wins.
+  # Suggested range: 1e-4 (fast/exploratory) → 1e-6 (production accuracy).
+  gradient_tolerance: 1.0e-5
 
   # Number of independent optimization runs (multi-start).
   # Run 1 always starts from uniform weights [amplitude=1, phase=0] — deterministic.
@@ -131,12 +137,12 @@ optimizer:
 
   # If true, include a deterministic uniform-weights run (amplitude=1, phase=0)
   # as the first restart. Useful baseline; disable if you only want random inits.
-  use_uniform_init: true
+  use_uniform_init: false
 
   # If true, add one run per array element starting with that element active
   # (weight=1) and all others zeroed. Adds N_elements restarts on top of
   # n_restarts. Disable to reduce total run count.
-  use_single_element_init: true
+  use_single_element_init: false
 
 
 # ────────────────────────── OUTPUT SETTINGS ───────────────────────

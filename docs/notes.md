@@ -205,6 +205,173 @@ or `ValueError` — never silently fall back to a hardcoded default.
 > Claude Code must append an entry here at the end of every working session.
 > Format shown below. Newest entry at the top.
 
+### 2026-06-07 — Cross-run comparison: phase normalization, polar plot fix, SQP switch, convergence config
+
+**Context**: Compared Python run `2026-06-02_225800` with MATLAB run `2026-06-02_184309`
+on the same config. Both converged to cost −169.45 / 21.17 dBi peak, but with three
+differences that prompted fixes.
+
+**Implemented**:
+
+- **Global phase normalization** (`src/optimize/optimizer.py`, `MATLAB/run_optimizer.m`):
+  After power-normalization, all weights are rotated by `exp(-j·∠w₀)` so element 0 is
+  always real-positive. Applied to both `weights_complex` and every frame of
+  `weights_history`. Global phase is physically meaningless; fixing it makes `weights.csv`
+  reproducible and directly comparable across runs and between Python/MATLAB. The two
+  runs had a constant −64.65° phase offset between them — identical patterns, now
+  identical CSVs.
+
+- **Polar plot spurious-lobe fix** (`MATLAB/save_all_plots.m`, `src/plot/plotter.py`):
+  Two bugs fixed:
+  1. `rlim` must be set **before** `hold`/`polarplot`. If set after, MATLAB auto-scales
+     to `[0, 40]` for all-negative rho data, then reflects those points across the origin
+     (adds π to angle), mapping back-hemisphere data to front-hemisphere as a ghost lobe.
+     Confirmed experimentally via `pax.RLim` inspection.
+  2. `power_norm` clamped to `[-dyn, 0]` before plotting (`max(..., -dyn)` in MATLAB,
+     `np.clip` in Python). Deep nulls can reach −80 dB or below; any rho outside `rlim`
+     triggers the same reflection bug regardless of when `rlim` is set.
+  3. Directive window mirroring for back-half cut: original `lo = -hi; hi = -(-lo)` left
+     `lo == hi` (two dashed lines drawn at the same position). Fixed to
+     `[lo, hi] = deal(-hi, -lo)`.
+
+- **fmincon algorithm: interior-point → SQP** (`MATLAB/run_optimizer.m`):
+  Switched `'Algorithm'` from `'interior-point'` to `'sqp'`. SQP is a quasi-Newton
+  method (closest MATLAB equivalent to L-BFGS-B) and converges in far fewer iterations
+  on smooth bounded problems. Interior-point is a barrier method that must simultaneously
+  converge optimality and the barrier parameter, requiring many extra iterations.
+  Removed `StepTolerance = 1e-12` (was over-constraining step size).
+
+- **Convergence tolerances exposed in config** (`config.yaml`, `src/optimize/optimizer.py`,
+  `MATLAB/run_optimizer.m`):
+  Added `gradient_tolerance` (default `1e-5`) as a separate config key alongside the
+  existing `cost_tolerance`. Maps to `gtol` / `OptimalityTolerance` (gradient-norm
+  criterion) while `cost_tolerance` maps to `ftol` / `FunctionTolerance` (relative cost
+  improvement). The two criteria are dimensionally different and should be tuned
+  independently; whichever fires first stops the run. Previously `gtol` was hardcoded
+  at `1e-5` in Python (scipy default) and `OptimalityTolerance` was hardcoded at `1e-5`
+  in MATLAB.
+
+- **Cost history plot simplified** (`MATLAB/save_all_plots.m`):
+  Removed the `log10|J|` second subplot. Figure shrunk from 1200 × 400 to 800 × 400.
+  The Python plotter already had a single linear-scale plot; MATLAB now matches.
+
+**Decisions made**:
+- Phase normalization applied inside `run_optimizer` (after power-norm) so all callers
+  receive consistently oriented weights automatically.
+- `gradient_tolerance` is optional in config (default `1e-5`); existing configs without
+  the key continue to work unchanged.
+- `cost_tolerance` and `gradient_tolerance` intentionally have different suggested ranges
+  in the config comments because they measure different quantities with different scales.
+
+**Open questions / known issues**:
+- Fresh MATLAB run with SQP not yet timed; expected ~20–50 iterations vs previous 239.
+
+### 2026-06-02 — MATLAB fixes: fmincon stub, status prints, plot improvements, weight normalization
+
+**Implemented**:
+- `MATLAB/+coder/+internal/get_eml_option.m`: stub that returns `false`. In MATLAB
+  R2026a, `fmincon` calls `optim.coder.validate.checkProducts` which calls
+  `coder.internal.get_eml_option` — a MATLAB Coder internal — even in normal
+  interpreter mode. Without Coder installed the call fails. The stub signals
+  "not in code-generation mode" and lets the validation pass.
+- `MATLAB/run_optimizer.m`: per-run status line printed to the command window after
+  each `fmincon` call — shows `[k/N]`, init label, final J, iteration count,
+  convergence status (`converged` / `not converged`), and wall-clock time. Timing via
+  `tic`/`toc` around `run_single`. Total run count `n_total` computed upfront from
+  `n_restarts + n_elements × use_single_element_init`.
+- `MATLAB/save_all_plots.m` — `save_cost_history`: figure widened to 1200 px; now
+  renders two subplots side-by-side: linear cost (left) and `log10|J|` (right). Using
+  `abs` before `log10` avoids complex-number warnings when J is negative (peak-seeking
+  objective). Both subplots share the same color/legend scheme.
+- `MATLAB/save_pattern_gif.m`: convergence cursor marker changed from open blue circle
+  (`'bo'`) to solid red filled circle (`'ro'`, `MarkerFaceColor','r'`, size 8) for
+  better visibility against the grey convergence line.
+- Power normalization at optimizer output (`src/optimize/optimizer.py`,
+  `MATLAB/run_optimizer.m`): `weights_complex` and every frame of `weights_history`
+  are now passed through `power_normalize_weights` immediately after decoding. This
+  makes all downstream consumers (metrics `total_cost`, `weights.csv`, GIF frames,
+  weight amplitude/phase plots) consistent with the cost function's internal
+  normalization — the model is "fixed total power divided among elements." Previously
+  the returned weights had an arbitrary amplitude scale set by the optimizer.
+
+**Decisions made**:
+- Normalization applied inside `run_optimizer` (not in `run_optimization`) so any
+  caller gets normalized weights automatically. `compare_classical` already
+  normalizes everything entering its `_process` helper; double-normalization of
+  unit-norm weights is a no-op.
+- `log10|J|` for the log-scale subplot: when J is negative (dominant peak objective)
+  the magnitude increases as the optimizer converges, so the log plot trends upward
+  — noted in the axis label `log₁₀|J|`.
+
+**Open questions / known issues**:
+- Runs that hit `MaxIterations` (exitflag = 0) can still show the same final J as
+  converged runs: the function value settled at the minimum but the gradient
+  criterion was not formally satisfied within the iteration budget. Raising
+  `max_iterations` or relaxing `OptimalityTolerance` in config would eliminate these.
+
+### 2026-06-02 — MATLAB port of the full pipeline (MATLAB/ + tests)
+
+**Implemented**:
+- New `MATLAB/` directory: a complete port of the three `scripts/` entry points
+  and every repository dependency they pull in, built bottom-up and validated
+  against Python via the MATLAB MCP server.
+- IO: `parse_cst_file.m`, `load_element_patterns.m`. Reshape uses
+  `reshape(flat, n_theta, n_phi)` (column-major) == Python `flat.reshape(n_phi,
+  n_theta).T` (verified on real `data/spacing0.9` slices, both axis orderings).
+- Cost: `x_to_weights`, `weights_to_x`, `compute_array_factor`,
+  `angular_window_mask`, `build_directive_physical_masks`, `build_cost_function`
+  (returns a function handle), plus shared `extended_grid_maps`. J(x) matches
+  Python to 1e-9 across standard / phase_only / amplitude_only / total modes,
+  including pole-crossing and phi-wrap masks.
+- Metrics: `evaluate_metrics`, `compute_directivity_dbi_grid`, `compute_hpbw`
+  (incl. pole wrap-around), `nearest_index`. Verified on real CST data.
+- Optimizer: `run_optimizer.m` using **fmincon** (Optimization Toolbox) with an
+  `OutputFcn` recording per-iteration cost history + multi-start (uniform / random
+  / single-element inits). Converged cost matches scipy's global optimum to ~1e-4.
+- Windows: `window_1d.m` reimplements hamming/hanning/kaiser/chebwin/taylor from
+  the numpy/scipy definitions (`besseli` for Kaiser) — no Signal Processing
+  Toolbox. Matches scipy to 1e-9 for n = 3,4,5,8.
+- compare_classical math: `build_ura_element_patterns`, `steering_phase_vector`,
+  `data_driven_steering_vector`, `classical_weights`, `principal_plane_cut`,
+  `principal_plane_theta_axis`, `power_normalize_weights`,
+  `evaluate_directive_metrics`, `run_scenario`.
+- Config: `read_config_yaml.m` — a minimal recursive YAML reader for the project's
+  subset (scalars incl. `1.0e-6`, true/false→logical, null→[], inline lists,
+  nested maps, block sequences of maps incl. nested). Matches PyYAML on the two
+  real config files.
+- Plotting: `save_all_plots.m` (5 figures), `save_pattern_gif.m` (imwrite GIF),
+  `plot_comparison.m` — all render headless (`Visible='off'` + `exportgraphics`).
+- Scripts: `run_optimization.m`, `compare_classical.m`, `manual_weights_render.m`.
+- Tests: 12 `MATLAB/tests/test_*.m` files (33 tests) + `gen_reference_fixtures.py`
+  + `fixtures/*.json`. Full suite: **33 passed / 0 failed** via MCP `runtests`.
+- `MATLAB/README.md` documents structure, usage, and conventions.
+
+**Decisions made** (confirmed with user before implementing):
+- Scope = "core + saved plots": the 1500-line interactive tkinter GUI is replaced
+  by the non-interactive `manual_weights_render` (compute + save heatmap). No live
+  GUI.
+- Optimizer = `fmincon` (user installed Optimization Toolbox). Documented as not
+  bit-identical to scipy L-BFGS-B; `rng(0)` (Mersenne Twister) ≠ numpy PCG64, so
+  random restarts/iterates differ — consistency is asserted on J(x) value and the
+  converged global optimum, not the iterate path.
+- Directives represented as a **cell array of structs** (heterogeneous optional
+  keys) — the faithful analogue of Python `list[dict]`; struct arrays can't hold
+  heterogeneous fields.
+- Element stack kept in Python axis order `(N_elements, N_theta, N_phi)`.
+- Validation method: Python `gen_reference_fixtures.py` dumps reference outputs to
+  JSON; each MATLAB test asserts equality within tolerance. A file is "done" only
+  when its MCP test run is green.
+
+**Open questions / known issues**:
+- `manual_weights_render` on the copol patterns of `data/spacing0.9` shows the
+  global peak near θ=179° (back hemisphere) for uniform weights, so a θ=0 peak
+  directive reports a low gain — this is the dataset, not a bug.
+- Plot fidelity is functional, not pixel-identical to matplotlib (e.g. polar
+  window shading is drawn as boundary lines; `pcolor`+`shading flat` for heatmaps).
+- A full real-config run (`run_optimization('config.yaml')` with 16 single-element
+  restarts + GIF) is slow under fmincon finite differences; the smoke test uses a
+  reduced config. Not run end-to-end in this session.
+
 ### 2026-06-01 — Fix evaluate_metrics for pole-crossing directives
 
 **Problem**: For a null directive at θ=−30°, φ=0° (back hemisphere via pole),
@@ -670,3 +837,22 @@ peak 16.06 dBi, peak-to-null 23.95 dB.
 - `STYLE.md` reshape example remains contradictory (not corrected to keep that file authoritative). The working code uses the empirically verified form.
 - Bash tool failed on this platform (exit code 254, "stream closed before response"). All validation was run via PowerShell instead. Future scripts should prefer PowerShell on this machine.
 - Phase wrapping: `np.angle()` returns the principal value in (−π, π]. A parsed phase of +191.825° stored as a complex phasor correctly round-trips; `np.angle()` returns −168.175° (differs by 2π). Not a bug, but could confuse manual inspection of the CSV output.
+
+### 2026-06-07 — MATLAB port of manual_weights.py interactive UI
+
+**Implemented**:
+- `MATLAB/ManualWeightsTuner.m` — MATLAB `handle` class (uifigure-based), full interactive port of `scripts/manual_weights.py`. Capabilities: live pcolor heatmap (relative-to-peak dB + absolute dBi modes), scrollable per-element amplitude/phase editfield+slider rows with Solo button, dynamic add/remove directive table rows (type dropdown, θ/φ/θW/φW/weight editfields, inline gain/null-depth readout), polarisation selector (copol/cross/total), Load Weights CSV, Load Config (re-launch loop), Uniform Weights, hover cursor readout. All physics reuses existing MATLAB/ compute functions unchanged.
+- `MATLAB/scripts/manual_weights_app.m` — entry-point function; handles addpath, config-path resolution against repo root, and the re-launch loop for Load Config.
+
+**MATLAB-specific design decisions**:
+- Used `handle` class (not App Designer `.mlapp`) for version control as a plain `.m` file.
+- `uifigure` + `uigridlayout`/`uipanel` throughout; `Scrollable='on'` on the weights panel for large element counts.
+- Directive rows are stored as `directive_data` (plain structs) + `directive_widget_rows` (handle structs). On removal, all row widgets are deleted and rebuilt from saved data to keep captured row-index closures correct.
+- `uislider` fires both `ValueChangedFcn` (on release) and `ValueChangingFcn` (during drag) for live updates; guarded with `syncing_weight_display` flag to prevent recursive callbacks.
+- `pcolor` surface `CData` updated in-place (no full redraw) for performance; `drawnow limitrate` throttles repaints.
+- File-level `sep_panel` helper function defined after class `end` (valid in R2021a+).
+- Static private method `sph_power` replaces the file-level function used in `manual_weights_render.m`.
+
+**Open questions / known issues**:
+- Directive table removal rebuilds all rows (minor flicker on large directive lists); acceptable given infrequent use.
+- Phase editfield accepts values outside ±180° (slider clamps); consistent with Python behaviour.
