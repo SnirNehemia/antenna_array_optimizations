@@ -62,6 +62,24 @@ python scripts/compare_classical.py
 
 ---
 
+## MATLAB port
+
+A full MATLAB port lives in [`MATLAB/`](MATLAB/README.md). It replicates the
+entire pipeline — CST parser, cost function, optimizer, metrics, plots,
+compare-classical benchmark, and the interactive weight-tuner GUI — using
+only built-in MATLAB functions plus the Optimization Toolbox.
+
+```matlab
+addpath('MATLAB');
+run_optimization('config.yaml');          % optimize → results/optimizations/<ts>/
+compare_classical('test_config.yaml');    % benchmark vs classical tapering
+manual_weights_app('config.yaml');        % interactive weight-tuner GUI
+```
+
+See [`MATLAB/README.md`](MATLAB/README.md) for requirements, layout, and test instructions.
+
+---
+
 ## Repository layout
 
 ```
@@ -79,4 +97,5 @@ src/
   metrics/                Post-run scoring
 data/element_patterns/    CST far-field exports (one .txt per element)
 results/                  Timestamped output folders
+MATLAB/                   Complete MATLAB port (see MATLAB/README.md)
 ```

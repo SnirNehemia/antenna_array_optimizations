@@ -17,8 +17,18 @@ addpath('MATLAB');                       % from the repo root
 run_optimization('config.yaml');         % full optimize pipeline -> results/optimizations/<ts>/
 compare_classical('test_config.yaml');   % classical vs optimizer -> results/compare_classical/<ts>/
 compare_classical('test_config.yaml', 8) % override n_side = 8
+manual_weights_app('config.yaml');       % interactive weight-tuner GUI (blocks until window closed)
 manual_weights_render('config.yaml', 'weights.csv', 'out.png');  % batch render from a weights CSV
 manual_weights_render('config.yaml');    % uniform weights, default output path
+```
+
+The preferred way to run the scripts is via the entry-point wrappers in
+`MATLAB/scripts/` (they call `addpath` for you):
+
+```matlab
+cd MATLAB/scripts
+test_optimization_script   % drives run_optimization + compare_classical
+manual_weights_app         % interactive GUI
 ```
 
 Relative `element_patterns_dir` / `results_dir` in the config are resolved
@@ -36,6 +46,7 @@ against the repo root, so the scripts work regardless of the current folder.
 | compare_classical math | `build_ura_element_patterns`, `steering_phase_vector`, `data_driven_steering_vector`, `classical_weights`, `window_1d`, `principal_plane_cut`, `principal_plane_theta_axis`, `power_normalize_weights`, `evaluate_directive_metrics`, `run_scenario` | `scripts/compare_classical.py` |
 | Shared | `read_config_yaml` (minimal YAML reader), `get_directive_field` | replaces PyYAML / `dict.get` |
 | Scripts | `run_optimization`, `compare_classical`, `manual_weights_render` | `scripts/*.py` |
+| Interactive GUI | `ManualWeightsTuner` (handle class), `scripts/manual_weights_app` | `scripts/manual_weights.py` |
 
 ## Tests
 
@@ -67,5 +78,9 @@ python MATLAB/tests/gen_reference_fixtures.py optimizer  # one
   `rng(0)` ≠ numpy `default_rng(0)`, so iterates and random restarts differ.
   Both minimise the same `J(x)`; the converged cost matches scipy's global
   optimum on well-posed problems (verified to ~1e-4 in `test_optimizer`).
-- **GUI is out of scope.** `manual_weights.py`'s interactive tkinter GUI is
-  replaced by the non-interactive `manual_weights_render` (compute + save heatmap).
+- **Interactive GUI** is provided by `ManualWeightsTuner` (`uifigure`-based handle
+  class) launched via `scripts/manual_weights_app.m`. It is a full port of
+  `manual_weights.py` — live heatmap, per-element sliders, directive table,
+  polarisation selector, hover readout, and Load CSV/Config buttons. The
+  non-interactive batch renderer `manual_weights_render` remains available for
+  headless/scripted use.
