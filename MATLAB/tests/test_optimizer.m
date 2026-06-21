@@ -8,7 +8,7 @@ end
 
 function setupOnce(testCase)
 here = fileparts(mfilename('fullpath'));
-addpath(fileparts(here));
+addpath(fullfile(fileparts(here), 'matlab_utils'));
 testCase.TestData.ref = jsondecode(fileread(fullfile(here, 'fixtures', 'optimizer.json')));
 end
 

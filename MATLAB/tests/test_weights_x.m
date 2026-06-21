@@ -11,7 +11,7 @@ end
 function setupOnce(testCase)
 % Put the MATLAB/ port folder (parent of tests/) on the path and load the fixture.
 here = fileparts(mfilename('fullpath'));
-addpath(fileparts(here));
+addpath(fullfile(fileparts(here), 'matlab_utils'));
 fixture = fullfile(here, 'fixtures', 'weights_x.json');
 testCase.TestData.ref = jsondecode(fileread(fixture));
 end

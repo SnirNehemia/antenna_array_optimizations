@@ -12,7 +12,7 @@ numpy/scipy definitions (`besseli` covers Kaiser).
 ## Entry points
 
 ```matlab
-addpath('MATLAB');                       % from the repo root
+addpath('MATLAB/matlab_utils');          % from the repo root
 
 run_optimization('config.yaml');         % full optimize pipeline -> results/optimizations/<ts>/
 compare_classical('test_config.yaml');   % classical vs optimizer -> results/compare_classical/<ts>/
@@ -36,6 +36,9 @@ against the repo root, so the scripts work regardless of the current folder.
 
 ## Layout (file = function, MATLAB convention)
 
+All port functions live flat in `MATLAB/matlab_utils/`; `MATLAB/scripts/` holds
+the thin entry-point wrappers (they `addpath('matlab_utils')` for you).
+
 | Area | Files | Python origin |
 |---|---|---|
 | IO | `parse_cst_file`, `load_element_patterns` | `src/io/cst_parser.py` |
@@ -54,7 +57,7 @@ against the repo root, so the scripts work regardless of the current folder.
 runtests('MATLAB/tests')        % all 12 files, 33 tests
 ```
 
-Each `tests/test_*.m` loads a JSON fixture produced by
+Each `tests/test_*.m` adds `MATLAB/matlab_utils` to the path, then loads a JSON fixture produced by
 `tests/gen_reference_fixtures.py` (run with the Python project) and asserts the
 MATLAB output matches within tolerance (exact for shapes/masks/indices,
 ~1e-9 for float math). Regenerate fixtures with:

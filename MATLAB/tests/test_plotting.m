@@ -7,7 +7,7 @@ end
 
 function setupOnce(testCase)
 here = fileparts(mfilename('fullpath'));
-addpath(fileparts(here));
+addpath(fullfile(fileparts(here), 'matlab_utils'));
 root = fileparts(fileparts(here));
 testCase.TestData.dataDir = fullfile(root, 'data', 'spacing0.9');
 outdir = fullfile(tempdir, ['matlab_plot_test_' char(java.util.UUID.randomUUID)]);

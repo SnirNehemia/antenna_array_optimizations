@@ -7,7 +7,7 @@ end
 
 function setupOnce(testCase)
 here = fileparts(mfilename('fullpath'));
-addpath(fileparts(here));
+addpath(fullfile(fileparts(here), 'matlab_utils'));
 root = fileparts(fileparts(here));                 % repo root
 testCase.TestData.dataDir  = fullfile(root, 'data', 'spacing0.9');
 testCase.TestData.oneFile  = fullfile(testCase.TestData.dataDir, ...

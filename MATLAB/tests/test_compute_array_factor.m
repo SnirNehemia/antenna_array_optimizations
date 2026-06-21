@@ -6,7 +6,7 @@ end
 
 function setupOnce(testCase)
 here = fileparts(mfilename('fullpath'));
-addpath(fileparts(here));
+addpath(fullfile(fileparts(here), 'matlab_utils'));
 fixture = fullfile(here, 'fixtures', 'compute_array_factor.json');
 testCase.TestData.ref = jsondecode(fileread(fixture));
 end
