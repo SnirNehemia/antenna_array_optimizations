@@ -1717,5 +1717,9 @@
     -0.017230927073690235
   ],
   "n_elements": 16,
-  "copol_abs_sum": 5284.083218973499
+  "copol_abs_sum": 5284.083218973499,
+  "component_names": [
+    "Copol",
+    "Cross"
+  ]
 }

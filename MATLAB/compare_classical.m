@@ -55,7 +55,7 @@ if strcmp(element_source, 'folder')
     fprintf('\nLoaded %dx%d URA from folder (%d elements, %d theta x %d phi points).\n', ...
         n_side, n_side, size(element_patterns_complex, 1), numel(theta_deg), numel(phi_deg));
 elseif strcmp(element_source, 'synthetic')
-    if strcmp(polarization, 'total')
+    if strcmpi(polarization, 'total')
         error('compare_classical:TotalSynthetic', ...
             'polarization: total is not supported with element_source: synthetic.');
     end
@@ -163,13 +163,18 @@ theta_deg = raw(1).theta_deg;
 phi_deg   = raw(1).phi_deg;
 
 ep_secondary = [];
-if strcmp(polarization, 'copol')
-    ep = stack_field(raw, 'E_complex');
-elseif strcmp(polarization, 'cross')
-    ep = stack_field(raw, 'cross_complex');
-elseif strcmp(polarization, 'total')
-    ep           = stack_field(raw, 'E_complex');
-    ep_secondary = stack_field(raw, 'cross_complex');
+component_names = sort(fieldnames(raw(1).components));
+
+if strcmpi(polarization, 'total')
+    if numel(component_names) ~= 2
+        error('compare_classical:BadPolarization', ...
+            'polarization: ''total'' requires exactly 2 polarization components, found {%s}.', ...
+            strjoin(component_names, ', '));
+    end
+    name_primary   = component_names{1};
+    name_secondary = component_names{2};
+    ep           = stack_component(raw, name_primary);
+    ep_secondary = stack_component(raw, name_secondary);
     peak_amp = max([max(abs(ep), [], 'all'), max(abs(ep_secondary), [], 'all')]);
     if peak_amp > 1e-30
         ep = ep / peak_amp;
@@ -177,23 +182,18 @@ elseif strcmp(polarization, 'total')
     end
     return;
 else
-    error('compare_classical:BadPolarization', ...
-        'Unknown polarization ''%s''. Valid: copol, cross, total.', polarization);
+    matches = component_names(strcmpi(component_names, polarization));
+    if isempty(matches)
+        error('compare_classical:BadPolarization', ...
+            'Polarization ''%s'' not found. Available components: {%s} (or ''total'').', ...
+            polarization, strjoin(component_names, ', '));
+    end
+    ep = stack_component(raw, matches{1});
 end
 
 peak_amp = max(abs(ep), [], 'all');
 if peak_amp > 1e-30
     ep = ep / peak_amp;
-end
-end
-
-
-function stack = stack_field(patterns, key)
-n = numel(patterns);
-[nt, np_] = size(patterns(1).(key));
-stack = zeros(n, nt, np_);
-for i = 1:n
-    stack(i, :, :) = patterns(i).(key);
 end
 end
 

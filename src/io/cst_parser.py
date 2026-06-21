@@ -20,18 +20,105 @@ N_HEADER_LINES = 2
 # Number of data columns per row in the CST export.
 N_DATA_COLUMNS = 8
 
-# Column indices matching the CST far-field ASCII export format.
-COL_THETA       = 0  # Elevation angle [deg]
-COL_PHI         = 1  # Azimuth angle [deg]
-COL_E_ABS       = 2  # Total E-field magnitude [V/m]
-COL_CROSS_ABS   = 3  # Cross-polarization magnitude [V/m]
-COL_CROSS_PHASE = 4  # Cross-polarization phase [deg]
-COL_COPOL_ABS   = 5  # Co-polarization magnitude [V/m]
-COL_COPOL_PHASE = 6  # Co-polarization phase [deg]
-COL_AXIAL_RATIO = 7  # Axial ratio [dimensionless]
+# Fixed leading columns shared by every CST far-field export.
+COL_THETA = 0  # Elevation angle [deg]
+COL_PHI   = 1  # Azimuth angle [deg]
+
+# Regex matching one "field" column header: Abs(<name>), Phase(<name>), or Ax.Ratio.
+# Matches are scanned left-to-right starting at column index 2 (after Theta, Phi).
+_FIELD_HEADER_PATTERN = re.compile(r"Abs\(([^)]*)\)|Phase\(([^)]*)\)|Ax\.Ratio")
 
 
 # ────────────────────────── HELPER FUNCTIONS ──────────────────────
+
+def _parse_header_columns(header_line):
+    """Identify the role of each data column from the CST header line.
+
+    Searches the header for ``Abs(<name>)`` / ``Phase(<name>)`` pairs (e.g.
+    ``Abs(Copol)``/``Phase(Copol)``, or ``Abs(Theta)``/``Phase(Theta)``) and the
+    ``Ax.Ratio`` column. Columns 0 and 1 are always ``Theta`` and ``Phi``. The
+    first ``Abs(<name>)`` column with no matching ``Phase(<name>)`` is treated
+    as the magnitude-only total-field column (``Abs(E)`` or ``Abs(Grlz)``).
+
+    Args:
+        header_line (str): First line of the CST export file (column labels).
+
+    Returns:
+        dict: With keys:
+
+            - ``e_abs_col`` (int): Column index of the magnitude-only total
+              field column.
+            - ``axial_ratio_col`` (int): Column index of ``Ax.Ratio``.
+            - ``components`` (dict[str, dict[str, int]]): Maps each detected
+              polarization-component name (as written in the header, e.g.
+              ``"Copol"``, ``"Cross"``, ``"Theta"``, ``"Phi"``) to
+              ``{"abs_col": int, "phase_col": int}``.
+
+    Raises:
+        ValueError: If the header does not contain exactly the expected set
+            of columns (one magnitude-only column, one ``Ax.Ratio`` column,
+            and at least one complete Abs/Phase pair).
+    """
+    abs_cols = {}    # name -> column index
+    phase_cols = {}  # name -> column index
+    e_abs_col = None
+    axial_ratio_col = None
+
+    col_idx = COL_PHI + 1  # field columns start right after Theta, Phi
+    for match in _FIELD_HEADER_PATTERN.finditer(header_line):
+        if match.group(0) == "Ax.Ratio":
+            axial_ratio_col = col_idx
+        elif match.group(1) is not None:
+            name = match.group(1).strip()
+            if name in abs_cols:
+                raise ValueError(
+                    f"Duplicate 'Abs({name})' column in header: {header_line!r}"
+                )
+            abs_cols[name] = col_idx
+        else:
+            name = match.group(2).strip()
+            if name in phase_cols:
+                raise ValueError(
+                    f"Duplicate 'Phase({name})' column in header: {header_line!r}"
+                )
+            phase_cols[name] = col_idx
+        col_idx += 1
+
+    # The magnitude-only total-field column is the Abs(...) entry with no
+    # matching Phase(...) entry (e.g. Abs(E), Abs(Grlz)).
+    e_abs_names = [name for name in abs_cols if name not in phase_cols]
+    if len(e_abs_names) != 1:
+        raise ValueError(
+            f"Expected exactly one magnitude-only Abs(...) column (e.g. "
+            f"'Abs(E)' or 'Abs(Grlz)'), found {e_abs_names} in header: "
+            f"{header_line!r}"
+        )
+    e_abs_col = abs_cols.pop(e_abs_names[0])
+
+    if axial_ratio_col is None:
+        raise ValueError(f"No 'Ax.Ratio' column found in header: {header_line!r}")
+
+    components = {}
+    for name, abs_col in abs_cols.items():
+        if name not in phase_cols:
+            raise ValueError(
+                f"'Abs({name})' column has no matching 'Phase({name})' column "
+                f"in header: {header_line!r}"
+            )
+        components[name] = {"abs_col": abs_col, "phase_col": phase_cols[name]}
+
+    if not components:
+        raise ValueError(
+            f"No Abs(<name>)/Phase(<name>) component pairs found in header: "
+            f"{header_line!r}"
+        )
+
+    return {
+        "e_abs_col": e_abs_col,
+        "axial_ratio_col": axial_ratio_col,
+        "components": components,
+    }
+
 
 def _detect_grid_shape(theta_deg_flat, phi_deg_flat):
     """Infer the (N_theta, N_phi) grid dimensions from flat angle arrays.
@@ -94,6 +181,34 @@ def _extract_element_index(filepath):
     return int(match.group(1))
 
 
+def get_component(pattern, polarization_name):
+    """Look up a polarization component's complex grid by name (case-insensitive).
+
+    Args:
+        pattern (dict): Element pattern dict returned by :func:`parse_cst_file`.
+        polarization_name (str): Component name to look up, e.g. ``"Copol"``,
+            ``"Cross"``, ``"Theta"``, ``"Phi"``. Matched case-insensitively
+            against ``pattern["components"]``.
+
+    Returns:
+        dict: ``{"abs": ..., "phase": ..., "complex": ...}`` for the matched
+        component (same arrays as stored in ``pattern["components"]``).
+
+    Raises:
+        KeyError: If no component matches ``polarization_name``, listing the
+            available component names.
+    """
+    target = polarization_name.strip().lower()
+    for name, comp in pattern["components"].items():
+        if name.lower() == target:
+            return comp
+    available = sorted(pattern["components"].keys())
+    raise KeyError(
+        f"Polarization component '{polarization_name}' not found. "
+        f"Available components in this data: {available}."
+    )
+
+
 # ────────────────────────── MAIN FUNCTIONS ────────────────────────
 
 def parse_cst_file(filepath):
@@ -101,10 +216,14 @@ def parse_cst_file(filepath):
 
     Reads an 8-column tab/space-separated `.txt` file produced by CST Studio,
     auto-detects the angular grid resolution, and returns all field components
-    reshaped into (N_theta, N_phi) grids. The complex element pattern is built
-    from the co-polarization magnitude and phase as:
+    reshaped into (N_theta, N_phi) grids. Polarization components are detected
+    generically from the header's ``Abs(<name>)``/``Phase(<name>)`` column
+    pairs (e.g. ``Copol``/``Cross``, or ``Theta``/``Phi``), so this function
+    supports any CST far-field export basis without code changes.
 
-        E_complex(theta, phi) = Abs(Copol) * exp(j * Phase(Copol) [rad])
+    For each detected component ``<name>``, the complex field is built as:
+
+        complex(theta, phi) = Abs(<name>) * exp(j * Phase(<name>) [rad])
 
     Args:
         filepath (str | Path): Path to the CST far-field export `.txt` file.
@@ -112,33 +231,38 @@ def parse_cst_file(filepath):
     Returns:
         dict: Parsed element pattern with keys:
 
-            - ``theta_deg``   (np.ndarray, shape (N_theta,)) — elevation angle grid.
+            - ``theta_deg``    (np.ndarray, shape (N_theta,)) — elevation angle grid.
               Units: degrees.
-            - ``phi_deg``     (np.ndarray, shape (N_phi,)) — azimuth angle grid.
+            - ``phi_deg``      (np.ndarray, shape (N_phi,)) — azimuth angle grid.
               Units: degrees.
-            - ``E_abs``       (np.ndarray, shape (N_theta, N_phi)) — total E-field
-              magnitude. Units: V/m.
-            - ``copol_abs``   (np.ndarray, shape (N_theta, N_phi)) — co-pol magnitude.
-              Units: V/m.
-            - ``copol_phase`` (np.ndarray, shape (N_theta, N_phi)) — co-pol phase.
-              Units: degrees.
-            - ``E_complex``   (np.ndarray, shape (N_theta, N_phi), complex) — complex
-              co-pol element pattern. Units: V/m.
-            - ``cross_abs``     (np.ndarray, shape (N_theta, N_phi)) — cross-pol
-              magnitude. Units: V/m.
-            - ``cross_phase``   (np.ndarray, shape (N_theta, N_phi)) — cross-pol phase.
-              Units: degrees.
-            - ``cross_complex`` (np.ndarray, shape (N_theta, N_phi), complex) — complex
-              cross-pol element pattern. Units: V/m.
+            - ``E_abs``        (np.ndarray, shape (N_theta, N_phi)) — magnitude-only
+              total-field column (``Abs(E)`` or ``Abs(Grlz)``). Units: as exported.
+            - ``axial_ratio``  (np.ndarray, shape (N_theta, N_phi)) — axial ratio.
+              Units: dimensionless.
+            - ``components``   (dict[str, dict]) — one entry per detected
+              ``Abs(<name>)``/``Phase(<name>)`` pair, keyed by ``<name>`` exactly
+              as written in the header (e.g. ``"Copol"``, ``"Cross"``,
+              ``"Theta"``, ``"Phi"``). Each value is a dict with:
+
+                - ``abs``     (np.ndarray, shape (N_theta, N_phi)) — magnitude.
+                - ``phase``   (np.ndarray, shape (N_theta, N_phi)) — phase, degrees.
+                - ``complex`` (np.ndarray, shape (N_theta, N_phi), complex) —
+                  ``abs * exp(j * phase_rad)``.
 
     Raises:
         FileNotFoundError: If ``filepath`` does not exist.
-        ValueError: If the file has an unexpected number of columns or an
-            incomplete angular grid.
+        ValueError: If the file has an unexpected number of columns, the
+            header columns cannot be identified, or the angular grid is
+            incomplete.
     """
     filepath = Path(filepath)
     if not filepath.exists():
         raise FileNotFoundError(f"CST export file not found: {filepath}")
+
+    with open(filepath, "r", encoding="utf-8") as fh:
+        header_line = fh.readline()
+
+    header_info = _parse_header_columns(header_line)
 
     # Load all numeric data, skipping the 2-line header.
     raw_data = np.loadtxt(filepath, skiprows=N_HEADER_LINES)
@@ -150,14 +274,9 @@ def parse_cst_file(filepath):
             f"got shape {raw_data.shape}."
         )
 
-    # Extract flat angle and field columns.
-    theta_deg_flat       = raw_data[:, COL_THETA]
-    phi_deg_flat         = raw_data[:, COL_PHI]
-    e_abs_flat           = raw_data[:, COL_E_ABS]
-    cross_abs_flat       = raw_data[:, COL_CROSS_ABS]
-    cross_phase_deg_flat = raw_data[:, COL_CROSS_PHASE]
-    copol_abs_flat       = raw_data[:, COL_COPOL_ABS]
-    copol_phase_deg_flat = raw_data[:, COL_COPOL_PHASE]
+    # Extract flat angle columns.
+    theta_deg_flat = raw_data[:, COL_THETA]
+    phi_deg_flat   = raw_data[:, COL_PHI]
 
     n_theta, n_phi = _detect_grid_shape(theta_deg_flat, phi_deg_flat)
 
@@ -167,46 +286,38 @@ def parse_cst_file(filepath):
     # [MATLAB] theta_deg = unique(theta_deg_flat);
     # [MATLAB] phi_deg   = unique(phi_deg_flat);
 
-    # Reshape flat columns into (N_theta, N_phi) grids.
-    # Theta is the fast (inner) axis: each block of N_theta consecutive rows
-    # shares the same Phi value. Reshape to (N_phi, N_theta) first, then
-    # transpose to arrive at the canonical (N_theta, N_phi) layout.
-    e_abs_grid           = e_abs_flat.reshape(n_phi, n_theta).T
-    copol_abs_grid       = copol_abs_flat.reshape(n_phi, n_theta).T
-    copol_phase_deg_grid = copol_phase_deg_flat.reshape(n_phi, n_theta).T
-    cross_abs_grid       = cross_abs_flat.reshape(n_phi, n_theta).T
-    cross_phase_deg_grid = cross_phase_deg_flat.reshape(n_phi, n_theta).T
-    # [MATLAB] e_abs_grid           = reshape(e_abs_flat,           n_theta, n_phi);
-    # [MATLAB] copol_abs_grid       = reshape(copol_abs_flat,       n_theta, n_phi);
-    # [MATLAB] copol_phase_deg_grid = reshape(copol_phase_deg_flat, n_theta, n_phi);
-    # [MATLAB] cross_abs_grid       = reshape(cross_abs_flat,       n_theta, n_phi);
-    # [MATLAB] cross_phase_deg_grid = reshape(cross_phase_deg_flat, n_theta, n_phi);
+    def _reshape(col_idx):
+        # Theta is the fast (inner) axis: each block of N_theta consecutive rows
+        # shares the same Phi value. Reshape to (N_phi, N_theta) first, then
+        # transpose to arrive at the canonical (N_theta, N_phi) layout.
+        # [MATLAB] reshape(flat, n_theta, n_phi)
+        return raw_data[:, col_idx].reshape(n_phi, n_theta).T
 
-    # Build the complex element pattern from co-polarization magnitude and phase.
-    # Convert phase from degrees to radians for all internal complex arithmetic.
-    # Formula: E_complex = |E_copol| * exp(j * phi_copol)
-    copol_phase_rad_grid = copol_phase_deg_grid * (np.pi / 180.0)
-    e_complex_grid = copol_abs_grid * np.exp(1j * copol_phase_rad_grid)
-    # [MATLAB] copol_phase_rad_grid = copol_phase_deg_grid .* (pi / 180);
-    # [MATLAB] e_complex_grid = copol_abs_grid .* exp(1j .* copol_phase_rad_grid);
+    e_abs_grid       = _reshape(header_info["e_abs_col"])
+    axial_ratio_grid = _reshape(header_info["axial_ratio_col"])
 
-    # Build the complex cross-polarization pattern using the same convention.
-    # Formula: cross_complex = |E_cross| * exp(j * phi_cross)
-    cross_phase_rad_grid = cross_phase_deg_grid * (np.pi / 180.0)
-    cross_complex_grid = cross_abs_grid * np.exp(1j * cross_phase_rad_grid)
-    # [MATLAB] cross_phase_rad_grid = cross_phase_deg_grid .* (pi / 180);
-    # [MATLAB] cross_complex_grid = cross_abs_grid .* exp(1j .* cross_phase_rad_grid);
+    # Build the complex field for every detected polarization component.
+    # Formula: complex = Abs(<name>) * exp(j * Phase(<name>) [rad])
+    # [MATLAB] phase_rad_grid = phase_deg_grid .* (pi / 180);
+    # [MATLAB] complex_grid   = abs_grid .* exp(1j .* phase_rad_grid);
+    components = {}
+    for name, cols in header_info["components"].items():
+        abs_grid       = _reshape(cols["abs_col"])
+        phase_deg_grid = _reshape(cols["phase_col"])
+        phase_rad_grid = phase_deg_grid * (np.pi / 180.0)
+        complex_grid   = abs_grid * np.exp(1j * phase_rad_grid)
+        components[name] = {
+            "abs":     abs_grid,
+            "phase":   phase_deg_grid,
+            "complex": complex_grid,
+        }
 
     return {
-        "theta_deg":     theta_deg,
-        "phi_deg":       phi_deg,
-        "E_abs":         e_abs_grid,
-        "copol_abs":     copol_abs_grid,
-        "copol_phase":   copol_phase_deg_grid,
-        "E_complex":     e_complex_grid,
-        "cross_abs":     cross_abs_grid,
-        "cross_phase":   cross_phase_deg_grid,
-        "cross_complex": cross_complex_grid,
+        "theta_deg":   theta_deg,
+        "phi_deg":     phi_deg,
+        "E_abs":       e_abs_grid,
+        "axial_ratio": axial_ratio_grid,
+        "components":  components,
     }
 
 
@@ -216,7 +327,7 @@ def load_element_patterns(directory_path):
     Discovers every ``.txt`` file in the given directory, sorts them by the
     element index encoded in the filename (e.g. ``[1]``, ``[2]``, …), and
     parses each one with :func:`parse_cst_file`. All elements must share the
-    same angular grid shape.
+    same angular grid shape and the same set of polarization components.
 
     Args:
         directory_path (str | Path): Path to the directory containing CST
@@ -228,8 +339,10 @@ def load_element_patterns(directory_path):
 
     Raises:
         FileNotFoundError: If ``directory_path`` contains no ``.txt`` files.
-        ValueError: If any file cannot have its element index extracted, or if
-            the elements do not all share the same (N_theta, N_phi) grid shape.
+        ValueError: If any file cannot have its element index extracted, if
+            the elements do not all share the same (N_theta, N_phi) grid
+            shape, or if they do not all expose the same polarization
+            components.
     """
     directory_path = Path(directory_path)
     txt_files = sorted(
@@ -245,18 +358,28 @@ def load_element_patterns(directory_path):
 
     element_patterns = []
     reference_shape = None
+    reference_components = None
 
     for txt_file in txt_files:
         pattern = parse_cst_file(txt_file)
 
-        grid_shape = pattern["E_complex"].shape
+        grid_shape = pattern["E_abs"].shape
+        component_names = set(pattern["components"].keys())
         if reference_shape is None:
             reference_shape = grid_shape
+            reference_components = component_names
         elif grid_shape != reference_shape:
             raise ValueError(
                 f"Grid shape mismatch across elements: '{txt_file.name}' has shape "
                 f"{grid_shape}, expected {reference_shape}. All elements must share "
                 "the same (N_theta, N_phi) angular grid."
+            )
+        elif component_names != reference_components:
+            raise ValueError(
+                f"Polarization component mismatch across elements: '{txt_file.name}' "
+                f"has components {sorted(component_names)}, expected "
+                f"{sorted(reference_components)}. All elements must share the same "
+                "set of polarization components."
             )
 
         element_patterns.append(pattern)

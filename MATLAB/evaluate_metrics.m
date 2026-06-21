@@ -32,6 +32,8 @@ function metrics = evaluate_metrics(element_patterns_stacked, theta_deg, phi_deg
 
 DEFAULT_TARGET_PHI_DEG   = 0.0;
 DEFAULT_DIRECTIVE_WEIGHT = 1.0;
+DEFAULT_AGGREGATION      = 'mean';
+LOG10_EPSILON            = 1e-30;
 
 if nargin < 7, precomputed_array_factor = []; end
 if nargin < 8, normalizer_power = []; end
@@ -57,6 +59,11 @@ global_peak_dbi = max(directivity_dbi_grid, [], 'all');
 [theta_peak_idx, phi_peak_idx] = ind2sub(size(directivity_dbi_grid), lin_peak);
 global_peak_theta_deg = theta_deg(theta_peak_idx);
 global_peak_phi_deg   = phi_deg(phi_peak_idx);
+
+% Linear-to-dBi scale factor (directivity_dbi_grid = 10*log10(power_linear * scale)),
+% derived from the global peak so per-directive aggregates can be converted to dBi
+% without re-deriving the spherical-integral normalizer.
+scale_factor = 10 ^ (global_peak_dbi / 10) / max(power_linear(theta_peak_idx, phi_peak_idx), LOG10_EPSILON);
 
 n_phi = numel(phi_deg);
 
@@ -97,23 +104,32 @@ for k = 1:n_dir
     target_theta_deg = d.theta;
     target_phi_deg   = get_directive_field(d, 'phi',    DEFAULT_TARGET_PHI_DEG);
     directive_weight = get_directive_field(d, 'weight', DEFAULT_DIRECTIVE_WEIGHT);
+    aggregation      = get_directive_field(d, 'aggregation', DEFAULT_AGGREGATION);
 
-    % Realized directivity: strongest point inside the directive window.
-    if any(mask(:))
-        gain_dbi = max(directivity_dbi_grid(mask));
-    else
-        theta_idx = nearest_index(theta_deg, target_theta_deg);
-        phi_idx   = nearest_index(phi_deg,   target_phi_deg);
-        gain_dbi  = directivity_dbi_grid(theta_idx, phi_idx);
-    end
-
-    % Solid-angle-weighted mean power over the same window.
+    % Solid-angle-weighted mean power over the window.
     weights_sa   = double(mask) .* sin_theta_grid;
     total_weight = sum(weights_sa, 'all');
     if total_weight > 1e-30
         mean_window_power = sum(power_linear .* weights_sa, 'all') / max(total_weight, 1e-30);
     else
         mean_window_power = 0.0;
+    end
+
+    % Realized directivity, aggregated over the window the same way the cost
+    % function aggregates it (mean/max/min), so the displayed result matches.
+    if any(mask(:))
+        switch aggregation
+            case 'max'
+                gain_dbi = max(directivity_dbi_grid(mask));
+            case 'min'
+                gain_dbi = min(directivity_dbi_grid(mask));
+            otherwise   % 'mean'
+                gain_dbi = 10 * log10(mean_window_power * scale_factor + LOG10_EPSILON);
+        end
+    else
+        theta_idx = nearest_index(theta_deg, target_theta_deg);
+        phi_idx   = nearest_index(phi_deg,   target_phi_deg);
+        gain_dbi  = directivity_dbi_grid(theta_idx, phi_idx);
     end
 
     if strcmp(directive_type, 'peak')

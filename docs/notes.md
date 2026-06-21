@@ -205,6 +205,64 @@ or `ValueError` — never silently fall back to a hardcoded default.
 > Claude Code must append an entry here at the end of every working session.
 > Format shown below. Newest entry at the top.
 
+### 2026-06-11 — Generic CST polarization-column parsing (Python + MATLAB) and weight-tuner default changes
+
+**Implemented**:
+- **Generic `Abs(<name>)`/`Phase(<name>)` column detection** (`src/io/cst_parser.py`,
+  `MATLAB/parse_cst_file.m`): replaced hardcoded copol/cross/E column indices with a
+  generic header scan that pairs any `Abs(<name>)`/`Phase(<name>)` columns into a
+  `components` dict/struct keyed by `<name>` (e.g. `Copol`/`Cross` or `Theta`/`Phi`),
+  plus the single magnitude-only `Abs(...)` column (`Abs(E)`/`Abs(Grlz)`/`Abs(Dir.)`)
+  as `E_abs`, and `Ax.Ratio`. Each component holds `abs`, `phase` (deg), and
+  `complex = abs · exp(j·phase_rad)`. Validated against both `CrossCopolExample.txt`
+  and `ThetaPhiExample.txt` header formats.
+- New helper `get_component(pattern, name)` (case-insensitive lookup, both languages)
+  and `stack_component(patterns, name)` (MATLAB only — Python already had an
+  equivalent stacking helper) used by all downstream consumers.
+- **Generalized `polarization` config handling** (`scripts/run_optimization.py`,
+  `scripts/compare_classical.py`, `scripts/manual_weights.py`,
+  `MATLAB/run_optimization.m`, `MATLAB/compare_classical.m`,
+  `MATLAB/manual_weights_render.m`, `MATLAB/ManualWeightsTuner.m`):
+  `polarization` is matched case-insensitively against whatever component names are
+  present in the data (no longer restricted to `copol`/`cross`/`total`).
+  `polarization: "total"` requires exactly 2 detected components and computes the
+  incoherent power sum `|AF_a|² + |AF_b|²`.
+- **Manual weight tuner default changes** (`scripts/manual_weights.py`,
+  `MATLAB/ManualWeightsTuner.m`): default polarization → `"total"`; default display
+  mode → `absolute`; default dBi-min → `-30` (was `-40`); fixed "Polarisation" →
+  "Polarization" typo in the toolbar label/comments. Both GUIs now build their
+  polarization dropdown dynamically from the detected component names + `"total"`.
+  Startup now calls `on_display_mode_change()` (not `recompute_and_redraw()`
+  directly) so the colorbar label/ticks are correctly initialized for the
+  absolute-display default before the first render.
+- **Test/fixture updates** (`MATLAB/tests/`): `gen_reference_fixtures.py` updated to
+  use `get_component`/`components` schema and regenerated `cst_parser.json` /
+  `evaluate_metrics.json`; `test_cst_parser.m`, `test_metrics.m`, `test_plotting.m`
+  rewritten accordingly (`E_complex`/`cross_complex`/`copol_abs` references removed
+  throughout the MATLAB tree). All MATLAB tests pass (4/4 `test_cst_parser`, 3/3
+  `test_metrics`, 3/3 `test_plotting`).
+
+**Decisions made** (via `AskUserQuestion`, see prior session):
+- Component-name matching is case-insensitive.
+- `"total"` for a generic (non-Copol/Cross) dataset = incoherent power sum of
+  exactly 2 detected components; an error is raised if more/fewer than 2 components
+  are present and `"total"` is requested.
+- Polarization dropdowns in both GUIs are populated dynamically
+  (`<detected components> + "total"`), not hardcoded.
+
+**Verification**:
+- MATLAB `parse_cst_file` confirmed on real data:
+  `fieldnames(p.components) = {'Cross'; 'Copol'}`.
+- `run_optimization('config.yaml')` end-to-end with `polarization: "Theta"` →
+  `Using component 'Theta'`, J=0.202904, global peak 14.64 dBi.
+- Same config with `polarization: "total"` → `Using 'Phi' + 'Theta' -> total power
+  sum.`, J=0.254830, global peak 14.61 dBi.
+- `ManualWeightsTuner('config.yaml')` constructs without error under the new
+  defaults (`'total'` polarization, `absolute` display, dBi-min `-30`).
+
+**Open questions / known issues**:
+- None new.
+
 ### 2026-06-07 — Cross-run comparison: phase normalization, polar plot fix, SQP switch, convergence config
 
 **Context**: Compared Python run `2026-06-02_225800` with MATLAB run `2026-06-02_184309`

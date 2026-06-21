@@ -35,19 +35,28 @@ end
 listing    = listing(order);
 
 reference_shape = [];
+reference_components = {};
 element_patterns = struct([]);
 for i = 1:n_files
     txt_file = fullfile(listing(i).folder, listing(i).name);
     pattern  = parse_cst_file(txt_file);
 
-    grid_shape = size(pattern.E_complex);
+    grid_shape = size(pattern.E_abs);
+    component_names = sort(fieldnames(pattern.components));
     if isempty(reference_shape)
         reference_shape = grid_shape;
+        reference_components = component_names;
     elseif ~isequal(grid_shape, reference_shape)
         error('load_element_patterns:ShapeMismatch', ...
             ['Grid shape mismatch across elements: ''%s'' has shape [%s], ' ...
              'expected [%s]. All elements must share the same grid.'], ...
             listing(i).name, num2str(grid_shape), num2str(reference_shape));
+    elseif ~isequal(component_names, reference_components)
+        error('load_element_patterns:ComponentMismatch', ...
+            ['Polarization component mismatch across elements: ''%s'' has ' ...
+             'components {%s}, expected {%s}. All elements must share the ' ...
+             'same set of polarization components.'], ...
+            listing(i).name, strjoin(component_names, ', '), strjoin(reference_components, ', '));
     end
 
     if isempty(element_patterns)

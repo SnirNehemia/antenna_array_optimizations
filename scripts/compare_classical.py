@@ -258,7 +258,7 @@ def _load_folder_element_patterns(cfg):
         ValueError: If the number of files is not a perfect square, or if
             an unsupported polarization is requested.
     """
-    from src.io.cst_parser import load_element_patterns
+    from src.io.cst_parser import load_element_patterns, get_component
 
     root         = Path(__file__).resolve().parents[1]
     patterns_dir = root / cfg["element_patterns_dir"]
@@ -283,28 +283,34 @@ def _load_folder_element_patterns(cfg):
     phi_deg   = raw_patterns[0]["phi_deg"]      # (N_phi,)
 
     # Select and stack the field component(s).
-    # "total" loads both copol and cross stacks so the cost function can use the
-    # physically correct power sum |AF_copol|² + |AF_cross|² instead of the
+    # "total" loads both detected components so the cost function can use the
+    # physically correct power sum |AF_a|² + |AF_b|² instead of the
     # approximate E_abs (magnitude-only) approach.
+    component_names = sorted(raw_patterns[0]["components"].keys())
     ep_secondary = None
-    if polarization == "copol":
-        ep = np.stack([p["E_complex"] for p in raw_patterns], axis=0)
-    elif polarization == "cross":
-        ep = np.stack([p["cross_complex"] for p in raw_patterns], axis=0)
-    elif polarization == "total":
-        ep          = np.stack([p["E_complex"]    for p in raw_patterns], axis=0)
-        ep_secondary = np.stack([p["cross_complex"] for p in raw_patterns], axis=0)
-        # Normalise both stacks together so the copol/cross power ratio is preserved.
+    if polarization.lower() == "total":
+        if len(component_names) != 2:
+            raise ValueError(
+                f"polarization: 'total' requires exactly 2 polarization "
+                f"components, found {component_names}."
+            )
+        name_primary, name_secondary = component_names
+        ep          = np.stack([get_component(p, name_primary)["complex"]   for p in raw_patterns], axis=0)
+        ep_secondary = np.stack([get_component(p, name_secondary)["complex"] for p in raw_patterns], axis=0)
+        # Normalise both stacks together so the power ratio between components is preserved.
         peak_amp = float(np.max([np.max(np.abs(ep)), np.max(np.abs(ep_secondary))]))
         if peak_amp > 1e-30:
             ep          = ep          / peak_amp
             ep_secondary = ep_secondary / peak_amp
         return ep, ep_secondary, theta_deg, phi_deg, n_side
     else:
-        raise ValueError(
-            f"Unknown polarization '{polarization}'. "
-            "Valid options: 'copol', 'cross', 'total'."
-        )
+        matches = [name for name in component_names if name.lower() == polarization.lower()]
+        if not matches:
+            raise ValueError(
+                f"Unknown polarization '{polarization}'. "
+                f"Available components: {component_names} (or 'total')."
+            )
+        ep = np.stack([get_component(p, polarization)["complex"] for p in raw_patterns], axis=0)
 
     # Normalise to peak amplitude = 1 across all elements and angles.
     # CST exports have simulation-dependent absolute amplitudes; this makes the
@@ -1102,7 +1108,7 @@ def main():
                     f"({n_elements} elements, {len(theta_deg)} theta x {len(phi_deg)} phi points)."
                 )
             elif element_source == "synthetic":
-                if polarization == "total":
+                if polarization.lower() == "total":
                     raise ValueError(
                         "polarization: 'total' is not supported with element_source: 'synthetic'. "
                         "Synthetic patterns have no cross-polarization component. "

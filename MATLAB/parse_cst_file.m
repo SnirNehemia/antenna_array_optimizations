@@ -5,43 +5,49 @@ function pattern = parse_cst_file(filepath)
 %
 %   Reads an 8-column whitespace-separated CST export, auto-detects the angular
 %   grid resolution, and returns all field components reshaped into
-%   (N_theta x N_phi) grids. The complex element pattern is built from the
-%   co-polarization magnitude and phase:
-%       E_complex(theta, phi) = Abs(Copol) * exp(1i * Phase(Copol) [rad])
+%   (N_theta x N_phi) grids. Polarization components are detected generically
+%   from the header's Abs(<name>)/Phase(<name>) column pairs (e.g.
+%   Copol/Cross, or Theta/Phi), so this function supports any CST far-field
+%   export basis without code changes.
+%
+%   For each detected component <name>, the complex field is built as:
+%       complex(theta, phi) = Abs(<name>) * exp(1i * Phase(<name>) [rad])
 %
 %   Inputs:
 %       filepath : path to the CST far-field export .txt file.
 %
 %   Outputs:
 %       pattern : struct with fields
-%           theta_deg     (N_theta x 1)        elevation grid [deg]
-%           phi_deg       (N_phi   x 1)        azimuth grid   [deg]
-%           E_abs         (N_theta x N_phi)    total E-field magnitude [V/m]
-%           copol_abs     (N_theta x N_phi)    co-pol magnitude [V/m]
-%           copol_phase   (N_theta x N_phi)    co-pol phase [deg]
-%           E_complex     (N_theta x N_phi)    complex co-pol field [V/m]
-%           cross_abs     (N_theta x N_phi)    cross-pol magnitude [V/m]
-%           cross_phase   (N_theta x N_phi)    cross-pol phase [deg]
-%           cross_complex (N_theta x N_phi)    complex cross-pol field [V/m]
+%           theta_deg   (N_theta x 1)        elevation grid [deg]
+%           phi_deg     (N_phi   x 1)        azimuth grid   [deg]
+%           E_abs       (N_theta x N_phi)    magnitude-only total field
+%                                             (Abs(E) or Abs(Grlz))
+%           axial_ratio (N_theta x N_phi)    axial ratio [dimensionless]
+%           components  struct, one field per detected Abs(<name>)/
+%                       Phase(<name>) pair, keyed by <name> exactly as
+%                       written in the header (e.g. Copol, Cross, Theta,
+%                       Phi). Each value is a struct with:
+%                           abs     (N_theta x N_phi)  magnitude
+%                           phase   (N_theta x N_phi)  phase [deg]
+%                           complex (N_theta x N_phi)  abs .* exp(1i*phase_rad)
 %
 %   Ported from src/io/cst_parser.py:parse_cst_file.
 %   Part of: Antenna Array Pattern Optimization Tool.
 
-% ── Constants (1-based column indices; Python COL_* + 1) ──────────
-N_HEADER_LINES  = 2;   % line 1: column labels, line 2: dash separator
-N_DATA_COLUMNS  = 8;
-COL_THETA       = 1;
-COL_PHI         = 2;
-COL_E_ABS       = 3;
-COL_CROSS_ABS   = 4;
-COL_CROSS_PHASE = 5;
-COL_COPOL_ABS   = 6;
-COL_COPOL_PHASE = 7;
-% COL_AXIAL_RATIO = 8 (parsed but unused)
+N_HEADER_LINES = 2;   % line 1: column labels, line 2: dash separator
+N_DATA_COLUMNS = 8;
+COL_THETA      = 1;
+COL_PHI        = 2;
 
 if ~isfile(filepath)
     error('parse_cst_file:FileNotFound', 'CST export file not found: %s', filepath);
 end
+
+% Read the header line (column labels) to identify column roles generically.
+fid = fopen(filepath, 'r');
+header_line = fgetl(fid);
+fclose(fid);
+header_info = parse_header_columns(header_line, COL_PHI);
 
 % Load all numeric data, skipping the 2-line header.
 % [PORT] Python np.loadtxt(skiprows=2) -> readmatrix(..., 'NumHeaderLines', 2).
@@ -53,14 +59,8 @@ if ndims(raw_data) ~= 2 || size(raw_data, 2) ~= N_DATA_COLUMNS %#ok<ISMAT>
         N_DATA_COLUMNS, filepath, size(raw_data, 2));
 end
 
-% Extract flat angle and field columns.
-theta_deg_flat       = raw_data(:, COL_THETA);
-phi_deg_flat         = raw_data(:, COL_PHI);
-e_abs_flat           = raw_data(:, COL_E_ABS);
-cross_abs_flat       = raw_data(:, COL_CROSS_ABS);
-cross_phase_deg_flat = raw_data(:, COL_CROSS_PHASE);
-copol_abs_flat       = raw_data(:, COL_COPOL_ABS);
-copol_phase_deg_flat = raw_data(:, COL_COPOL_PHASE);
+theta_deg_flat = raw_data(:, COL_THETA);
+phi_deg_flat   = raw_data(:, COL_PHI);
 
 [n_theta, n_phi] = detect_grid_shape(theta_deg_flat, phi_deg_flat);
 
@@ -72,30 +72,120 @@ phi_deg   = unique(phi_deg_flat);     % (N_phi   x 1) ascending
 % Theta is the fast (inner) axis in the file, so column-major reshape with
 % N_theta first reproduces grid(theta, phi) directly.
 % [PORT] Python flat.reshape(n_phi, n_theta).T == MATLAB reshape(flat, n_theta, n_phi).
-e_abs_grid           = reshape(e_abs_flat,           n_theta, n_phi);
-copol_abs_grid       = reshape(copol_abs_flat,       n_theta, n_phi);
-copol_phase_deg_grid = reshape(copol_phase_deg_flat, n_theta, n_phi);
-cross_abs_grid       = reshape(cross_abs_flat,       n_theta, n_phi);
-cross_phase_deg_grid = reshape(cross_phase_deg_flat, n_theta, n_phi);
+e_abs_grid       = reshape(raw_data(:, header_info.e_abs_col),       n_theta, n_phi);
+axial_ratio_grid = reshape(raw_data(:, header_info.axial_ratio_col), n_theta, n_phi);
 
-% Complex co-pol pattern: convert phase deg -> rad for internal arithmetic.
-copol_phase_rad_grid = copol_phase_deg_grid .* (pi / 180);
-e_complex_grid       = copol_abs_grid .* exp(1i .* copol_phase_rad_grid);
-
-% Complex cross-pol pattern, same convention.
-cross_phase_rad_grid = cross_phase_deg_grid .* (pi / 180);
-cross_complex_grid   = cross_abs_grid .* exp(1i .* cross_phase_rad_grid);
+% Build the complex field for every detected polarization component.
+% [PORT] phase_rad_grid = phase_deg_grid .* (pi / 180);
+% [PORT] complex_grid   = abs_grid .* exp(1i .* phase_rad_grid);
+components = struct();
+comp_names = fieldnames(header_info.components);
+for i = 1:numel(comp_names)
+    name = comp_names{i};
+    cols = header_info.components.(name);
+    abs_grid       = reshape(raw_data(:, cols.abs_col),   n_theta, n_phi);
+    phase_deg_grid = reshape(raw_data(:, cols.phase_col), n_theta, n_phi);
+    phase_rad_grid = phase_deg_grid .* (pi / 180);
+    complex_grid   = abs_grid .* exp(1i .* phase_rad_grid);
+    components.(name) = struct( ...
+        'abs',     abs_grid, ...
+        'phase',   phase_deg_grid, ...
+        'complex', complex_grid);
+end
 
 pattern = struct( ...
-    'theta_deg',     theta_deg, ...
-    'phi_deg',       phi_deg, ...
-    'E_abs',         e_abs_grid, ...
-    'copol_abs',     copol_abs_grid, ...
-    'copol_phase',   copol_phase_deg_grid, ...
-    'E_complex',     e_complex_grid, ...
-    'cross_abs',     cross_abs_grid, ...
-    'cross_phase',   cross_phase_deg_grid, ...
-    'cross_complex', cross_complex_grid);
+    'theta_deg',   theta_deg, ...
+    'phi_deg',     phi_deg, ...
+    'E_abs',       e_abs_grid, ...
+    'axial_ratio', axial_ratio_grid, ...
+    'components',  components);
+end
+
+
+function header_info = parse_header_columns(header_line, col_phi)
+% Identify the role of each data column from the CST header line.
+%
+% Searches the header for Abs(<name>)/Phase(<name>) pairs (e.g.
+% Abs(Copol)/Phase(Copol), or Abs(Theta)/Phase(Theta)) and the Ax.Ratio
+% column. Columns 1 and 2 are always Theta and Phi. The first Abs(<name>)
+% column with no matching Phase(<name>) is treated as the magnitude-only
+% total-field column (Abs(E) or Abs(Grlz)).
+%
+% Returns a struct with fields:
+%   e_abs_col       : 1-based column index of the magnitude-only total field.
+%   axial_ratio_col : 1-based column index of Ax.Ratio.
+%   components      : struct, one field per detected component name, each
+%                      holding a struct with abs_col / phase_col indices.
+%
+% Ported from src/io/cst_parser.py:_parse_header_columns.
+field_pattern = 'Abs\(([^)]*)\)|Phase\(([^)]*)\)|Ax\.Ratio';
+matches = regexp(header_line, field_pattern, 'match');
+tokens  = regexp(header_line, field_pattern, 'tokens');
+
+abs_cols   = struct();   % name -> column index
+phase_cols = struct();   % name -> column index
+axial_ratio_col = [];
+
+col_idx = col_phi + 1;  % field columns start right after Theta, Phi
+for i = 1:numel(matches)
+    if strcmp(matches{i}, 'Ax.Ratio')
+        axial_ratio_col = col_idx;
+    elseif startsWith(matches{i}, 'Abs(')
+        name = matlab.lang.makeValidName(strtrim(tokens{i}{1}));
+        if isfield(abs_cols, name)
+            error('parse_cst_file:DuplicateColumn', ...
+                'Duplicate ''Abs(%s)'' column in header: %s', name, header_line);
+        end
+        abs_cols.(name) = col_idx;
+    else
+        name = matlab.lang.makeValidName(strtrim(tokens{i}{1}));
+        if isfield(phase_cols, name)
+            error('parse_cst_file:DuplicateColumn', ...
+                'Duplicate ''Phase(%s)'' column in header: %s', name, header_line);
+        end
+        phase_cols.(name) = col_idx;
+    end
+    col_idx = col_idx + 1;
+end
+
+% The magnitude-only total-field column is the Abs(...) entry with no
+% matching Phase(...) entry (e.g. Abs(E), Abs(Grlz)).
+abs_names   = fieldnames(abs_cols);
+phase_names = fieldnames(phase_cols);
+e_abs_names = setdiff(abs_names, phase_names);
+if numel(e_abs_names) ~= 1
+    error('parse_cst_file:BadHeader', ...
+        ['Expected exactly one magnitude-only Abs(...) column (e.g. ''Abs(E)'' ' ...
+         'or ''Abs(Grlz)''), found %d in header: %s'], numel(e_abs_names), header_line);
+end
+e_abs_col = abs_cols.(e_abs_names{1});
+abs_cols  = rmfield(abs_cols, e_abs_names{1});
+
+if isempty(axial_ratio_col)
+    error('parse_cst_file:BadHeader', 'No ''Ax.Ratio'' column found in header: %s', header_line);
+end
+
+components = struct();
+remaining_abs_names = fieldnames(abs_cols);
+for i = 1:numel(remaining_abs_names)
+    name = remaining_abs_names{i};
+    if ~isfield(phase_cols, name)
+        error('parse_cst_file:BadHeader', ...
+            '''Abs(%s)'' column has no matching ''Phase(%s)'' column in header: %s', ...
+            name, name, header_line);
+    end
+    components.(name) = struct('abs_col', abs_cols.(name), 'phase_col', phase_cols.(name));
+end
+
+if isempty(fieldnames(components))
+    error('parse_cst_file:BadHeader', ...
+        'No Abs(<name>)/Phase(<name>) component pairs found in header: %s', header_line);
+end
+
+header_info = struct( ...
+    'e_abs_col',       e_abs_col, ...
+    'axial_ratio_col', axial_ratio_col, ...
+    'components',      components);
 end
 
 

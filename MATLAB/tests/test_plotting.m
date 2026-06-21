@@ -28,10 +28,10 @@ patterns = load_element_patterns(testCase.TestData.dataDir);
 theta = patterns(1).theta_deg;
 phi   = patterns(1).phi_deg;
 n     = numel(patterns);
-[nt, np_] = size(patterns(1).E_complex);
+[nt, np_] = size(patterns(1).E_abs);
 ep = zeros(n, nt, np_);
 for i = 1:n
-    ep(i, :, :) = patterns(i).E_complex;
+    ep(i, :, :) = get_component(patterns(i), 'Copol').complex;
 end
 directives = { ...
     struct('type','peak','theta',30,'phi',0,'theta_width',10,'phi_width',10,'weight',1.0), ...

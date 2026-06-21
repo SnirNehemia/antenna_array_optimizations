@@ -127,7 +127,7 @@ if use_single_element_init
 
         t0 = tic;
         [xopt, fval, success, cost_history, xk_history] = run_single( ...
-            cost_fn, x_initial, lb, ub, max_iterations, cost_tolerance);
+            cost_fn, x_initial, lb, ub, max_iterations, cost_tolerance, gradient_tolerance);
         elapsed = toc(t0);
         print_run_status(run_index, n_total, run_label, fval, numel(cost_history), success, elapsed);
 

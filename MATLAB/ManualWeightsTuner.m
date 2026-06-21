@@ -24,10 +24,8 @@ classdef ManualWeightsTuner < handle
         PHASE_SLIDER_MAX_DEG =  180.0
         INITIAL_AMPLITUDE    = 1.0
         INITIAL_PHASE_DEG    = 0.0
-        DEFAULT_DBI_MIN      = -40.0
+        DEFAULT_DBI_MIN      = -30.0
         DEFAULT_DBI_MAX      =  10.0
-        POLARIZATION_COPOL   = 'copol'
-        POLARIZATION_CROSS   = 'cross'
         POLARIZATION_TOTAL   = 'total'
         DISPLAY_RELATIVE     = 'relative'
         DISPLAY_ABSOLUTE     = 'absolute'
@@ -51,8 +49,8 @@ classdef ManualWeightsTuner < handle
         theta_deg
         phi_deg
         n_elements
-        element_patterns_copol
-        element_patterns_cross
+        element_pattern_stacks
+        polarization_options
         weights_complex
         model_name
 
@@ -89,6 +87,21 @@ classdef ManualWeightsTuner < handle
         label_peak
         label_peak_angle
         label_hpbw
+
+        % Optimization tab widgets
+        opt_max_iter_field
+        opt_cost_tol_field
+        opt_grad_tol_field
+        opt_n_restarts_field
+        opt_amp_min_field
+        opt_amp_max_field
+        opt_amp_unbounded_check
+        opt_phase_only_check
+        opt_amplitude_only_check
+        opt_use_uniform_check
+        opt_use_single_check
+        opt_run_btn
+        opt_status_label
     end
 
     % ══════════════════════════════════════════════════════════════
@@ -119,18 +132,16 @@ classdef ManualWeightsTuner < handle
             obj.n_elements = numel(patterns);
             obj.model_name = ManualWeightsTuner.dir_basename(patterns_dir);
 
-            n_th = numel(obj.theta_deg);
-            n_ph = numel(obj.phi_deg);
-            obj.element_patterns_copol = zeros(obj.n_elements, n_th, n_ph);
-            obj.element_patterns_cross = zeros(obj.n_elements, n_th, n_ph);
-            for k = 1:obj.n_elements
-                obj.element_patterns_copol(k, :, :) = patterns(k).E_complex;
-                obj.element_patterns_cross(k, :, :) = patterns(k).cross_complex;
+            component_names = sort(fieldnames(patterns(1).components));
+            obj.element_pattern_stacks = struct();
+            for k = 1:numel(component_names)
+                obj.element_pattern_stacks.(component_names{k}) = stack_component(patterns, component_names{k});
             end
+            obj.polarization_options = [component_names(:); {ManualWeightsTuner.POLARIZATION_TOTAL}];
 
             obj.weights_complex        = ones(obj.n_elements, 1, 'like', 1 + 0i);
-            obj.active_polarization    = ManualWeightsTuner.POLARIZATION_COPOL;
-            obj.display_mode           = ManualWeightsTuner.DISPLAY_RELATIVE;
+            obj.active_polarization    = ManualWeightsTuner.POLARIZATION_TOTAL;
+            obj.display_mode           = ManualWeightsTuner.DISPLAY_ABSOLUTE;
             obj.directive_data         = {};
             obj.directive_widget_rows  = {};
             obj.syncing_weight_display = false;
@@ -151,7 +162,10 @@ classdef ManualWeightsTuner < handle
                 obj.add_directive_row(directives_cfg{k});
             end
 
-            obj.recompute_and_redraw();
+            % Calls on_display_mode_change (not recompute_and_redraw directly) so the
+            % colorbar label/ticks are correctly initialized for the default
+            % absolute-display mode before the first render.
+            obj.on_display_mode_change();
             obj.set_status(sprintf('%d elements loaded  %s  %d directives active', ...
                 obj.n_elements, char(183), numel(obj.directive_data)));
         end
@@ -184,9 +198,9 @@ classdef ManualWeightsTuner < handle
                 'Resize',          'on', ...
                 'CloseRequestFcn', @(~,~) obj.on_close());
 
-            % Top-level 2-row grid: [toolbar (fixed 56 px); content (fills)].
+            % Top-level 2-row grid: [toolbar (fixed); content (fills)].
             top_grid = uigridlayout(obj.fig, [2, 1]);
-            top_grid.RowHeight   = {56, '1x'};
+            top_grid.RowHeight   = {96, '1x'};
             top_grid.ColumnWidth = {'1x'};
             top_grid.Padding     = [0 0 0 0];
             top_grid.RowSpacing  = 0;
@@ -209,32 +223,54 @@ classdef ManualWeightsTuner < handle
 
             obj.build_pattern_panel(content_grid);   % places panel at column 1
 
-            % Right column: 3-row grid directly in content_grid.
-            right_grid = uigridlayout(content_grid, [3, 1]);
+            % Right column: 2-row grid directly in content_grid.
+            right_grid = uigridlayout(content_grid, [2, 1]);
             right_grid.Layout.Row    = 1;
             right_grid.Layout.Column = 2;
-            right_grid.RowHeight     = {ManualWeightsTuner.WEIGHTS_PANEL_HEIGHT + 44, 230, 'fit'};
+            right_grid.RowHeight     = {ManualWeightsTuner.WEIGHTS_PANEL_HEIGHT + 44, '1x'};
             right_grid.ColumnWidth   = {'1x'};
             right_grid.Padding       = [0 0 0 0];
             right_grid.RowSpacing    = 4;
 
             obj.build_weights_panel(right_grid);
-            obj.build_directives_panel(right_grid);
-            obj.build_metrics_panel(right_grid);
+
+            % Tab group: "Directives" | "Optimization" (run optimizer) | "Metrics"
+            tabgroup = uitabgroup(right_grid);
+            tabgroup.Layout.Row    = 2;
+            tabgroup.Layout.Column = 1;
+
+            tab_directives = uitab(tabgroup, 'Title', 'Directives');
+            obj.build_directives_panel(tab_directives);
+
+            tab_optimization = uitab(tabgroup, 'Title', 'Optimization');
+            obj.build_optimization_panel(tab_optimization);
+
+            tab_metrics = uitab(tabgroup, 'Title', 'Metrics');
+            obj.build_metrics_panel(tab_metrics);
         end
 
         % ── BUILD TOOLBAR ─────────────────────────────────────────
 
         function build_toolbar(obj, parent)
-        % Build toolbar controls:
-        %   info block | Load Config | [sep] | Display combo | dBi min/max |
-        %   [sep] | Polarisation combo | [sep] | Uniform | Load CSV
+        % Build a 2-row toolbar:
+        %   Row 1: info block | Load Config | Load Data Folder | [sep] |
+        %          Display combo | dBi min/max | [sep] | Polarization combo
+        %   Row 2: Uniform Weights | Load Weights CSV
         %
         % Labels intentionally have NO explicit BackgroundColor so MATLAB's
         % theme (including dark mode) renders them correctly.
-            tg = uigridlayout(parent, [1, 15]);
-            tg.ColumnWidth  = {'1x', 100, 10, 60, 88, 58, 62, 58, 62, 10, 80, 68, 10, 105, 120};
-            tg.Padding      = [6 4 6 4];
+            outer = uigridlayout(parent, [2, 1]);
+            outer.RowHeight   = {'1x', '1x'};
+            outer.ColumnWidth = {'1x'};
+            outer.Padding     = [6 4 6 4];
+            outer.RowSpacing  = 2;
+
+            % ══ Row 1 ═══════════════════════════════════════════════
+            tg = uigridlayout(outer, [1, 13]);
+            tg.Layout.Row    = 1;
+            tg.Layout.Column = 1;
+            tg.ColumnWidth   = {'1x', 100, 110, 10, 60, 90, 58, 64, 58, 64, 10, 80, 110};
+            tg.Padding       = [0 0 0 0];
             tg.ColumnSpacing = 2;
 
             % ── Info block ────────────────────────────────────────
@@ -264,68 +300,78 @@ classdef ManualWeightsTuner < handle
                 'ButtonPushedFcn', @(~,~) obj.on_load_config());
             btn_cfg.Layout.Column = 2;
 
-            % separators (thin panels)
-            mk_sep(tg, 3);
+            % ── Load Data Folder button ────────────────────────────
+            btn_data = uibutton(tg, 'Text', 'Load Data Folder...', ...
+                'FontSize', 11, ...
+                'ButtonPushedFcn', @(~,~) obj.on_load_data_folder());
+            btn_data.Layout.Column = 3;
+
+            % separator (thin panel)
+            mk_sep(tg, 4);
 
             % ── Display mode ──────────────────────────────────────
             lbl_disp = uilabel(tg, 'Text', 'Display:', 'FontSize', 11, ...
                 'HorizontalAlignment', 'right');
-            lbl_disp.Layout.Column = 4;
+            lbl_disp.Layout.Column = 5;
 
             obj.disp_dropdown = uidropdown(tg, ...
                 'Items',           {ManualWeightsTuner.DISPLAY_RELATIVE, ManualWeightsTuner.DISPLAY_ABSOLUTE}, ...
-                'Value',           ManualWeightsTuner.DISPLAY_RELATIVE, ...
+                'Value',           ManualWeightsTuner.DISPLAY_ABSOLUTE, ...
                 'FontSize',        11, ...
                 'ValueChangedFcn', @(~,~) obj.on_display_mode_change());
-            obj.disp_dropdown.Layout.Column = 5;
+            obj.disp_dropdown.Layout.Column = 6;
 
             lbl_min = uilabel(tg, 'Text', 'min (dBi):', 'FontSize', 11, ...
                 'HorizontalAlignment', 'right');
-            lbl_min.Layout.Column = 6;
+            lbl_min.Layout.Column = 7;
 
             obj.dbi_min_field = uieditfield(tg, 'numeric', ...
                 'Value',           ManualWeightsTuner.DEFAULT_DBI_MIN, ...
                 'FontSize',        11, ...
                 'ValueChangedFcn', @(~,~) obj.on_display_mode_change());
-            obj.dbi_min_field.Layout.Column = 7;
+            obj.dbi_min_field.Layout.Column = 8;
 
             lbl_max = uilabel(tg, 'Text', 'max (dBi):', 'FontSize', 11, ...
                 'HorizontalAlignment', 'right');
-            lbl_max.Layout.Column = 8;
+            lbl_max.Layout.Column = 9;
 
             obj.dbi_max_field = uieditfield(tg, 'numeric', ...
                 'Value',           ManualWeightsTuner.DEFAULT_DBI_MAX, ...
                 'FontSize',        11, ...
                 'ValueChangedFcn', @(~,~) obj.on_display_mode_change());
-            obj.dbi_max_field.Layout.Column = 9;
+            obj.dbi_max_field.Layout.Column = 10;
 
-            mk_sep(tg, 10);
+            mk_sep(tg, 11);
 
-            % ── Polarisation ──────────────────────────────────────
-            lbl_pol = uilabel(tg, 'Text', 'Polarisation:', 'FontSize', 11, ...
+            % ── Polarization ──────────────────────────────────────
+            lbl_pol = uilabel(tg, 'Text', 'Polarization:', 'FontSize', 11, ...
                 'HorizontalAlignment', 'right');
-            lbl_pol.Layout.Column = 11;
+            lbl_pol.Layout.Column = 12;
 
             obj.pol_dropdown = uidropdown(tg, ...
-                'Items',           {ManualWeightsTuner.POLARIZATION_COPOL, ...
-                                    ManualWeightsTuner.POLARIZATION_CROSS, ...
-                                    ManualWeightsTuner.POLARIZATION_TOTAL}, ...
-                'Value',           ManualWeightsTuner.POLARIZATION_COPOL, ...
+                'Items',           obj.polarization_options, ...
+                'Value',           obj.active_polarization, ...
                 'FontSize',        11, ...
                 'ValueChangedFcn', @(~,~) obj.on_polarization_change());
-            obj.pol_dropdown.Layout.Column = 12;
+            obj.pol_dropdown.Layout.Column = 13;
 
-            mk_sep(tg, 13);
+            % ══ Row 2 ═══════════════════════════════════════════════
+            bg = uigridlayout(outer, [1, 3]);
+            bg.Layout.Row    = 2;
+            bg.Layout.Column = 1;
+            bg.ColumnWidth   = {'1x', 140, 140};
+            bg.Padding       = [0 0 0 0];
+            bg.ColumnSpacing = 6;
 
-            btn_uni = uibutton(tg, 'Text', 'Uniform Weights', ...
+            btn_uni = uibutton(bg, 'Text', 'Uniform Weights', ...
                 'FontSize', 11, ...
                 'ButtonPushedFcn', @(~,~) obj.on_uniform());
-            btn_uni.Layout.Column = 14;
+            btn_uni.Layout.Column = 2;
 
-            btn_csv = uibutton(tg, 'Text', 'Load Weights CSV', ...
+            btn_csv = uibutton(bg, 'Text', 'Load Weights CSV', ...
                 'FontSize', 11, ...
                 'ButtonPushedFcn', @(~,~) obj.on_load_csv());
-            btn_csv.Layout.Column = 15;
+            btn_csv.Layout.Column = 3;
         end
 
         % ── BUILD PATTERN PANEL ───────────────────────────────────
@@ -401,70 +447,85 @@ classdef ManualWeightsTuner < handle
             outer.Layout.Row    = 1;
             outer.Layout.Column = 1;
 
+            % uigridlayout children are always resized to fill their parent
+            % (no natural/overflow size), so a uigridlayout cannot trigger
+            % scrolling inside a Scrollable uipanel. Instead, lay out the
+            % rows with absolute pixel positions on a fixed-height content
+            % panel that is taller than the visible scroll area.
             n_rows = obj.n_elements + 1;   % +1 for header
-            w_grid = uigridlayout(outer, [n_rows, 6]);
-            w_grid.ColumnWidth   = {40, 62, '1x', 66, '1x', 46};
-            w_grid.RowHeight     = repmat({26}, 1, n_rows);
-            w_grid.Padding       = [4 4 4 4];
-            w_grid.RowSpacing    = 2;
-            w_grid.ColumnSpacing = 3;
+            ROW_H   = 26;
+            ROW_GAP = 2;
+            PAD     = 4;
+            W = ManualWeightsTuner.RIGHT_PANEL_WIDTH - 24;
+            H = PAD * 2 + n_rows * ROW_H + (n_rows - 1) * ROW_GAP;
+
+            content = uipanel(outer, 'BorderType', 'none', ...
+                'Position', [1 1 W H], 'AutoResizeChildren', 'off');
+
+            % Column layout (fixed pixel widths, 3px spacing).
+            w_idx = 40; w_amp_ef = 62; w_phase_ef = 66; w_solo = 46;
+            w_slider = (W - 2 * PAD - w_idx - w_amp_ef - w_phase_ef - w_solo - 5 * 3) / 2;
+            x_idx      = PAD;
+            x_amp_ef   = x_idx + w_idx + 3;
+            x_amp_sl   = x_amp_ef + w_amp_ef + 3;
+            x_phase_ef = x_amp_sl + w_slider + 3;
+            x_phase_sl = x_phase_ef + w_phase_ef + 3;
+            x_solo     = x_phase_sl + w_slider + 3;
+
+            row_y = @(r) H - PAD - r * ROW_H - (r - 1) * ROW_GAP;
 
             % Header row.
             headers = {'Elem', 'Amplitude', '', 'Phase (°)', '', ''};
+            xs = [x_idx, x_amp_ef, x_amp_sl, x_phase_ef, x_phase_sl, x_solo];
+            ws = [w_idx, w_amp_ef, w_slider, w_phase_ef, w_slider, w_solo];
+            y = row_y(1);
             for c = 1:6
-                lbl = uilabel(w_grid, 'Text', headers{c}, ...
+                uilabel(content, 'Text', headers{c}, ...
                     'FontWeight', 'bold', 'FontSize', 10, ...
-                    'HorizontalAlignment', 'center');
-                lbl.Layout.Row    = 1;
-                lbl.Layout.Column = c;
+                    'HorizontalAlignment', 'center', ...
+                    'Position', [xs(c) y ws(c) ROW_H]);
             end
 
             for n = 1:obj.n_elements
-                r = n + 1;
+                y = row_y(n + 1);
 
-                lbl_idx = uilabel(w_grid, 'Text', sprintf('%3d', n - 1), ...
-                    'FontSize', 10, 'HorizontalAlignment', 'right');
-                lbl_idx.Layout.Row    = r;
-                lbl_idx.Layout.Column = 1;
+                uilabel(content, 'Text', sprintf('%3d', n - 1), ...
+                    'FontSize', 10, 'HorizontalAlignment', 'right', ...
+                    'Position', [x_idx y w_idx ROW_H]);
 
-                amp_ef = uieditfield(w_grid, 'numeric', ...
+                amp_ef = uieditfield(content, 'numeric', ...
                     'Value',           ManualWeightsTuner.INITIAL_AMPLITUDE, ...
                     'Limits',          [0 Inf], ...
                     'FontSize',        10, ...
+                    'Position',        [x_amp_ef y w_amp_ef ROW_H], ...
                     'ValueChangedFcn', @(src,~) obj.on_amp_entry_changed(n, src.Value));
-                amp_ef.Layout.Row    = r;
-                amp_ef.Layout.Column = 2;
 
-                amp_sl = uislider(w_grid, ...
+                amp_sl = uislider(content, ...
                     'Limits',           [ManualWeightsTuner.AMP_SLIDER_MIN, ManualWeightsTuner.AMP_SLIDER_MAX], ...
                     'Value',            ManualWeightsTuner.INITIAL_AMPLITUDE, ...
                     'MajorTicks',       [], 'MinorTicks', [], ...
+                    'Position',         [x_amp_sl y+ROW_H/2 w_slider 3], ...
                     'ValueChangedFcn',  @(src,~) obj.on_amp_slider_changed(n, src.Value), ...
                     'ValueChangingFcn', @(src,evt) obj.on_amp_slider_changing(n, evt.Value));
-                amp_sl.Layout.Row    = r;
-                amp_sl.Layout.Column = 3;
 
-                phase_ef = uieditfield(w_grid, 'numeric', ...
+                phase_ef = uieditfield(content, 'numeric', ...
                     'Value',           ManualWeightsTuner.INITIAL_PHASE_DEG, ...
                     'FontSize',        10, ...
+                    'Position',        [x_phase_ef y w_phase_ef ROW_H], ...
                     'ValueChangedFcn', @(src,~) obj.on_phase_entry_changed(n, src.Value));
-                phase_ef.Layout.Row    = r;
-                phase_ef.Layout.Column = 4;
 
-                phase_sl = uislider(w_grid, ...
+                phase_sl = uislider(content, ...
                     'Limits',           [ManualWeightsTuner.PHASE_SLIDER_MIN_DEG, ManualWeightsTuner.PHASE_SLIDER_MAX_DEG], ...
                     'Value',            ManualWeightsTuner.INITIAL_PHASE_DEG, ...
                     'MajorTicks',       [], 'MinorTicks', [], ...
+                    'Position',         [x_phase_sl y+ROW_H/2 w_slider 3], ...
                     'ValueChangedFcn',  @(src,~) obj.on_phase_slider_changed(n, src.Value), ...
                     'ValueChangingFcn', @(src,evt) obj.on_phase_slider_changing(n, evt.Value));
-                phase_sl.Layout.Row    = r;
-                phase_sl.Layout.Column = 5;
 
-                solo_btn = uibutton(w_grid, 'Text', 'Solo', ...
+                uibutton(content, 'Text', 'Solo', ...
                     'FontSize',        10, ...
+                    'Position',        [x_solo y w_solo ROW_H], ...
                     'ButtonPushedFcn', @(~,~) obj.on_solo_element(n));
-                solo_btn.Layout.Row    = r;
-                solo_btn.Layout.Column = 6;
 
                 obj.amp_fields{n}    = amp_ef;
                 obj.amp_sliders{n}   = amp_sl;
@@ -476,12 +537,8 @@ classdef ManualWeightsTuner < handle
         % ── BUILD DIRECTIVES PANEL ────────────────────────────────
 
         function build_directives_panel(obj, parent)
-        % Panel with dynamic add/remove rows.
-            dir_outer = uipanel(parent, 'Title', 'Directives');
-            dir_outer.Layout.Row    = 2;
-            dir_outer.Layout.Column = 1;
-
-            outer_grid = uigridlayout(dir_outer, [3, 1]);
+        % Tab content with dynamic add/remove directive rows.
+            outer_grid = uigridlayout(parent, [3, 1]);
             outer_grid.RowHeight   = {24, '1x', 32};
             outer_grid.ColumnWidth = {'1x'};
             outer_grid.Padding     = [2 2 2 2];
@@ -489,14 +546,14 @@ classdef ManualWeightsTuner < handle
 
             % Column header row.
             th = char(952); ph = char(966);
-            hdr_g = uigridlayout(outer_grid, [1, 8]);
+            hdr_g = uigridlayout(outer_grid, [1, 9]);
             hdr_g.Layout.Row    = 1;
             hdr_g.Layout.Column = 1;
-            hdr_g.ColumnWidth   = {58, 46, 46, 46, 46, 36, 30, '1x'};
+            hdr_g.ColumnWidth   = {52, 42, 42, 42, 42, 34, 64, 24, '1x'};
             hdr_g.Padding       = [0 0 0 0];
             hdr_g.ColumnSpacing = 2;
-            hdr_names = {'Type', [th,'(°)'], [ph,'(°)'], [th,'W'], [ph,'W'], 'Wt', '', 'Result'};
-            for c = 1:8
+            hdr_names = {'Type', [th,'(°)'], [ph,'(°)'], [th,'W'], [ph,'W'], 'Wt', 'Agg', '', 'Result'};
+            for c = 1:9
                 hl = uilabel(hdr_g, 'Text', hdr_names{c}, ...
                     'FontWeight', 'bold', 'FontSize', 10, ...
                     'HorizontalAlignment', 'center');
@@ -521,15 +578,196 @@ classdef ManualWeightsTuner < handle
             add_btn.Layout.Column = 1;
         end
 
+        % ── BUILD OPTIMIZATION PANEL ──────────────────────────────
+
+        function build_optimization_panel(obj, parent)
+        % Tab content: scrollable, editable optimizer settings (from
+        % config.optimizer), each with a short description, plus a
+        % "Run Optimization" button pinned at the bottom that runs
+        % run_optimization() with the current directives/settings and loads
+        % the resulting weights.
+            opt_cfg = struct();
+            if isfield(obj.config, 'optimizer')
+                opt_cfg = obj.config.optimizer;
+            end
+
+            % Outer: scrollable settings area (fills) + pinned run bar (fixed).
+            outer = uigridlayout(parent, [2, 1]);
+            outer.RowHeight   = {'1x', 44};
+            outer.ColumnWidth = {'1x'};
+            outer.Padding     = [0 0 0 0];
+            outer.RowSpacing  = 4;
+
+            scroll_panel = uipanel(outer, 'BorderType', 'none', 'Scrollable', 'on');
+            scroll_panel.Layout.Row    = 1;
+            scroll_panel.Layout.Column = 1;
+
+            % uigridlayout children are always resized to fill their parent
+            % (no natural/overflow size), so a uigridlayout cannot trigger
+            % scrolling inside a Scrollable uipanel. Instead, lay out the
+            % settings with absolute pixel positions on a fixed-height
+            % content panel that is taller than the visible scroll area.
+            W        = ManualWeightsTuner.RIGHT_PANEL_WIDTH - 24;
+            ROW_H    = 22;
+            DESC_H   = 34;
+            ROW_GAP  = 4;
+            SEC_GAP  = 8;
+            TOP_PAD  = 8;
+            n_settings = 10;
+            H = TOP_PAD + n_settings * (ROW_H + ROW_GAP + DESC_H + SEC_GAP);
+
+            content = uipanel(scroll_panel, 'BorderType', 'none', ...
+                'Position', [1 1 W H], 'AutoResizeChildren', 'off');
+
+            x_label  = 8;   w_label = 130;
+            x_field1 = x_label + w_label + 8;  w_field = 80;
+            x_field2 = x_field1 + w_field + 8;
+            x_full   = 8;   w_full  = W - 16;
+
+            y = H - TOP_PAD;
+
+            % Max iterations
+            y = y - ROW_H;
+            mk_label_pos(content, x_label, y, w_label, ROW_H, 'Max iterations:');
+            obj.opt_max_iter_field = uieditfield(content, 'numeric', ...
+                'Position', [x_field1 y w_field ROW_H], ...
+                'Value', cfg_get(opt_cfg, 'max_iterations', 250), ...
+                'Limits', [1 Inf], 'RoundFractionalValues', 'on', 'FontSize', 10);
+            y = y - ROW_GAP - DESC_H;
+            mk_desc_pos(content, x_full, y, w_full, DESC_H, ...
+                'Maximum L-BFGS-B iterations per restart. Stops earlier if cost_tolerance is met.');
+            y = y - SEC_GAP;
+
+            % Cost tolerance
+            y = y - ROW_H;
+            mk_label_pos(content, x_label, y, w_label, ROW_H, 'Cost tolerance:');
+            obj.opt_cost_tol_field = uieditfield(content, 'numeric', ...
+                'Position', [x_field1 y w_field ROW_H], ...
+                'Value', cfg_get(opt_cfg, 'cost_tolerance', 1e-6), ...
+                'Limits', [0 Inf], 'FontSize', 10);
+            y = y - ROW_GAP - DESC_H;
+            mk_desc_pos(content, x_full, y, w_full, DESC_H, ...
+                'Relative cost-improvement stopping threshold. Smaller = finer convergence, slower.');
+            y = y - SEC_GAP;
+
+            % Gradient tolerance
+            y = y - ROW_H;
+            mk_label_pos(content, x_label, y, w_label, ROW_H, 'Gradient tolerance:');
+            obj.opt_grad_tol_field = uieditfield(content, 'numeric', ...
+                'Position', [x_field1 y w_field ROW_H], ...
+                'Value', cfg_get(opt_cfg, 'gradient_tolerance', 1e-5), ...
+                'Limits', [0 Inf], 'FontSize', 10);
+            y = y - ROW_GAP - DESC_H;
+            mk_desc_pos(content, x_full, y, w_full, DESC_H, ...
+                'Gradient-norm stopping threshold. Whichever of this or cost_tolerance fires first wins.');
+            y = y - SEC_GAP;
+
+            % N restarts
+            y = y - ROW_H;
+            mk_label_pos(content, x_label, y, w_label, ROW_H, 'N restarts:');
+            obj.opt_n_restarts_field = uieditfield(content, 'numeric', ...
+                'Position', [x_field1 y w_field ROW_H], ...
+                'Value', cfg_get(opt_cfg, 'n_restarts', 2), ...
+                'Limits', [0 Inf], 'RoundFractionalValues', 'on', 'FontSize', 10);
+            y = y - ROW_GAP - DESC_H;
+            mk_desc_pos(content, x_full, y, w_full, DESC_H, ...
+                'Number of independent multi-start runs (plus one per element if single-element init is enabled).');
+            y = y - SEC_GAP;
+
+            % Amplitude bounds [min, max]
+            y = y - ROW_H;
+            mk_label_pos(content, x_label, y, w_label, ROW_H, 'Amplitude bounds:');
+            amp_bounds = cfg_get(opt_cfg, 'amplitude_bounds', [0.0 1.0]);
+            is_unbounded = isempty(amp_bounds);
+            if is_unbounded, amp_bounds = [0.0 1.0]; end
+            obj.opt_amp_min_field = uieditfield(content, 'numeric', ...
+                'Position', [x_field1 y w_field ROW_H], ...
+                'Value', amp_bounds(1), 'Limits', [0 Inf], 'FontSize', 10, ...
+                'Enable', ~is_unbounded);
+            obj.opt_amp_max_field = uieditfield(content, 'numeric', ...
+                'Position', [x_field2 y w_field ROW_H], ...
+                'Value', amp_bounds(2), 'Limits', [0 Inf], 'FontSize', 10, ...
+                'Enable', ~is_unbounded);
+            y = y - ROW_GAP - DESC_H;
+            mk_desc_pos(content, x_full, y, w_full, DESC_H, ...
+                'Per-element amplitude [min, max] range. Ignored when phase_only is enabled.');
+            y = y - SEC_GAP;
+
+            % Unbounded checkbox
+            y = y - ROW_H;
+            obj.opt_amp_unbounded_check = uicheckbox(content, 'Text', 'Unbounded amplitude', ...
+                'Position', [x_label y w_full ROW_H], ...
+                'Value', is_unbounded, 'FontSize', 10, ...
+                'ValueChangedFcn', @(src,~) obj.on_amp_unbounded_changed(src.Value));
+            y = y - ROW_GAP - DESC_H;
+            mk_desc_pos(content, x_full, y, w_full, DESC_H, ...
+                'When checked, amplitudes are left unbounded (amplitude_bounds: null).');
+            y = y - SEC_GAP;
+
+            % Phase only
+            y = y - ROW_H;
+            obj.opt_phase_only_check = uicheckbox(content, 'Text', 'Phase only', ...
+                'Position', [x_label y w_full ROW_H], ...
+                'Value', cfg_get(opt_cfg, 'phase_only', false), 'FontSize', 10);
+            y = y - ROW_GAP - DESC_H;
+            mk_desc_pos(content, x_full, y, w_full, DESC_H, ...
+                'Fix all amplitudes to 1.0 and optimize phase only. Overrides amplitude_bounds.');
+            y = y - SEC_GAP;
+
+            % Amplitude only
+            y = y - ROW_H;
+            obj.opt_amplitude_only_check = uicheckbox(content, 'Text', 'Amplitude only', ...
+                'Position', [x_label y w_full ROW_H], ...
+                'Value', cfg_get(opt_cfg, 'amplitude_only', false), 'FontSize', 10);
+            y = y - ROW_GAP - DESC_H;
+            mk_desc_pos(content, x_full, y, w_full, DESC_H, ...
+                'Fix all phases to 0 and optimize amplitudes only. Mutually exclusive with phase_only.');
+            y = y - SEC_GAP;
+
+            % Use uniform init
+            y = y - ROW_H;
+            obj.opt_use_uniform_check = uicheckbox(content, 'Text', 'Use uniform init', ...
+                'Position', [x_label y w_full ROW_H], ...
+                'Value', cfg_get(opt_cfg, 'use_uniform_init', true), 'FontSize', 10);
+            y = y - ROW_GAP - DESC_H;
+            mk_desc_pos(content, x_full, y, w_full, DESC_H, ...
+                'Include a deterministic uniform-weights run (amplitude=1, phase=0) as the first restart.');
+            y = y - SEC_GAP;
+
+            % Use single-element init
+            y = y - ROW_H;
+            obj.opt_use_single_check = uicheckbox(content, 'Text', 'Use single-element init', ...
+                'Position', [x_label y w_full ROW_H], ...
+                'Value', cfg_get(opt_cfg, 'use_single_element_init', true), 'FontSize', 10);
+            y = y - ROW_GAP - DESC_H;
+            mk_desc_pos(content, x_full, y, w_full, DESC_H, ...
+                'Add one extra restart per element, starting with only that element active (adds N_elements restarts).');
+
+            % ── Pinned run bar ─────────────────────────────────────
+            run_grid = uigridlayout(outer, [1, 2]);
+            run_grid.Layout.Row    = 2;
+            run_grid.Layout.Column = 1;
+            run_grid.ColumnWidth   = {150, '1x'};
+            run_grid.Padding       = [8 4 8 4];
+            run_grid.ColumnSpacing = 8;
+
+            obj.opt_run_btn = uibutton(run_grid, 'Text', 'Run Optimization', ...
+                'FontSize', 11, 'FontWeight', 'bold', ...
+                'ButtonPushedFcn', @(~,~) obj.on_run_optimization());
+            obj.opt_run_btn.Layout.Row    = 1;
+            obj.opt_run_btn.Layout.Column = 1;
+
+            obj.opt_status_label = uilabel(run_grid, 'Text', '', ...
+                'FontSize', 10, 'FontColor', [0.45 0.45 0.45]);
+            obj.opt_status_label.Layout.Row    = 1;
+            obj.opt_status_label.Layout.Column = 2;
+        end
+
         % ── BUILD METRICS PANEL ───────────────────────────────────
 
         function build_metrics_panel(obj, parent)
         % Four fixed metric rows.
-            met_panel = uipanel(parent, 'Title', 'Metrics');
-            met_panel.Layout.Row    = 3;
-            met_panel.Layout.Column = 1;
-
-            met_grid = uigridlayout(met_panel, [4, 2]);
+            met_grid = uigridlayout(parent, [4, 2]);
             met_grid.ColumnWidth = {100, '1x'};
             met_grid.RowHeight   = repmat({22}, 1, 4);
             met_grid.Padding     = [6 6 6 6];
@@ -563,7 +801,8 @@ classdef ManualWeightsTuner < handle
         function add_directive_row(obj, directive_dict)
         % Append a directive row, using directive_dict fields or defaults.
             D = struct('type', 'peak', 'theta', 0.0, 'phi', 0.0, ...
-                       'theta_width', 5.0, 'phi_width', 5.0, 'weight', 1.0);
+                       'theta_width', 5.0, 'phi_width', 5.0, 'weight', 1.0, ...
+                       'aggregation', 'mean');
             if ~isempty(directive_dict) && isstruct(directive_dict)
                 d = directive_dict;
                 sym_w = [];
@@ -576,6 +815,9 @@ classdef ManualWeightsTuner < handle
                 if isfield(d, 'phi_width'),   D.phi_width   = d.phi_width;
                 elseif ~isempty(sym_w),       D.phi_width   = sym_w;         end
                 if isfield(d, 'weight'),      D.weight      = d.weight;      end
+                if isfield(d, 'aggregation') && ~isempty(d.aggregation)
+                    D.aggregation = d.aggregation;
+                end
             end
 
             k = numel(obj.directive_data) + 1;
@@ -597,10 +839,10 @@ classdef ManualWeightsTuner < handle
 
         function rw = make_directive_row_widgets(obj, row_k, D)
         % Create all widgets for directive row row_k from data struct D.
-            row_grid = uigridlayout(obj.directives_inner_grid, [1, 8]);
+            row_grid = uigridlayout(obj.directives_inner_grid, [1, 9]);
             row_grid.Layout.Row    = row_k;
             row_grid.Layout.Column = 1;
-            row_grid.ColumnWidth   = {58, 46, 46, 46, 46, 36, 30, '1x'};
+            row_grid.ColumnWidth   = {52, 42, 42, 42, 42, 34, 64, 24, '1x'};
             row_grid.Padding       = [0 1 0 1];
             row_grid.ColumnSpacing = 2;
 
@@ -624,14 +866,21 @@ classdef ManualWeightsTuner < handle
                 efs{f} = ef;
             end
 
+            agg_dd = uidropdown(row_grid, ...
+                'Items',           {'mean', 'max', 'min'}, ...
+                'Value',           D.aggregation, ...
+                'FontSize',        10, ...
+                'ValueChangedFcn', @(src,~) obj.on_directive_field_changed(row_k, 'aggregation', src.Value));
+            agg_dd.Layout.Column = 7;
+
             rm_btn = uibutton(row_grid, 'Text', char(215), ...
                 'FontSize',        12, ...
                 'ButtonPushedFcn', @(~,~) obj.remove_directive_row(row_k));
-            rm_btn.Layout.Column = 7;
+            rm_btn.Layout.Column = 8;
 
             metric_lbl = uilabel(row_grid, 'Text', char(8212), ...
                 'FontSize', 10, 'FontName', 'Courier New');
-            metric_lbl.Layout.Column = 8;
+            metric_lbl.Layout.Column = 9;
 
             rw.row_grid   = row_grid;
             rw.type_dd    = type_dd;
@@ -640,6 +889,7 @@ classdef ManualWeightsTuner < handle
             rw.tw_ef      = efs{3};
             rw.pw_ef      = efs{4};
             rw.weight_ef  = efs{5};
+            rw.agg_dd     = agg_dd;
             rw.metric_lbl = metric_lbl;
         end
 
@@ -800,6 +1050,127 @@ classdef ManualWeightsTuner < handle
             delete(obj.fig);
         end
 
+        function on_load_data_folder(obj)
+        % Pick a new element_patterns_dir, write a temp config with that
+        % folder substituted, and reload via the next_config_path mechanism.
+            patterns_dir = obj.config.element_patterns_dir;
+            if ~isfolder(patterns_dir)
+                repo_root    = fileparts(fileparts(mfilename('fullpath')));
+                patterns_dir = fullfile(repo_root, patterns_dir);
+            end
+            start_dir = fileparts(patterns_dir);
+            folder = uigetdir(start_dir, 'Select Element Patterns Data Folder');
+            if isequal(folder, 0), return; end
+
+            raw = fileread(obj.config_path_str);
+            new_line = sprintf('element_patterns_dir: "%s"', strrep(folder, '\', '/'));
+            rawlines = regexp(raw, '\r\n|\r|\n', 'split');
+            for i = 1:numel(rawlines)
+                if ~isempty(regexp(rawlines{i}, '^element_patterns_dir:', 'once'))
+                    rawlines{i} = new_line;
+                    break;
+                end
+            end
+            raw = strjoin(rawlines, newline);
+
+            tmp_path = fullfile(tempdir, sprintf('manual_tuner_config_%s.yaml', ...
+                char(datetime('now', 'Format', 'yyyyMMdd_HHmmssSSS'))));
+            fid = fopen(tmp_path, 'w');
+            fwrite(fid, raw);
+            fclose(fid);
+
+            obj.next_config_path = tmp_path;
+            delete(obj.fig);
+        end
+
+        function on_amp_unbounded_changed(obj, is_unbounded)
+            obj.opt_amp_min_field.Enable = ~is_unbounded;
+            obj.opt_amp_max_field.Enable = ~is_unbounded;
+        end
+
+        function on_run_optimization(obj)
+        % Build a temp config from the current directives + optimizer settings
+        % and run the full run_optimization() pipeline, then load the
+        % resulting weights into the tuner.
+            directives = obj.get_directives_from_data();
+            if isempty(directives)
+                uialert(obj.fig, 'Add at least one directive before running the optimizer.', ...
+                    'No Directives');
+                return;
+            end
+
+            optimizer_cfg = struct();
+            optimizer_cfg.max_iterations      = obj.opt_max_iter_field.Value;
+            optimizer_cfg.cost_tolerance      = obj.opt_cost_tol_field.Value;
+            optimizer_cfg.gradient_tolerance  = obj.opt_grad_tol_field.Value;
+            optimizer_cfg.n_restarts          = obj.opt_n_restarts_field.Value;
+            if obj.opt_amp_unbounded_check.Value
+                optimizer_cfg.amplitude_bounds = [];
+            else
+                optimizer_cfg.amplitude_bounds = ...
+                    [obj.opt_amp_min_field.Value, obj.opt_amp_max_field.Value];
+            end
+            optimizer_cfg.phase_only              = obj.opt_phase_only_check.Value;
+            optimizer_cfg.amplitude_only          = obj.opt_amplitude_only_check.Value;
+            optimizer_cfg.use_uniform_init        = obj.opt_use_uniform_check.Value;
+            optimizer_cfg.use_single_element_init = obj.opt_use_single_check.Value;
+
+            raw = fileread(obj.config_path_str);
+            raw = ManualWeightsTuner.replace_yaml_section(raw, 'directives', ...
+                ManualWeightsTuner.format_directives_yaml(directives));
+            raw = ManualWeightsTuner.replace_yaml_section(raw, 'optimizer', ...
+                ManualWeightsTuner.format_optimizer_yaml(optimizer_cfg));
+
+            % Run with the polarization currently shown in the toolbar,
+            % regardless of what config.yaml originally specified.
+            pol_line = sprintf('polarization: "%s"', obj.active_polarization);
+            rawlines = regexp(raw, '\r\n|\r|\n', 'split');
+            found = false;
+            for i = 1:numel(rawlines)
+                if ~isempty(regexp(rawlines{i}, '^polarization:', 'once'))
+                    rawlines{i} = pol_line;
+                    found = true;
+                    break;
+                end
+            end
+            if ~found
+                rawlines{end+1} = pol_line;
+            end
+            raw = strjoin(rawlines, newline);
+
+            tmp_path = fullfile(tempdir, sprintf('manual_tuner_run_config_%s.yaml', ...
+                char(datetime('now', 'Format', 'yyyyMMdd_HHmmssSSS'))));
+            fid = fopen(tmp_path, 'w');
+            fwrite(fid, raw);
+            fclose(fid);
+
+            obj.opt_run_btn.Enable = 'off';
+            obj.opt_status_label.Text = 'Running optimization... (see MATLAB console for progress)';
+            d = uiprogressdlg(obj.fig, 'Title', 'Optimizing', ...
+                'Message', 'Running multi-start optimization... see MATLAB console for progress.', ...
+                'Indeterminate', 'on');
+            drawnow;
+
+            try
+                output_dir = run_optimization(tmp_path);
+                weights_csv = fullfile(output_dir, 'weights.csv');
+                obj.weights_complex = obj.parse_weights_csv(weights_csv);
+                obj.sync_entries_to_weights();
+                obj.recompute_and_redraw();
+                obj.opt_status_label.Text = sprintf('Done. Results: %s', output_dir);
+                obj.set_status(sprintf('Optimization complete %s results saved to: %s', char(183), output_dir));
+            catch exc
+                obj.opt_status_label.Text = 'Optimization failed.';
+                close(d);
+                uialert(obj.fig, exc.message, 'Optimization Error');
+                obj.opt_run_btn.Enable = 'on';
+                return;
+            end
+
+            close(d);
+            obj.opt_run_btn.Enable = 'on';
+        end
+
         function on_directive_change(obj)
             obj.recompute_and_redraw();
         end
@@ -865,8 +1236,12 @@ classdef ManualWeightsTuner < handle
             w_power = sum(abs(obj.weights_complex) .^ 2);
             w_norm  = obj.weights_complex / sqrt(max(w_power, ManualWeightsTuner.LOG10_EPSILON));
 
-            af_copol = compute_array_factor(w_norm, obj.element_patterns_copol);
-            af_cross = compute_array_factor(w_norm, obj.element_patterns_cross);
+            component_names = fieldnames(obj.element_pattern_stacks);
+            af_components = struct();
+            for k = 1:numel(component_names)
+                af_components.(component_names{k}) = ...
+                    compute_array_factor(w_norm, obj.element_pattern_stacks.(component_names{k}));
+            end
 
             % Spherical total radiated power (CST partial-directivity normaliser).
             theta_rad = deg2rad(obj.theta_deg(:));
@@ -877,19 +1252,22 @@ classdef ManualWeightsTuner < handle
                 dphi_rad = 2 * pi;
             end
             sin_theta = sin(theta_rad);
-            p_total   = ManualWeightsTuner.sph_power(af_copol, sin_theta, dtheta_rad, dphi_rad) + ...
-                        ManualWeightsTuner.sph_power(af_cross,  sin_theta, dtheta_rad, dphi_rad);
+            p_total = 0;
+            for k = 1:numel(component_names)
+                p_total = p_total + ManualWeightsTuner.sph_power( ...
+                    af_components.(component_names{k}), sin_theta, dtheta_rad, dphi_rad);
+            end
 
-            switch obj.active_polarization
-                case ManualWeightsTuner.POLARIZATION_CROSS
-                    power_linear_grid    = abs(af_cross) .^ 2;
-                    metrics_array_factor = af_cross;
-                case ManualWeightsTuner.POLARIZATION_TOTAL
-                    power_linear_grid    = abs(af_copol) .^ 2 + abs(af_cross) .^ 2;
-                    metrics_array_factor = sqrt(power_linear_grid);
-                otherwise
-                    power_linear_grid    = abs(af_copol) .^ 2;
-                    metrics_array_factor = af_copol;
+            if strcmp(obj.active_polarization, ManualWeightsTuner.POLARIZATION_TOTAL)
+                power_linear_grid = zeros(size(obj.theta_deg, 1), numel(obj.phi_deg));
+                for k = 1:numel(component_names)
+                    power_linear_grid = power_linear_grid + abs(af_components.(component_names{k})) .^ 2;
+                end
+                metrics_array_factor = sqrt(power_linear_grid);
+            else
+                af = af_components.(obj.active_polarization);
+                power_linear_grid    = abs(af) .^ 2;
+                metrics_array_factor = af;
             end
 
             obj.dbi_grid = compute_directivity_dbi_grid( ...
@@ -917,8 +1295,9 @@ classdef ManualWeightsTuner < handle
             directives = obj.get_directives_from_data();
             obj.update_directive_overlays(directives);
 
+            ep_reference = obj.element_pattern_stacks.(component_names{1});
             metrics = evaluate_metrics( ...
-                obj.element_patterns_copol, obj.theta_deg, obj.phi_deg, ...
+                ep_reference, obj.theta_deg, obj.phi_deg, ...
                 obj.weights_complex, directives, [], metrics_array_factor, p_total);
             obj.update_metrics_labels(metrics);
         end
@@ -1017,6 +1396,7 @@ classdef ManualWeightsTuner < handle
                 ds.theta_width = d.theta_width;
                 ds.phi_width   = d.phi_width;
                 ds.weight      = d.weight;
+                ds.aggregation = d.aggregation;
                 directives{end + 1} = ds; %#ok<AGROW>
             end
         end
@@ -1095,6 +1475,72 @@ classdef ManualWeightsTuner < handle
             if isempty(b) && numel(parts) > 1, b = parts{end - 1}; end
         end
 
+        function text = format_directives_yaml(directives)
+        % Serialize a cell array of directive structs (as returned by
+        % get_directives_from_data) into a YAML "directives:" block
+        % compatible with read_config_yaml.
+            lines = {'directives:'};
+            for k = 1:numel(directives)
+                d = directives{k};
+                lines{end + 1} = sprintf('  - type: "%s"', d.type); %#ok<AGROW>
+                lines{end + 1} = sprintf('    theta: %g', d.theta); %#ok<AGROW>
+                lines{end + 1} = sprintf('    phi: %g', d.phi); %#ok<AGROW>
+                lines{end + 1} = sprintf('    theta_width: %g', d.theta_width); %#ok<AGROW>
+                lines{end + 1} = sprintf('    phi_width: %g', d.phi_width); %#ok<AGROW>
+                lines{end + 1} = sprintf('    weight: %g', d.weight); %#ok<AGROW>
+                lines{end + 1} = sprintf('    aggregation: "%s"', d.aggregation); %#ok<AGROW>
+            end
+            text = strjoin(lines, newline);
+        end
+
+        function text = format_optimizer_yaml(opt_cfg)
+        % Serialize the optimizer settings struct into a YAML "optimizer:"
+        % block compatible with read_config_yaml.
+            lines = {'optimizer:'};
+            lines{end + 1} = sprintf('  max_iterations: %d', round(opt_cfg.max_iterations));
+            lines{end + 1} = sprintf('  cost_tolerance: %g', opt_cfg.cost_tolerance);
+            lines{end + 1} = sprintf('  gradient_tolerance: %g', opt_cfg.gradient_tolerance);
+            lines{end + 1} = sprintf('  n_restarts: %d', round(opt_cfg.n_restarts));
+            if isempty(opt_cfg.amplitude_bounds)
+                lines{end + 1} = '  amplitude_bounds: null';
+            else
+                lines{end + 1} = sprintf('  amplitude_bounds: [%g, %g]', ...
+                    opt_cfg.amplitude_bounds(1), opt_cfg.amplitude_bounds(2));
+            end
+            lines{end + 1} = sprintf('  phase_only: %s', ManualWeightsTuner.bool_str(opt_cfg.phase_only));
+            lines{end + 1} = sprintf('  amplitude_only: %s', ManualWeightsTuner.bool_str(opt_cfg.amplitude_only));
+            lines{end + 1} = sprintf('  use_uniform_init: %s', ManualWeightsTuner.bool_str(opt_cfg.use_uniform_init));
+            lines{end + 1} = sprintf('  use_single_element_init: %s', ManualWeightsTuner.bool_str(opt_cfg.use_single_element_init));
+            text = strjoin(lines, newline);
+        end
+
+        function s = bool_str(tf)
+            if tf, s = 'true'; else, s = 'false'; end
+        end
+
+        function raw = replace_yaml_section(raw, key, replacement_text)
+        % Replace the top-level "key:" block (the key line through the line
+        % before the next top-level "name:" key) in raw YAML text with
+        % replacement_text. Used to splice updated directives/optimizer
+        % blocks into a temp copy of config.yaml before running the optimizer.
+            rawlines = regexp(raw, '\r\n|\r|\n', 'split');
+            start_idx = find(~cellfun(@isempty, regexp(rawlines, ['^' key ':'], 'once')), 1);
+            if isempty(start_idx)
+                % Key not present: append the new block at the end.
+                raw = [raw, newline, replacement_text, newline];
+                return;
+            end
+            end_idx = numel(rawlines) + 1;
+            for i = (start_idx + 1):numel(rawlines)
+                if ~isempty(regexp(rawlines{i}, '^[A-Za-z_][A-Za-z0-9_]*:', 'once'))
+                    end_idx = i;
+                    break;
+                end
+            end
+            new_lines = [rawlines(1:start_idx - 1), strsplit(replacement_text, newline), rawlines(end_idx:end)];
+            raw = strjoin(new_lines, newline);
+        end
+
     end % static methods
 
 end % classdef
@@ -1104,4 +1550,26 @@ end % classdef
 function mk_sep(parent_grid, col_index)
     p = uipanel(parent_grid, 'BorderType', 'none', 'BackgroundColor', [0.6 0.6 0.6]);
     p.Layout.Column = col_index;
+end
+
+% ── File-level helper: right-aligned label at an absolute position ──
+function lbl = mk_label_pos(parent, x, y, w, h, text)
+    lbl = uilabel(parent, 'Text', text, 'FontSize', 10, ...
+        'HorizontalAlignment', 'right', 'Position', [x y w h]);
+end
+
+% ── File-level helper: wrapped description label at an absolute position ──
+function lbl = mk_desc_pos(parent, x, y, w, h, text)
+    lbl = uilabel(parent, 'Text', text, 'FontSize', 9, ...
+        'FontColor', [0.5 0.5 0.5], 'WordWrap', 'on', ...
+        'VerticalAlignment', 'top', 'Position', [x y w h]);
+end
+
+% ── File-level helper: read optional config field with default ────
+function val = cfg_get(s, name, default)
+    if isfield(s, name) && ~isempty(s.(name))
+        val = s.(name);
+    else
+        val = default;
+    end
 end

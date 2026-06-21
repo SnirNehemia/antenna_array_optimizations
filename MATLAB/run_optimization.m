@@ -26,8 +26,16 @@ if ~isfile(config_path) && isfile(fullfile(REPO_ROOT, config_path))
     config_path = fullfile(REPO_ROOT, config_path);
 end
 
-SUPPORTED_POLARIZATIONS = {'copol', 'cross', 'total'};
-REQUIRED_CONFIG_KEYS    = {'element_patterns_dir', 'directives', 'optimizer', 'output'};
+% Special polarization keyword: incoherent power sum across all detected
+% polarization components (e.g. |AF_Copol|^2 + |AF_Cross|^2, or
+% |AF_Theta|^2 + |AF_Phi|^2). Only supported when exactly two components are
+% present, since the optimizer/cost function take a single secondary stack.
+POLARIZATION_TOTAL = 'total';
+
+% Default polarization when not specified in config.yaml.
+DEFAULT_POLARIZATION = 'copol';
+
+REQUIRED_CONFIG_KEYS = {'element_patterns_dir', 'directives', 'optimizer', 'output'};
 
 % ── Load and validate config ──────────────────────────────────────
 config = read_config_yaml(config_path);
@@ -37,11 +45,7 @@ for i = 1:numel(REQUIRED_CONFIG_KEYS)
             'Missing required config key: ''%s''.', REQUIRED_CONFIG_KEYS{i});
     end
 end
-polarization = get_field(config, 'polarization', 'copol');
-if ~ismember(polarization, SUPPORTED_POLARIZATIONS)
-    error('run_optimization:BadPolarization', ...
-        'Polarization ''%s'' not supported. Options: copol, cross, total.', polarization);
-end
+polarization = get_field(config, 'polarization', DEFAULT_POLARIZATION);
 
 % ── Timestamped output directory ──────────────────────────────────
 results_dir = resolve_path(config.output.results_dir, REPO_ROOT);
@@ -58,12 +62,33 @@ theta_deg = patterns(1).theta_deg;
 phi_deg   = patterns(1).phi_deg;
 fprintf('  Polarization: %s\n', polarization);
 
-if strcmp(polarization, 'total')
-    element_patterns_stacked   = stack_field(patterns, 'E_complex');
-    element_patterns_secondary = stack_field(patterns, 'cross_complex');
+% Component names are matched case-insensitively against whatever
+% Abs(<name>)/Phase(<name>) pairs were detected in the CST export header
+% (e.g. 'Copol'/'Cross' or 'Theta'/'Phi').
+component_names = sort(fieldnames(patterns(1).components));
+
+if strcmpi(polarization, POLARIZATION_TOTAL)
+    % Total field: incoherent power sum across all detected components,
+    % e.g. |AF_Copol|^2 + |AF_Cross|^2 or |AF_Theta|^2 + |AF_Phi|^2.
+    if numel(component_names) ~= 2
+        error('run_optimization:BadPolarization', ...
+            'polarization: ''total'' requires exactly 2 polarization components, found {%s}.', ...
+            strjoin(component_names, ', '));
+    end
+    name_primary   = component_names{1};
+    name_secondary = component_names{2};
+    element_patterns_stacked   = stack_component(patterns, name_primary);
+    element_patterns_secondary = stack_component(patterns, name_secondary);
+    fprintf('  Using ''%s'' + ''%s'' -> total power sum.\n', name_primary, name_secondary);
 else
-    if strcmp(polarization, 'copol'), key = 'E_complex'; else, key = 'cross_complex'; end
-    element_patterns_stacked   = stack_field(patterns, key);
+    matches = component_names(strcmpi(component_names, polarization));
+    if isempty(matches)
+        error('run_optimization:BadPolarization', ...
+            'Polarization ''%s'' not found. Available components: {%s} (or ''total'').', ...
+            polarization, strjoin(component_names, ', '));
+    end
+    fprintf('  Using component ''%s''\n', matches{1});
+    element_patterns_stacked   = stack_component(patterns, matches{1});
     element_patterns_secondary = [];
 end
 [n_elements, n_theta, n_phi] = size(element_patterns_stacked);
@@ -149,16 +174,6 @@ end
 function tf = is_absolute_path(p)
 % True for a Windows drive path (C:\...), UNC (\\...), or POSIX-rooted (/...).
 tf = ~isempty(regexp(p, '^([A-Za-z]:[\\/]|[\\/])', 'once'));
-end
-
-
-function stack = stack_field(patterns, key)
-n = numel(patterns);
-[nt, np_] = size(patterns(1).(key));
-stack = zeros(n, nt, np_);
-for i = 1:n
-    stack(i, :, :) = patterns(i).(key);
-end
 end
 
 

@@ -11,8 +11,8 @@
 # Path to the folder containing all CST element pattern .txt files.
 # One file per array element. All files in this folder are loaded.
 # The number of elements is inferred from the number of files found.
-element_patterns_dir: "data/spacing0.9/"
-
+# element_patterns_dir: "data/spacing0.9/"
+element_patterns_dir: "data/ManyDipoles/"
 
 # ────────────────────────── POLARIZATION ──────────────────────────
 
@@ -22,7 +22,7 @@ element_patterns_dir: "data/spacing0.9/"
 #   "cross"       — Cross-polarization (Abs(Cross) + Phase(Cross)).
 #   "total"       — Total E-field power |E_copol|² + |E_xpol|².
 #                   Manual tuner only (not wired through run_optimization.py).
-polarization: "total"
+polarization: "Theta"
 
 
 # ────────────────────────── OPTIMIZATION DIRECTIVES ───────────────
@@ -58,20 +58,21 @@ directives:
   #   weight: 5.0
 
   - type:   "peak"
-    theta:  30.0          # degrees — boresight
+    theta:  90.0          # degrees — boresight
     phi:    0.0          # degrees
-    theta_width:  10.0         # degrees — total suppression window in theta
-    phi_width:    10.0         # degrees — total suppression window in phi
+    theta_width:  1.0         # degrees — total suppression window in theta
+    phi_width:    360.0         # degrees — total suppression window in phi
     level:  null         # dBi — set to null if unknown; metrics will report achieved value
     weight: 1.0
+    aggregation: "min"
 
-  - type:   "null"
-    theta:  -30.0          # degrees — boresight
-    phi:    0.0          # degrees
-    theta_width:  10.0         # degrees — total suppression window in theta
-    phi_width:    10.0         # degrees — total suppression window in phi
-    level:  null         # dBi — set to null if unknown; metrics will report achieved value
-    weight: 10.0
+  # - type:   "null"
+  #   theta:  -30.0          # degrees — boresight
+  #   phi:    0.0          # degrees
+  #   theta_width:  10.0         # degrees — total suppression window in theta
+  #   phi_width:    10.0         # degrees — total suppression window in phi
+  #   level:  null         # dBi — set to null if unknown; metrics will report achieved value
+  #   weight: 10.0
 
   # - type:   "null"
   #   theta:  60.0         # degrees — interference direction
@@ -96,7 +97,7 @@ optimizer:
   # Maximum L-BFGS-B iterations allowed per restart.
   # The optimizer may stop earlier when cost_tolerance is satisfied.
   # Total iteration budget ≈ n_restarts × max_iterations (upper bound).
-  max_iterations: 20
+  max_iterations: 250
 
   # Relative cost improvement tolerance (scipy ftol / fmincon FunctionTolerance).
   # Stops when: |J_k - J_{k+1}| / max(|J_k|, 1) < cost_tolerance
@@ -142,7 +143,7 @@ optimizer:
   # If true, add one run per array element starting with that element active
   # (weight=1) and all others zeroed. Adds N_elements restarts on top of
   # n_restarts. Disable to reduce total run count.
-  use_single_element_init: false
+  use_single_element_init: true
 
 
 # ────────────────────────── OUTPUT SETTINGS ───────────────────────

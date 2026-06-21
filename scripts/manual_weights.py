@@ -29,7 +29,7 @@ import yaml
 # [MATLAB] MATLAB uses addpath(); no sys.path equivalent
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from src.io.cst_parser import load_element_patterns
+from src.io.cst_parser import load_element_patterns, get_component
 from src.cost.cost_function import compute_array_factor, build_directive_physical_masks
 from src.metrics.metrics import evaluate_metrics, _compute_directivity_dbi_grid
 
@@ -106,11 +106,12 @@ PHASE_SLIDER_MAX_DEG = 180.0
 # Right-column panel width — wider to accommodate inline sliders
 RIGHT_PANEL_WIDTH_PX = 480
 
-# Supported polarisation modes
-# - copol / cross: coherent superposition of the matching complex element pattern
-# - total: orthogonal power sum |AF_copol|² + |AF_xpol|² (see _recompute_and_redraw)
-POLARIZATION_COPOL = "copol"
-POLARIZATION_CROSS = "cross"
+# Polarisation modes — the dropdown is populated dynamically from the
+# polarization components detected in the loaded element patterns (e.g.
+# "Copol"/"Cross" or "Theta"/"Phi"), plus the special "total" keyword below.
+# - <component name>: coherent superposition of that complex element pattern
+# - total: incoherent power sum across all detected components, e.g.
+#   |AF_a|² + |AF_b|² (see _recompute_and_redraw)
 POLARIZATION_TOTAL = "total"
 
 # Heatmap display modes
@@ -118,7 +119,7 @@ DISPLAY_RELATIVE = "relative"        # 0 dB at live peak, floor at -DYNAMIC_RANG
 DISPLAY_ABSOLUTE = "absolute"        # Absolute directivity in dBi, user-set clim
 
 # Default dBi range used when "absolute" display mode is selected
-DEFAULT_DBI_MIN = -40.0
+DEFAULT_DBI_MIN = -30.0
 DEFAULT_DBI_MAX =  10.0
 
 # Width (characters) of the dBi min/max Entry widgets in the toolbar
@@ -202,23 +203,28 @@ class ManualWeightsTuner:
         self._phi_deg: np.ndarray = element_patterns[0]["phi_deg"]      # (N_phi,)   deg
         self._n_elements: int = len(element_patterns)
 
-        # Pre-compute stacked element patterns for both polarisation channels.
-        # copol: complex co-pol field — E_complex = copol_abs · exp(j · copol_phase)
-        # cross: complex cross-pol field — same formula on the cross-pol columns
-        # The 'total' display mode combines them in power: |AF_copol|² + |AF_xpol|²
-        # (orthogonal channels add in power; see _recompute_and_redraw).
+        # Pre-compute stacked element patterns for every polarisation component
+        # detected in the loaded data (e.g. "Copol"/"Cross" or "Theta"/"Phi").
+        # The 'total' display mode combines all of them in power:
+        # |AF_a|² + |AF_b|² + ... (orthogonal channels add in power; see
+        # _recompute_and_redraw).
         # [MATLAB] avoid list comprehension; use a for-loop to build a 3-D array
-        self._element_patterns_copol: np.ndarray = np.stack(
-            [p["E_complex"] for p in element_patterns], axis=0
-        )
-        self._element_patterns_cross: np.ndarray = np.stack(
-            [p["cross_complex"] for p in element_patterns], axis=0
+        self._element_pattern_stacks: dict[str, np.ndarray] = {}
+        for component_name in element_patterns[0]["components"]:
+            self._element_pattern_stacks[component_name] = np.stack(
+                [get_component(p, component_name)["complex"] for p in element_patterns],
+                axis=0,
+            )
+
+        # Polarisation dropdown options: every detected component plus "total".
+        self._polarization_options: list[str] = (
+            list(self._element_pattern_stacks.keys()) + [POLARIZATION_TOTAL]
         )
 
         # Active polarisation flag — switched by the polarisation combobox.
         # Stored as a string rather than a stack reference because 'total' uses
-        # both stacks together and cannot be represented by a single one.
-        self._active_polarization: str = POLARIZATION_COPOL
+        # all stacks together and cannot be represented by a single one.
+        self._active_polarization: str = POLARIZATION_TOTAL
 
         # Model name: basename of element_patterns_dir — shown in toolbar and figure title
         self._model_name: str = Path(self._config["element_patterns_dir"]).name
@@ -302,8 +308,9 @@ class ManualWeightsTuner:
         for directive_dict in self._config.get("directives", []):
             self._add_directive_row(directive_dict)
 
-        # Render initial pattern with uniform weights
-        self._recompute_and_redraw()
+        # Apply the default display mode (sets colorbar label/ticks to match
+        # DISPLAY_ABSOLUTE) and render the initial pattern with uniform weights.
+        self._on_display_mode_change()
 
         self._set_status(
             f"{self._n_elements} elements loaded · "
@@ -382,13 +389,15 @@ class ManualWeightsTuner:
             side=tk.RIGHT, fill=tk.Y, padx=10, pady=4
         )
 
-        # Polarisation selector — controls which element pattern stack is active
-        self._polarization_var = tk.StringVar(value=POLARIZATION_COPOL)
+        # Polarisation selector — controls which element pattern stack is active.
+        # Options are populated dynamically from the components detected in the
+        # loaded element patterns (e.g. "Copol"/"Cross" or "Theta"/"Phi"), plus "total".
+        self._polarization_var = tk.StringVar(value=self._active_polarization)
         pol_combo = ttk.Combobox(
             toolbar,
             textvariable=self._polarization_var,
-            values=[POLARIZATION_COPOL, POLARIZATION_CROSS, POLARIZATION_TOTAL],
-            width=6,
+            values=self._polarization_options,
+            width=8,
             state="readonly",
         )
         pol_combo.pack(side=tk.RIGHT, pady=4)
@@ -396,7 +405,7 @@ class ManualWeightsTuner:
             "<<ComboboxSelected>>", lambda _: self._on_polarization_change()
         )
         tk.Label(
-            toolbar, text="Polarisation:", font=LABEL_FONT, bg=PANEL_BG
+            toolbar, text="Polarization:", font=LABEL_FONT, bg=PANEL_BG
         ).pack(side=tk.RIGHT, padx=(0, 2), pady=5)
 
         ttk.Separator(toolbar, orient="vertical").pack(
@@ -430,7 +439,7 @@ class ManualWeightsTuner:
         ).pack(side=tk.RIGHT, padx=(4, 2), pady=5)
 
         # Display-mode combobox: relative-to-peak vs absolute dBi
-        self._display_mode_var = tk.StringVar(value=DISPLAY_RELATIVE)
+        self._display_mode_var = tk.StringVar(value=DISPLAY_ABSOLUTE)
         disp_combo = ttk.Combobox(
             toolbar,
             textvariable=self._display_mode_var,
@@ -1045,10 +1054,11 @@ class ManualWeightsTuner:
     def _on_polarization_change(self) -> None:
         """Update the active polarisation channel and trigger a redraw.
 
-        copol: coherent superposition of complex co-pol element patterns.
-        cross: coherent superposition of complex cross-pol element patterns.
-        total: orthogonal power sum  |AF_copol|² + |AF_xpol|²  (the two
-               polarization components are orthogonal so their powers add).
+        Each non-"total" option is a coherent superposition of the matching
+        complex element pattern component (e.g. "Copol", "Cross", "Theta",
+        "Phi" — whatever was detected in the loaded data).
+        "total": incoherent power sum across all detected components, e.g.
+                 |AF_a|² + |AF_b|² (orthogonal components add in power).
         """
         self._active_polarization = self._polarization_var.get()
         self._recompute_and_redraw()
@@ -1147,12 +1157,13 @@ class ManualWeightsTuner:
         """
         directives = self._get_directives_from_ui()
 
-        # ── 1) Compute both copol and cross AFs for CST-convention directivity ──
-        # Both stacks are always computed so that directivity can be normalised by
-        # total radiated power P_copol + P_cross (IEEE Std 149 partial directivity),
-        # matching the denominator CST uses when displaying component patterns.
-        # The "active polarisation" controls which power is shown in the heatmap;
-        # normalisation always uses the combined power.
+        # ── 1) Compute the AF for every detected polarisation component ──
+        # All component stacks are always computed so that directivity can be
+        # normalised by the total radiated power P_a + P_b + ... (IEEE Std 149
+        # partial directivity), matching the denominator CST uses when
+        # displaying component patterns. The "active polarisation" controls
+        # which power is shown in the heatmap; normalisation always uses the
+        # combined power across all components.
         #
         # Power-normalise weights to match the optimizer's cost_fn convention:
         #   w_norm = w / ||w||₂
@@ -1162,8 +1173,10 @@ class ManualWeightsTuner:
         _w_power = float(np.sum(np.abs(self._weights_complex) ** 2))
         _weights_norm = self._weights_complex / np.sqrt(max(_w_power, 1e-30))
 
-        af_copol = compute_array_factor(_weights_norm, self._element_patterns_copol)
-        af_cross = compute_array_factor(_weights_norm, self._element_patterns_cross)
+        af_components = {
+            name: compute_array_factor(_weights_norm, stack)
+            for name, stack in self._element_pattern_stacks.items()
+        }
 
         # Spherical integral for total radiated power: P = Σ|AF|² sin(θ) Δθ Δφ
         # [MATLAB] sin_t = sind(theta_deg)'; p = sum(sum((abs(af).^2) .* sin_t)) * dth * dph;
@@ -1175,24 +1188,22 @@ class ManualWeightsTuner:
         def _spherical_power(af):
             return float(np.sum(np.abs(af) ** 2 * sin_theta[:, np.newaxis])) * dtheta_rad * dphi_rad
 
-        p_total = _spherical_power(af_copol) + _spherical_power(af_cross)
+        p_total = sum(_spherical_power(af) for af in af_components.values())
 
         # ── 2) Power grid + metrics AF, by polarisation channel ──────
-        # copol / cross: |AF|² of a single coherent superposition.
-        # total:         |AF_copol|² + |AF_xpol|² (orthogonal channels).
+        # <component>: |AF|² of a single coherent superposition.
+        # total:       Σ|AF_component|² (orthogonal channels add in power).
         # For metrics we hand a "pseudo-AF" whose |·|² equals the power grid;
         # phase is irrelevant because evaluate_metrics() only ever uses |AF|².
-        if self._active_polarization == POLARIZATION_CROSS:
-            power_linear_grid    = np.abs(af_cross) ** 2
-            metrics_array_factor = af_cross
-        elif self._active_polarization == POLARIZATION_TOTAL:
+        if self._active_polarization == POLARIZATION_TOTAL:
             # Orthogonal polarizations add in power, not field.
-            # [MATLAB] power_total = abs(af_copol).^2 + abs(af_cross).^2;
-            power_linear_grid    = np.abs(af_copol) ** 2 + np.abs(af_cross) ** 2
+            # [MATLAB] power_total = sum over components of abs(af_component).^2;
+            power_linear_grid = sum(np.abs(af) ** 2 for af in af_components.values())
             metrics_array_factor = np.sqrt(power_linear_grid).astype(complex)
-        else:  # POLARIZATION_COPOL (default)
-            power_linear_grid    = np.abs(af_copol) ** 2
-            metrics_array_factor = af_copol
+        else:
+            af = af_components[self._active_polarization]
+            power_linear_grid    = np.abs(af) ** 2
+            metrics_array_factor = af
 
         # ── 3) Build display grid + colorbar limits by display mode ──
         # Always compute the absolute dBi grid — reused for the hover readout
@@ -1232,7 +1243,7 @@ class ManualWeightsTuner:
         # Pass CST-convention total-power normaliser so that the metric panel
         # shows the same partial directivity that CST displays.
         metrics = evaluate_metrics(
-            self._element_patterns_copol,
+            next(iter(self._element_pattern_stacks.values())),
             self._theta_deg,
             self._phi_deg,
             self._weights_complex,

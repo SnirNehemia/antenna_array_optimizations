@@ -25,7 +25,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 import numpy as np
 import yaml
 
-from src.io.cst_parser import load_element_patterns
+from src.io.cst_parser import load_element_patterns, get_component
 from src.cost.cost_function import compute_array_factor
 from src.optimize.optimizer import run_optimizer
 from src.metrics.metrics import evaluate_metrics
@@ -33,19 +33,14 @@ from src.plot.plotter import save_all_plots, save_pattern_gif
 
 # ────────────────────────── CONSTANTS ─────────────────────────────
 
-# Polarization modes wired through the optimizer pipeline.
-# "copol" → E_complex (co-pol), "cross" → cross_complex (cross-pol).
-# "total" is supported only in the interactive manual_weights tool, where the
-# power-sum |AF_copol|² + |AF_xpol|² is rendered without a single coherent AF.
-SUPPORTED_POLARIZATIONS = ("copol", "cross", "total")
+# Special polarization keyword: incoherent power sum across all detected
+# polarization components (e.g. |AF_Copol|² + |AF_Cross|², or
+# |AF_Theta|² + |AF_Phi|²). Only supported when exactly two components are
+# present, since the optimizer/cost function take a single secondary stack.
+POLARIZATION_TOTAL = "total"
 
-# Mapping from single-stack polarization name → pattern dict key.
-# "total" is handled separately: it loads both E_complex and cross_complex and
-# passes the cross stack as element_patterns_secondary to run_optimizer.
-POLARIZATION_TO_PATTERN_KEY = {
-    "copol": "E_complex",
-    "cross": "cross_complex",
-}
+# Default polarization when not specified in config.yaml.
+DEFAULT_POLARIZATION = "copol"
 
 # Required top-level keys in config.yaml.
 REQUIRED_CONFIG_KEYS = ("element_patterns_dir", "directives", "optimizer", "output")
@@ -71,14 +66,17 @@ def _load_config(config_path):
 
 
 def _validate_config(config):
-    """Check that all required config keys are present and polarization is supported.
+    """Check that all required config keys are present.
+
+    Validation of the ``polarization`` value against the polarization
+    components actually present in the loaded element patterns happens
+    later, in :func:`main`, once the data has been loaded.
 
     Args:
         config (dict): Parsed configuration dictionary.
 
     Raises:
         KeyError: If a required top-level key is absent.
-        ValueError: If the specified polarization is not yet implemented.
     """
     for key in REQUIRED_CONFIG_KEYS:
         if key not in config:
@@ -86,14 +84,6 @@ def _validate_config(config):
                 f"Missing required config key: '{key}'. "
                 f"Required keys: {REQUIRED_CONFIG_KEYS}."
             )
-
-    polarization = config.get("polarization", "copol")
-    if polarization not in SUPPORTED_POLARIZATIONS:
-        raise ValueError(
-            f"Polarization '{polarization}' is not yet implemented. "
-            f"Supported options: {SUPPORTED_POLARIZATIONS}. "
-            "Set polarization: \"copol\" in config.yaml."
-        )
 
 
 def _create_output_dir(results_dir):
@@ -277,28 +267,45 @@ def main():
     patterns = load_element_patterns(config["element_patterns_dir"])
 
     # Pick the per-element complex pattern(s) according to the chosen polarization.
-    polarization = config.get("polarization", "copol")
+    # Component names are matched case-insensitively against whatever
+    # Abs(<name>)/Phase(<name>) pairs were detected in the CST export header
+    # (e.g. "Copol"/"Cross" or "Theta"/"Phi").
+    polarization = config.get("polarization", DEFAULT_POLARIZATION)
     print(f"  Polarization: {polarization}")
 
     theta_deg = patterns[0]["theta_deg"]
     phi_deg   = patterns[0]["phi_deg"]
+    component_names = sorted(patterns[0]["components"].keys())
 
-    if polarization == "total":
-        # Total field: incoherent power sum |AF_copol|² + |AF_cross|².
-        # Both stacks share the same weights; the cross stack is passed as secondary.
+    if polarization.lower() == POLARIZATION_TOTAL:
+        # Total field: incoherent power sum across all detected components,
+        # e.g. |AF_Copol|² + |AF_Cross|² or |AF_Theta|² + |AF_Phi|².
+        if len(component_names) != 2:
+            raise ValueError(
+                f"polarization: 'total' requires exactly 2 polarization "
+                f"components, found {component_names}."
+            )
+        name_primary, name_secondary = component_names
         element_patterns_stacked = np.stack(
-            [p["E_complex"] for p in patterns], axis=0
+            [get_component(p, name_primary)["complex"] for p in patterns], axis=0
         )
         element_patterns_secondary = np.stack(
-            [p["cross_complex"] for p in patterns], axis=0
+            [get_component(p, name_secondary)["complex"] for p in patterns], axis=0
         )
-        print("  Using E_complex (copol) + cross_complex (cross) → total power sum.")
+        print(f"  Using '{name_primary}' + '{name_secondary}' -> total power sum.")
     else:
-        pattern_key = POLARIZATION_TO_PATTERN_KEY[polarization]
-        print(f"  Using '{pattern_key}'")
+        matches = [name for name in component_names if name.lower() == polarization.lower()]
+        if not matches:
+            raise ValueError(
+                f"Polarization '{polarization}' not found. "
+                f"Available components: {component_names} (or 'total')."
+            )
+        print(f"  Using component '{matches[0]}'")
         # Stack individual element patterns into a single 3D array.
-        element_patterns_stacked = np.stack([p[pattern_key] for p in patterns], axis=0)
-        # [MATLAB] element_patterns_stacked = cat(3, patterns{:}.(pattern_key));
+        element_patterns_stacked = np.stack(
+            [get_component(p, polarization)["complex"] for p in patterns], axis=0
+        )
+        # [MATLAB] element_patterns_stacked = cat(3, patterns{:}.components.(name).complex);
         element_patterns_secondary = None
 
     n_elements, n_theta, n_phi = element_patterns_stacked.shape

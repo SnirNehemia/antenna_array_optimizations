@@ -135,11 +135,13 @@ _CST_DIR = ROOT / "data" / "spacing0.9"
 
 def gen_cst_parser():
     """Reference for parse_cst_file / load_element_patterns on real CST data."""
-    from src.io.cst_parser import parse_cst_file, load_element_patterns
+    from src.io.cst_parser import parse_cst_file, load_element_patterns, get_component
 
     # Parse one specific file (element [1]).
     one_file = _CST_DIR / "farfield (f=2400) [1].txt"
     p = parse_cst_file(one_file)
+    copol = get_component(p, "Copol")
+    cross = get_component(p, "Cross")
 
     n_theta = p["theta_deg"].size
     n_phi   = p["phi_deg"].size
@@ -152,20 +154,20 @@ def gen_cst_parser():
         sample_vals.append({
             "t": t, "q": q,
             "E_abs":         float(p["E_abs"][t, q]),
-            "copol_abs":     float(p["copol_abs"][t, q]),
-            "copol_phase":   float(p["copol_phase"][t, q]),
-            "cross_abs":     float(p["cross_abs"][t, q]),
-            "cross_phase":   float(p["cross_phase"][t, q]),
-            "Ecx_real":      float(p["E_complex"][t, q].real),
-            "Ecx_imag":      float(p["E_complex"][t, q].imag),
-            "Xcx_real":      float(p["cross_complex"][t, q].real),
-            "Xcx_imag":      float(p["cross_complex"][t, q].imag),
+            "copol_abs":     float(copol["abs"][t, q]),
+            "copol_phase":   float(copol["phase"][t, q]),
+            "cross_abs":     float(cross["abs"][t, q]),
+            "cross_phase":   float(cross["phase"][t, q]),
+            "Ecx_real":      float(copol["complex"][t, q].real),
+            "Ecx_imag":      float(copol["complex"][t, q].imag),
+            "Xcx_real":      float(cross["complex"][t, q].real),
+            "Xcx_imag":      float(cross["complex"][t, q].imag),
         })
 
     # Full slices: first phi-column (all theta) and first theta-row (all phi)
-    # of E_complex — pins down both axis orderings end-to-end.
-    col0 = p["E_complex"][:, 0]
-    row0 = p["E_complex"][0, :]
+    # of the Copol complex field — pins down both axis orderings end-to-end.
+    col0 = copol["complex"][:, 0]
+    row0 = copol["complex"][0, :]
 
     # load_element_patterns: count + the parsed element ordering.
     patterns = load_element_patterns(_CST_DIR)
@@ -182,7 +184,8 @@ def gen_cst_parser():
         "row0_imag":      row0.imag.tolist(),
         "n_elements":     len(patterns),
         # Sanity scalar an element [1] copol_abs sum (order-independent checksum).
-        "copol_abs_sum":  float(p["copol_abs"].sum()),
+        "copol_abs_sum":  float(copol["abs"].sum()),
+        "component_names": sorted(p["components"].keys()),
     })
 
 
@@ -323,13 +326,13 @@ def gen_directivity_grid():
 
 def gen_evaluate_metrics():
     """Reference scalar metrics on real CST data (uniform weights, 16-elem URA)."""
-    from src.io.cst_parser import load_element_patterns
+    from src.io.cst_parser import load_element_patterns, get_component
     from src.metrics.metrics import evaluate_metrics
 
     patterns = load_element_patterns(_CST_DIR)
     theta_deg = patterns[0]["theta_deg"]
     phi_deg   = patterns[0]["phi_deg"]
-    ep = np.stack([p["E_complex"] for p in patterns], axis=0)
+    ep = np.stack([get_component(p, "Copol")["complex"] for p in patterns], axis=0)
     n = ep.shape[0]
     w = np.ones(n, dtype=complex)   # uniform -> broadside beam (tests pole wrap HPBW)
 

@@ -51,10 +51,14 @@ theta_deg = patterns(1).theta_deg;
 phi_deg   = patterns(1).phi_deg;
 n_elements = numel(patterns);
 
-ep_copol = stack_field(patterns, 'E_complex');
-ep_cross = stack_field(patterns, 'cross_complex');
+component_names = sort(fieldnames(patterns(1).components));
+element_pattern_stacks = struct();
+for k = 1:numel(component_names)
+    element_pattern_stacks.(component_names{k}) = stack_component(patterns, component_names{k});
+end
+ep_reference = element_pattern_stacks.(component_names{1});
 directives = config.directives;
-polarization = get_field(config, 'polarization', 'copol');
+polarization = get_field(config, 'polarization', component_names{1});
 
 % ── Weights ───────────────────────────────────────────────────────
 if ~isempty(weights_csv_path)
@@ -71,29 +75,41 @@ else
 end
 
 % ── Power-normalise + array factors (mirrors manual_weights._recompute) ──
-w_norm   = weights_complex / sqrt(max(sum(abs(weights_complex) .^ 2), 1e-30));
-af_copol = compute_array_factor(w_norm, ep_copol);
-af_cross = compute_array_factor(w_norm, ep_cross);
+w_norm = weights_complex / sqrt(max(sum(abs(weights_complex) .^ 2), 1e-30));
+
+af_components = struct();
+for k = 1:numel(component_names)
+    af_components.(component_names{k}) = compute_array_factor(w_norm, element_pattern_stacks.(component_names{k}));
+end
 
 % Spherical total radiated power (CST partial-directivity normaliser).
 theta_rad  = deg2rad(theta_deg(:));
 if numel(theta_rad) > 1, dtheta = mean(diff(theta_rad)); else, dtheta = pi; end
 if numel(phi_deg) > 1,   dphi = deg2rad(mean(diff(phi_deg(:)))); else, dphi = 2 * pi; end
 sin_t   = sin(theta_rad);
-p_total = spherical_power(af_copol, sin_t, dtheta, dphi) + ...
-          spherical_power(af_cross, sin_t, dtheta, dphi);
+p_total = 0;
+for k = 1:numel(component_names)
+    p_total = p_total + spherical_power(af_components.(component_names{k}), sin_t, dtheta, dphi);
+end
 
-switch polarization
-    case 'cross'
-        metrics_af = af_cross;
-    case 'total'
-        metrics_af = sqrt(abs(af_copol) .^ 2 + abs(af_cross) .^ 2);
-    otherwise
-        metrics_af = af_copol;
+if strcmpi(polarization, 'total')
+    power_linear_grid = zeros(size(theta_deg, 1), numel(phi_deg));
+    for k = 1:numel(component_names)
+        power_linear_grid = power_linear_grid + abs(af_components.(component_names{k})) .^ 2;
+    end
+    metrics_af = sqrt(power_linear_grid);
+else
+    matches = component_names(strcmpi(component_names, polarization));
+    if isempty(matches)
+        error('manual_weights_render:BadPolarization', ...
+            'Polarization ''%s'' not found. Available components: {%s} (or ''total'').', ...
+            polarization, strjoin(component_names, ', '));
+    end
+    metrics_af = af_components.(matches{1});
 end
 
 dbi_grid = compute_directivity_dbi_grid(metrics_af, theta_deg, phi_deg, p_total);
-metrics  = evaluate_metrics(ep_copol, theta_deg, phi_deg, weights_complex, ...
+metrics  = evaluate_metrics(ep_reference, theta_deg, phi_deg, weights_complex, ...
     directives, [], metrics_af, p_total);
 
 % ── Heatmap (dBi) with directive overlays ─────────────────────────
@@ -140,16 +156,6 @@ end
 
 function p = spherical_power(af, sin_t, dtheta, dphi)
 p = sum(abs(af) .^ 2 .* sin_t, 'all') * dtheta * dphi;
-end
-
-
-function stack = stack_field(patterns, key)
-n = numel(patterns);
-[nt, np_] = size(patterns(1).(key));
-stack = zeros(n, nt, np_);
-for i = 1:n
-    stack(i, :, :) = patterns(i).(key);
-end
 end
 
 
