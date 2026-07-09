@@ -130,15 +130,16 @@ def gen_compute_array_factor():
 # ────────────────────────── STEP 4: CST parser ────────────────────
 
 # Directory of a real 4x4 CST export used for parser validation.
-_CST_DIR = ROOT / "data" / "spacing0.9"
+_CST_DIR = ROOT / "data" / "spacing0.6"
 
 
 def gen_cst_parser():
     """Reference for parse_cst_file / load_element_patterns on real CST data."""
     from src.io.cst_parser import parse_cst_file, load_element_patterns, get_component
 
-    # Parse one specific file (element [1]).
-    one_file = _CST_DIR / "farfield (f=2400) [1].txt"
+    # Parse one specific file (element [1]). Filenames vary by dataset, so
+    # select by the literal "[1]" token ("[10]".."[16]" don't contain "[1]").
+    one_file = next(f for f in sorted(_CST_DIR.glob("*.txt")) if "[1]" in f.name)
     p = parse_cst_file(one_file)
     copol = get_component(p, "Copol")
     cross = get_component(p, "Cross")

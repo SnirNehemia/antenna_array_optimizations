@@ -12,7 +12,7 @@ here = fileparts(mfilename('fullpath'));
 addpath(fullfile(fileparts(here), 'matlab_utils'));
 root = fileparts(fileparts(here));
 testCase.TestData.root    = root;
-testCase.TestData.dataDir = fullfile(root, 'data', 'spacing0.9');
+testCase.TestData.dataDir = fullfile(root, 'data', 'spacing0.6');
 work = fullfile(tempdir, ['matlab_script_test_' char(java.util.UUID.randomUUID)]);
 mkdir(work);
 testCase.TestData.work = work;

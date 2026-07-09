@@ -9,6 +9,16 @@ function optimizer_app(config_path)
 % Part of: Antenna Array Pattern Optimization Tool.
 % ══════════════════════════════════════════════════════════════════
 
+% ── Version gate ──────────────────────────────────────────────────
+% This app is validated on MATLAB R2020a (9.8) and newer. Older releases
+% lack GUI properties/functions used here (e.g. clim, GridLineWidth,
+% uilabel WordWrap) and fail with cryptic "Unrecognized property" errors.
+if verLessThan('matlab', '9.8')
+    error('optimizer_app:UnsupportedMATLAB', ...
+        ['This app requires MATLAB R2020a (9.8) or newer. ', ...
+         'Detected: %s.'], version);
+end
+
 % ── Path setup ────────────────────────────────────────────────────
 this_dir   = fileparts(mfilename('fullpath'));   % .../MATLAB/scripts
 matlab_dir = fileparts(this_dir);                % .../MATLAB

@@ -74,7 +74,7 @@ for fi = frame_indices
 
     cla(ax_map); hold(ax_map, 'on');
     pcolor(ax_map, phi_deg, theta_deg, grid_norm); shading(ax_map, 'flat');
-    colormap(ax_map, 'jet'); clim(ax_map, [-dyn 0]);
+    colormap(ax_map, 'jet'); caxis(ax_map, [-dyn 0]);  % [MATLAB] caxis (clim is R2022a+)
     set(ax_map, 'YDir', 'reverse'); xlim(ax_map, [0 360]); ylim(ax_map, [0 180]);
     xlabel(ax_map, 'Phi (deg)'); ylabel(ax_map, 'Elevation \theta (deg)');
 

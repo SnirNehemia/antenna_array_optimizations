@@ -403,7 +403,7 @@ classdef ManualWeightsTuner < handle
             grid(obj.ax, 'on');
             obj.ax.GridAlpha     = 0.20;
             obj.ax.GridColor     = [1 1 1];
-            obj.ax.GridLineWidth = 0.5;
+            obj.ax.LineWidth     = 0.5;  % [MATLAB] pre-R2022b: axes LineWidth governs grid thickness (GridLineWidth is R2022b+)
             obj.ax.FontSize      = 10;
 
             n_theta  = numel(obj.theta_deg);
@@ -418,7 +418,7 @@ classdef ManualWeightsTuner < handle
             obj.cbar.Label.FontSize = 10;
             obj.cbar.FontSize = 10;
             obj.cbar.Ticks = -ManualWeightsTuner.DYNAMIC_RANGE_DB:10:0;
-            clim(obj.ax, [-ManualWeightsTuner.DYNAMIC_RANGE_DB, 0]);
+            caxis(obj.ax, [-ManualWeightsTuner.DYNAMIC_RANGE_DB, 0]);  % [MATLAB] caxis (clim is R2022a+)
 
             obj.hover_text_h = text(obj.ax, 0.01, 0.98, '', ...
                 'Units',               'normalized', ...
@@ -1305,7 +1305,7 @@ classdef ManualWeightsTuner < handle
         function update_heatmap(obj, grid, clim_min, clim_max)
             obj.last_display_grid  = grid;
             obj.heatmap_surf.CData = grid;
-            clim(obj.ax, [clim_min, clim_max]);
+            caxis(obj.ax, [clim_min, clim_max]);  % [MATLAB] caxis (clim is R2022a+)
             drawnow limitrate;
         end
 
@@ -1560,9 +1560,44 @@ end
 
 % ── File-level helper: wrapped description label at an absolute position ──
 function lbl = mk_desc_pos(parent, x, y, w, h, text)
-    lbl = uilabel(parent, 'Text', text, 'FontSize', 9, ...
-        'FontColor', [0.5 0.5 0.5], 'WordWrap', 'on', ...
+    % [MATLAB] uilabel 'WordWrap' is R2020b+. For R2020a we pre-wrap the
+    % text into a cellstr (rendered as multiple lines) using an estimated
+    % character-per-line count derived from the label width and font size.
+    font_size = 9;
+    wrapped   = local_word_wrap(text, w, font_size);
+    lbl = uilabel(parent, 'Text', wrapped, 'FontSize', font_size, ...
+        'FontColor', [0.5 0.5 0.5], ...
         'VerticalAlignment', 'top', 'Position', [x y w h]);
+end
+
+% ── File-level helper: greedy word-wrap to fit a pixel width ──────────
+function lines = local_word_wrap(text, width_px, font_size)
+    % Estimate average glyph width (~0.55 * font size for a proportional
+    % font) and wrap on whitespace. Returns a cellstr, one entry per line.
+    chars_per_line = max(1, floor(width_px / (0.55 * font_size)));
+    words = strsplit(char(text));
+    lines = {};
+    current = '';
+    for wi = 1:numel(words)
+        word = words{wi};
+        if isempty(current)
+            candidate = word;
+        else
+            candidate = [current ' ' word];
+        end
+        if numel(candidate) > chars_per_line && ~isempty(current)
+            lines{end+1} = current; %#ok<AGROW>
+            current = word;
+        else
+            current = candidate;
+        end
+    end
+    if ~isempty(current)
+        lines{end+1} = current; %#ok<AGROW>
+    end
+    if isempty(lines)
+        lines = {''};
+    end
 end
 
 % ── File-level helper: read optional config field with default ────

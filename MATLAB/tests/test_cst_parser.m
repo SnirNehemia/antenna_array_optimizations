@@ -9,9 +9,13 @@ function setupOnce(testCase)
 here = fileparts(mfilename('fullpath'));
 addpath(fullfile(fileparts(here), 'matlab_utils'));
 root = fileparts(fileparts(here));                 % repo root
-testCase.TestData.dataDir  = fullfile(root, 'data', 'spacing0.9');
-testCase.TestData.oneFile  = fullfile(testCase.TestData.dataDir, ...
-                                      'farfield (f=2400) [1].txt');
+testCase.TestData.dataDir  = fullfile(root, 'data', 'spacing0.6');
+% Filenames vary by dataset; select element [1] by the literal '[1]' token
+% ('[10]'..'[16]' do not contain '[1]'), matching the Python fixture generator.
+d1files = dir(fullfile(testCase.TestData.dataDir, '*.txt'));
+d1names = sort({d1files.name});
+d1idx   = find(contains(d1names, '[1]'), 1);
+testCase.TestData.oneFile  = fullfile(testCase.TestData.dataDir, d1names{d1idx});
 testCase.TestData.ref = jsondecode(fileread(fullfile(here, 'fixtures', 'cst_parser.json')));
 end
 

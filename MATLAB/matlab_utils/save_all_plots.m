@@ -235,7 +235,7 @@ ax  = axes(fig); hold(ax, 'on');
 % pcolor handles non-uniform y (equal-area) and uniform alike.
 pcolor(ax, phi, y_coords, grid_norm);
 shading(ax, 'flat');
-colormap(ax, 'jet'); clim(ax, [-dyn 0]);
+colormap(ax, 'jet'); caxis(ax, [-dyn 0]);  % [MATLAB] caxis (clim is R2022a+)
 cb = colorbar(ax); cb.Label.String = 'dB (normalized to peak)';
 
 phys_masks = build_directive_physical_masks(theta, phi, directives);

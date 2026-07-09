@@ -15,8 +15,12 @@ end
 
 
 function test_config_yaml(testCase)
+% Reads a frozen reference config (fixtures/config_yaml_ref.yaml) rather than
+% the repo-root config.yaml, which users edit freely. The fixture JSON was
+% generated from this same reference, so the two stay in lockstep.
 ref = testCase.TestData.ref.config;
-c   = read_config_yaml(fullfile(testCase.TestData.root, 'config.yaml'));
+here = fileparts(mfilename('fullpath'));
+c   = read_config_yaml(fullfile(here, 'fixtures', 'config_yaml_ref.yaml'));
 
 verifyEqual(testCase, c.element_patterns_dir, ref.element_patterns_dir);
 verifyEqual(testCase, c.polarization,         ref.polarization);

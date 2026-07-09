@@ -1,24 +1,24 @@
 {
   "n_elements": 16,
-  "global_peak_dbi": 17.190410265023527,
+  "global_peak_dbi": 16.074664379844506,
   "global_peak_theta_deg": 179.0,
   "global_peak_phi_deg": 45.0,
-  "hpbw_theta_deg": 9.547011534599676,
-  "hpbw_phi_deg": 33.747646982774995,
-  "total_cost": 0.00393386618880661,
-  "peak_to_null_ratio_db": -8.18976304982613,
+  "hpbw_theta_deg": 14.9099829602375,
+  "hpbw_phi_deg": 45.27624006912342,
+  "total_cost": 2.3608831537774533,
+  "peak_to_null_ratio_db": -5.377595862821865,
   "directive_metrics": [
     {
       "type": "peak",
-      "gain_dbi": -15.442001351171415,
+      "gain_dbi": -7.841829636610022,
       "null_depth_db": null,
-      "cost_term": -0.0001571241436962093
+      "cost_term": -0.1592222679398747
     },
     {
       "type": "null",
-      "gain_dbi": -7.252238301345284,
-      "null_depth_db": -24.44264856636881,
-      "cost_term": 0.00409099033250282
+      "gain_dbi": -2.4642337737881577,
+      "null_depth_db": -18.538898153632665,
+      "cost_term": 2.5201054217173278
     }
   ]
 }

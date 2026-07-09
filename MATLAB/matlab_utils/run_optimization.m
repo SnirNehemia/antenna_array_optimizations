@@ -202,8 +202,69 @@ if isempty(m.peak_to_null_ratio_db)
     m.peak_to_null_ratio_db = NaN;
 end
 fid = fopen(output_path, 'w');
-fprintf(fid, '%s', jsonencode(m, 'PrettyPrint', true));
+% [MATLAB] jsonencode's 'PrettyPrint' name-value option is R2021a+. For
+% R2020a compatibility, encode compactly and indent with a local helper.
+fprintf(fid, '%s', pretty_json(jsonencode(m)));
 fclose(fid);
+end
+
+
+function s = pretty_json(json_str)
+% Minimal JSON pretty-printer: indents a compact jsonencode string with
+% two-space nesting. Punctuation inside quoted strings is left untouched.
+json_str    = char(json_str);
+indent_unit = '  ';
+out         = '';
+level       = 0;
+in_string   = false;
+escaped     = false;
+n           = numel(json_str);
+i           = 1;
+while i <= n
+    c = json_str(i);
+    if in_string
+        out(end+1) = c; %#ok<AGROW>
+        if escaped
+            escaped = false;
+        elseif c == '\'
+            escaped = true;
+        elseif c == '"'
+            in_string = false;
+        end
+        i = i + 1;
+        continue;
+    end
+    switch c
+        case '"'
+            in_string  = true;
+            out(end+1) = c; %#ok<AGROW>
+        case {'{', '['}
+            % Keep empty containers ({} / []) on one line.
+            if i < n && ((c == '{' && json_str(i+1) == '}') || ...
+                         (c == '[' && json_str(i+1) == ']'))
+                out(end+1) = c;             %#ok<AGROW>
+                out(end+1) = json_str(i+1); %#ok<AGROW>
+                i = i + 2;
+                continue;
+            end
+            level      = level + 1;
+            out(end+1) = c; %#ok<AGROW>
+            out = [out newline repmat(indent_unit, 1, level)];
+        case {'}', ']'}
+            level = level - 1;
+            out   = [out newline repmat(indent_unit, 1, level)];
+            out(end+1) = c; %#ok<AGROW>
+        case ','
+            out(end+1) = c; %#ok<AGROW>
+            out = [out newline repmat(indent_unit, 1, level)];
+        case ':'
+            out = [out ': '];
+        otherwise
+            out(end+1) = c; %#ok<AGROW>
+    end
+    i = i + 1;
+end
+s = out;
 end
 
 
