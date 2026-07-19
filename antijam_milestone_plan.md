@@ -78,9 +78,16 @@ MATLAB/
 │   ├── agent_bandit_update.m   # ┘ sliding-window UCB (config alternative)
 │   ├── kpi_evaluate.m          # the 5 milestone KPIs (Section 5) from timeline logs
 │   ├── plot_antijam_report.m   # SINR timeline, arm-selection heatmap, pattern snapshots
-│   └── run_antijam.m           # closed-loop driver: scenario × algorithm × KPI report
+│   ├── select_polarization_stacks.m  # ┐ shared plumbing (run_antijam + demo):
+│   ├── extract_cut.m                 # │ polarization stacks, 1-D cut,
+│   ├── closed_loop_run.m             # │ one algorithm × scenario closed loop,
+│   ├── write_kpi_table.m             # ┘ KPI aggregation to CSV/txt
+│   ├── save_run_gif.m          # animated 2-D pattern + jammer dot + live SINR/gain traces
+│   ├── run_jammer_demo.m       # jammer_config.yaml-driven demo: scenarios × algorithms → GIFs
+│   └── run_antijam.m           # closed-loop campaign driver: scenario × algorithm × KPI report
 ├── scripts/
-│   └── run_antijam_script.m    # thin entry-point wrapper (addpath matlab_utils + antijam_utils)
+│   ├── run_antijam_script.m    # thin entry-point wrappers (addpath matlab_utils
+│   └── run_jammer_demo_script.m #  + antijam_utils)
 └── tests/
     └── test_antijam_*.m        # analytic / toy-case unit tests (Section 8, Validation)
 ```

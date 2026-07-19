@@ -28,7 +28,11 @@ function scenario = sim_scenario(scenario_config, antijam_config, sim_config)
 %                         toggle_period_s; 'window' requires on_time_s +
 %                         off_time_s (jammer silent outside [on, off) — the
 %                         null-lifecycle case). Optional duration_s overrides
-%                         sim_config.duration_s for this scenario.
+%                         sim_config.duration_s for this scenario. Optional
+%                         angle_deg fixes the static/initial jammer angle
+%                         instead of the per-seed random draw (error if it
+%                         falls inside the guard sector). Optional
+%                         jn_ratio_db overrides antijam_config.jn_ratio_db.
 %       antijam_config  : struct. Required: theta_s_deg, guard_deg,
 %                         jn_ratio_db, cut_type ('phi_cut'|'theta_cut').
 %       sim_config      : struct. Required: dt_s, duration_s, seed.
@@ -72,12 +76,27 @@ theta_s = antijam_config.theta_s_deg;
 guard   = antijam_config.guard_deg;
 stream  = RandStream('mt19937ar', 'Seed', sim_config.seed);
 
+% Fixed initial angle (config) or per-seed random draw.
+fixed_angle = [];
+if isfield(scenario_config, 'angle_deg') && ~isempty(scenario_config.angle_deg)
+    fixed_angle = scenario_config.angle_deg;
+end
+
 % ── Allowed interval [lo, hi] in offset coords u = theta - theta_s ─
 switch antijam_config.cut_type
     case 'phi_cut'
         lo = guard;
         hi = 360 - guard;
-        u0 = lo + (hi - lo) * rand(stream);
+        if isempty(fixed_angle)
+            u0 = lo + (hi - lo) * rand(stream);
+        else
+            u0 = mod(fixed_angle - theta_s, 360);
+            if u0 < lo || u0 > hi
+                error('sim_scenario:AngleInGuard', ...
+                    'Scenario %s: angle_deg = %g is inside the guard sector (± %g deg of theta_s).', ...
+                    scenario_config.id, fixed_angle, guard);
+            end
+        end
     case 'theta_cut'
         lo_lin  = -90 - theta_s;                 % offset span of [-90, 90]
         hi_lin  =  90 - theta_s;
@@ -87,11 +106,24 @@ switch antijam_config.cut_type
             error('sim_scenario:NoJammerSpan', ...
                 'Guard sector (guard_deg = %g) covers the whole cut span.', guard);
         end
-        pick = (len_neg + len_pos) * rand(stream);
-        if pick < len_neg
-            lo = lo_lin;  hi = -guard;  u0 = lo + pick;
+        if isempty(fixed_angle)
+            pick = (len_neg + len_pos) * rand(stream);
+            if pick < len_neg
+                lo = lo_lin;  hi = -guard;  u0 = lo + pick;
+            else
+                lo = guard;   hi = hi_lin;  u0 = lo + (pick - len_neg);
+            end
         else
-            lo = guard;   hi = hi_lin;  u0 = lo + (pick - len_neg);
+            u0 = fixed_angle - theta_s;
+            if u0 >= lo_lin && u0 <= -guard
+                lo = lo_lin;  hi = -guard;
+            elseif u0 >= guard && u0 <= hi_lin
+                lo = guard;   hi = hi_lin;
+            else
+                error('sim_scenario:AngleInGuard', ...
+                    'Scenario %s: angle_deg = %g is inside the guard sector or outside the cut span.', ...
+                    scenario_config.id, fixed_angle);
+            end
         end
     otherwise
         error('sim_scenario:BadCutType', ...
@@ -127,7 +159,11 @@ else
 end
 
 % ── Power profile ─────────────────────────────────────────────────
-jn = antijam_config.jn_ratio_db * ones(1, n_steps);
+base_jn = antijam_config.jn_ratio_db;
+if isfield(scenario_config, 'jn_ratio_db') && ~isempty(scenario_config.jn_ratio_db)
+    base_jn = scenario_config.jn_ratio_db;      % per-scenario override
+end
+jn = base_jn * ones(1, n_steps);
 on = true(1, n_steps);
 switch scenario_config.power
     case 'constant'

@@ -205,6 +205,37 @@ or `ValueError` — never silently fall back to a hardcoded default.
 > Claude Code must append an entry here at the end of every working session.
 > Format shown below. Newest entry at the top.
 
+### 2026-07-19 — [P6] Jammer-scenario GIF demo (run_jammer_demo + jammer_config.yaml)
+
+**Implemented** (per Snir: config-driven scenario runner with animated GIFs):
+- `jammer_config.yaml` (repo root) — user dictates the scenario suite:
+  static on/off jammers at fixed angles/amplitudes (`window`/`onoff`/`step`
+  power modes), constant-speed movers (`drift_deg_per_s`, sign = direction),
+  per-scenario `jn_ratio_db` / `angle_deg` / `duration_s` overrides. New
+  sim_scenario keys: `angle_deg` (fixed angle instead of the per-seed random
+  draw; `:AngleInGuard` error if inside the guard) and per-scenario
+  `jn_ratio_db`. Default suite: 4 on/off (90°/20 dB, 200°/30 dB, 300°/15 dB
+  toggling, 135°/25 dB + step) and 5 movers (0.5/1/−2/4/8 °/s).
+- `run_jammer_demo` + `scripts/run_jammer_demo_script` — runs every
+  scenario × algorithm (lcmv + bandit; oracle as reference), KPI table, and
+  one GIF per run under `results/jammer_demo/<ts>/`.
+- `save_run_gif` — per frame: full 2-D θ×φ directivity heatmap (same
+  pcolor/jet style as the manual-tuner GUI, fixed color scale), jammer dot
+  at its true position (size ∝ linear amplitude, filled magenta ON / hollow
+  gray OFF), θ_s as green pentagram, live SINR + oracle + threshold and
+  gain-toward-θ_s traces below. ~120 frames @ 15 fps.
+- Refactor: promoted run_antijam locals to shared standalone functions
+  (`select_polarization_stacks`, `extract_cut`, `closed_loop_run`,
+  `write_kpi_table`); run_antijam re-verified end-to-end after the change.
+- `caxis` kept over the linter's `clim` suggestion (clim is R2022a+; caxis
+  is the R2020a-compatible form per MATLAB_R2020a_changes.md).
+
+**Demo results** (18 runs, single seed): LCMV 92.2–99.9% availability
+(97.5%+ for on/off and ≤2°/s; 94.4/92.2% at 4/8°/s, null error growing
+1.3→2.8°). Bandit 90.2–95.8% on on/off scenarios; movers 92.8/91.4/86.1%
+at 0.5/1/2°/s and 63.3/72.7% at 4/8°/s — fast movers exceed the vanilla
+discounted-TS tracking rate, consistent with the campaign's S2/S3 finding.
+
 ### 2026-07-19 — [P6] Campaign driver, KPIs, report; S6 null-lifecycle scenario; real-data tuning
 
 **Implemented**:

@@ -1,0 +1,141 @@
+# ══════════════════════════════════════════════════════════════════
+# jammer_config.yaml — Jammer-scenario GIF demo (run_jammer_demo)
+#
+# Edit the `scenarios:` list below to dictate what the jammer does:
+#   motion: "static" | "drift"      (drift needs drift_deg_per_s [deg/s])
+#   power:  "constant" | "step" | "onoff" | "window"
+#       step   -> power_step_db + step_time_s
+#       onoff  -> duty_cycle + toggle_period_s (periodic from t = 0)
+#       window -> on_time_s + off_time_s (silent outside [on, off))
+#   angle_deg    : fixed jammer angle on the cut axis [deg]
+#                  (omit for a per-seed random draw; must respect guard_deg)
+#   jn_ratio_db  : per-scenario jammer strength (overrides antijam default)
+#   duration_s   : per-scenario run length (overrides sim.duration_s)
+#   jump_deg + jump_time_s : optional mid-run angle jump
+#
+# Each scenario runs once per algorithm in antijam.algorithms and produces
+#   gif_<id>_<algorithm>.gif  — 2-D radiation-pattern heatmap over time,
+#   jammer dot (size ~ amplitude, filled while ON), live SINR + gain traces —
+# plus a KPI table, under results/jammer_demo/<timestamp>/.
+# NOTE: block-style nesting only (the MATLAB YAML reader has no {a: 1} maps).
+# ══════════════════════════════════════════════════════════════════
+
+element_patterns_dir: "data/ManyDipoles"
+polarization: "Theta"
+
+antijam:
+  theta_s_deg: 0.0
+  sinr_min_db: 10.0
+  sigma_s_db: 3.0           # jammer-free SINR ~15.3 dB on this array
+  jn_ratio_db: 20.0         # default J/N; scenarios may override
+  guard_deg: 45.0
+  cut_type: "phi_cut"
+  cut_theta_deg: 90.0
+  cut_phi_deg: 0.0
+  algorithms: ["lcmv", "bandit"]
+
+  # ── The scenario suite of this demo ─────────────────────────────
+  scenarios:
+    # 1) Static jammers turning on/off — different angles & amplitudes.
+    - id: "ON90_20"           # broadside-ish, nominal power
+      motion: "static"
+      angle_deg: 90.0
+      jn_ratio_db: 20.0
+      power: "window"
+      on_time_s: 15.0
+      off_time_s: 45.0
+    - id: "ON200_30"          # far side, strong jammer
+      motion: "static"
+      angle_deg: 200.0
+      jn_ratio_db: 30.0
+      power: "window"
+      on_time_s: 10.0
+      off_time_s: 40.0
+    - id: "ON300_15"          # weak jammer, periodic toggling
+      motion: "static"
+      angle_deg: 300.0
+      jn_ratio_db: 15.0
+      power: "onoff"
+      duty_cycle: 0.5
+      toggle_period_s: 20.0
+    - id: "ON135_25S"         # medium + mid-window power step +5 dB
+      motion: "static"
+      angle_deg: 135.0
+      jn_ratio_db: 25.0
+      power: "step"
+      power_step_db: 5.0
+      step_time_s: 30.0
+
+    # 2) Jammers moving at constant speed.
+    - id: "MOV_0p5"
+      motion: "drift"
+      angle_deg: 100.0
+      drift_deg_per_s: 0.5
+      jn_ratio_db: 30.0
+      power: "constant"
+    - id: "MOV_1"
+      motion: "drift"
+      angle_deg: 60.0
+      drift_deg_per_s: 1.0
+      jn_ratio_db: 20.0
+      power: "constant"
+    - id: "MOV_2"
+      motion: "drift"
+      angle_deg: 300.0
+      drift_deg_per_s: -2.0   # negative = decreasing angle
+      jn_ratio_db: 20.0
+      power: "constant"
+    - id: "MOV_4"
+      motion: "drift"
+      angle_deg: 180.0
+      drift_deg_per_s: 4.0
+      jn_ratio_db: 25.0
+      power: "constant"
+    - id: "MOV_8"             # tracking stress case
+      motion: "drift"
+      angle_deg: 250.0
+      drift_deg_per_s: 8.0
+      jn_ratio_db: 20.0
+      power: "constant"
+
+sim:
+  dt_s: 0.05
+  duration_s: 60.0
+  snapshots_per_step: 16
+  seed: 1234
+
+adapt:
+  diagonal_loading_db: 10
+  forgetting_lambda: 0.98
+  spsa:
+    a: 2.0
+    c: 0.2
+    alpha: 0.602
+    gamma: 0.101
+    A: 15
+    step_max: 0.3
+
+agent:
+  null_grid_deg: 10.0
+  null_width_deg: 20.0
+  peak_width_deg: 15.0
+  null_weight: 100.0
+  method: "thompson"
+  discount: 0.99
+  sigma_tilde_db: 1.0
+  window: 50
+  optimizer:
+    max_iterations: 150
+    cost_tolerance: 1.0e-8
+    n_restarts: 1
+    use_uniform_init: true
+    use_single_element_init: false
+    amplitude_bounds: [0.0, 1.0]
+
+gif:
+  max_frames: 120           # frames per GIF (subsampled from the sim steps)
+  fps: 15
+  dynamic_range_db: 40      # color span below the pattern peak
+
+output:
+  results_dir: "results/"

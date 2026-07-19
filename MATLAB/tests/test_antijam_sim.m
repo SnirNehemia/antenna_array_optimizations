@@ -136,6 +136,33 @@ verifyEqual(testCase, obs.sinr_db, sinr_db_hand, 'RelTol', 1e-10);
 end
 
 
+% ── Fixed jammer angle + per-scenario JNR override ────────────────
+
+function test_fixed_angle_and_jnr_override(testCase)
+[aj, sc] = base_configs();
+% Fixed angle: deterministic regardless of seed, exact value.
+cfg = struct('id', 'F1', 'motion', 'static', 'power', 'constant', ...
+             'angle_deg', 40.0, 'jn_ratio_db', 27.0);
+scn = sim_scenario(cfg, aj, sc);
+verifyEqual(testCase, scn.theta_j_deg(1), 40.0, 'AbsTol', 1e-12);
+sc2 = sc;  sc2.seed = 999;
+scn2 = sim_scenario(cfg, aj, sc2);
+verifyEqual(testCase, scn2.theta_j_deg, scn.theta_j_deg);
+% Per-scenario JNR override wins over the antijam default (20 dB).
+verifyEqual(testCase, scn.jn_ratio_db(1), 27.0);
+% Drift from a fixed angle starts exactly there.
+cfg_d = struct('id', 'F2', 'motion', 'drift', 'drift_deg_per_s', 2.0, ...
+               'power', 'constant', 'angle_deg', -40.0);
+scn_d = sim_scenario(cfg_d, aj, sc);
+verifyEqual(testCase, scn_d.theta_j_deg(1), -40.0, 'AbsTol', 1e-12);
+% An angle inside the guard sector raises.
+cfg_bad = struct('id', 'F3', 'motion', 'static', 'power', 'constant', ...
+                 'angle_deg', 3.0);
+verifyError(testCase, @() sim_scenario(cfg_bad, aj, sc), ...
+    'sim_scenario:AngleInGuard');
+end
+
+
 % ── Observation contract: Mode C vs Mode S, error paths ───────────
 
 function test_observation_contract(testCase)
