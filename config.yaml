@@ -209,12 +209,17 @@ antijam:
   sinr_min_db: 10.0
 
   # Power levels relative to the sigma_n^2 = 1 per-element noise floor.
-  sigma_s_db: 0.0           # desired-signal power [dB]
+  # sigma_s_db = 3 places the jammer-free SINR at ~15.3 dB for the
+  # ManyDipoles Theta cut (quiescent gain 12.3 dB) -> 5 dB headroom over
+  # sinr_min_db. [P6 calibration]
+  sigma_s_db: 3.0           # desired-signal power [dB]
   jn_ratio_db: 20.0         # jammer-to-noise ratio [dB]
 
   # Jammer exclusion sector around the main beam [deg] (single-jammer
   # milestone limitation: jammer inside the main beam is out of scope).
-  guard_deg: 10.0
+  # ~3 beamwidths for the measured 15 deg HPBW of the ManyDipoles cut:
+  # null windows closer than this eat into the main lobe (P4 finding).
+  guard_deg: 45.0
 
   # 1-D azimuth cut the engine operates on (mirrors output.plot_cut_type).
   # "phi_cut"   : azimuth sweep at fixed Theta = cut_theta_deg (use for the
@@ -257,12 +262,19 @@ antijam:
       power: "onoff"
       duty_cycle: 0.5
       toggle_period_s: 10.0
+    - id: "S6"              # null lifecycle: silent 1 min -> static jammer
+      motion: "static"      # 1 min -> silent again. Shows the null forming
+      power: "window"       # on turn-on and the return to the unconstrained
+      on_time_s: 60.0       # peak after turn-off.
+      off_time_s: 120.0
+      duration_s: 180.0     # per-scenario override of sim.duration_s
 
 sim:
   dt_s: 0.05                # closed-loop step [s]
   duration_s: 60.0
   snapshots_per_step: 16    # Mode C snapshot count K per step
   seed: 1234                # base seed; Monte Carlo runs offset from it
+  n_runs: 5                 # Monte Carlo runs per scenario x algorithm
 
 adapt:
   # Diagonal loading for LCMV, dB relative to the sigma_n^2 = 1 noise floor.
@@ -286,10 +298,25 @@ adapt:
     step_max: 0.3
 
 agent:
-  null_grid_deg: 5.0        # codebook arm spacing along the cut axis
-  null_width_deg: 10.0      # null-sector width per arm (> spacing = overlap)
-  peak_width_deg: 20.0      # peak-directive window for arm synthesis
+  # P6 real-data sweep: 20-deg windows on a 10-deg grid (28 arms) keep the
+  # arm count inside the discount horizon (~100 probes at 0.99) and halve
+  # drift handoffs vs the 5-deg/10-deg plan defaults; wider windows or denser
+  # overlap performed worse (see notes.md [P6]).
+  null_grid_deg: 10.0       # codebook arm spacing along the cut axis
+  null_width_deg: 20.0      # null-sector width per arm (> spacing = overlap)
+  peak_width_deg: 15.0      # peak-directive window ~= measured HPBW (15 deg)
   null_weight: 100.0        # null-vs-peak weight in the arm synthesis cost
   method: "thompson"        # "thompson" | "swucb"
-  discount: 0.97            # discounted Thompson sampling
+  discount: 0.99            # discounted TS; horizon 1/(1-d) must exceed n_arms
+  sigma_tilde_db: 1.0       # posterior scale; sets exploration overhead
   window: 50                # sliding-window UCB alternative
+  # Optimizer settings for OFFLINE codebook synthesis (lighter than the main
+  # `optimizer:` section — one deterministic uniform-init run per arm; the
+  # null-space projection polish does the depth work).
+  optimizer:
+    max_iterations: 150
+    cost_tolerance: 1.0e-8
+    n_restarts: 1
+    use_uniform_init: true
+    use_single_element_init: false
+    amplitude_bounds: [0.0, 1.0]

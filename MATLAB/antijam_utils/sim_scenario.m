@@ -21,10 +21,14 @@ function scenario = sim_scenario(scenario_config, antijam_config, sim_config)
 %   Inputs:
 %       scenario_config : struct, one element of config antijam.scenarios.
 %                         Required: id, motion ('static'|'drift'), power
-%                         ('constant'|'step'|'onoff'). Motion 'drift' requires
-%                         drift_deg_per_s; optional jump_deg + jump_time_s.
-%                         Power 'step' requires power_step_db + step_time_s;
-%                         'onoff' requires duty_cycle + toggle_period_s.
+%                         ('constant'|'step'|'onoff'|'window'). Motion 'drift'
+%                         requires drift_deg_per_s; optional jump_deg +
+%                         jump_time_s. Power 'step' requires power_step_db +
+%                         step_time_s; 'onoff' requires duty_cycle +
+%                         toggle_period_s; 'window' requires on_time_s +
+%                         off_time_s (jammer silent outside [on, off) — the
+%                         null-lifecycle case). Optional duration_s overrides
+%                         sim_config.duration_s for this scenario.
 %       antijam_config  : struct. Required: theta_s_deg, guard_deg,
 %                         jn_ratio_db, cut_type ('phi_cut'|'theta_cut').
 %       sim_config      : struct. Required: dt_s, duration_s, seed.
@@ -56,8 +60,12 @@ req_field(sim_config, 'dt_s',       'sim');
 req_field(sim_config, 'duration_s', 'sim');
 req_field(sim_config, 'seed',       'sim');
 
-dt      = sim_config.dt_s;
-n_steps = floor(sim_config.duration_s / dt) + 1;
+dt = sim_config.dt_s;
+duration_s = sim_config.duration_s;
+if isfield(scenario_config, 'duration_s') && ~isempty(scenario_config.duration_s)
+    duration_s = scenario_config.duration_s;   % per-scenario override (e.g. S6)
+end
+n_steps = floor(duration_s / dt) + 1;
 t_s     = (0:n_steps - 1) * dt;
 
 theta_s = antijam_config.theta_s_deg;
@@ -139,9 +147,15 @@ switch scenario_config.power
         for i = 1:numel(turn_on)
             events{end + 1} = struct('t_s', t_s(turn_on(i)), 'type', 'turn_on'); %#ok<AGROW>
         end
+    case 'window'
+        on_t  = req_field(scenario_config, 'on_time_s',  'scenario');
+        off_t = req_field(scenario_config, 'off_time_s', 'scenario');
+        on = (t_s >= on_t) & (t_s < off_t);
+        events{end + 1} = struct('t_s', on_t,  'type', 'turn_on');
+        events{end + 1} = struct('t_s', off_t, 'type', 'turn_off');
     otherwise
         error('sim_scenario:BadPower', ...
-            'Unknown power ''%s'' (expected ''constant'', ''step'' or ''onoff'').', ...
+            'Unknown power ''%s'' (expected ''constant'', ''step'', ''onoff'' or ''window'').', ...
             scenario_config.power);
 end
 

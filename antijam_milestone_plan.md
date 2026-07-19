@@ -136,11 +136,13 @@ Implement `sim_scenario`, `sim_engine_init`, `sim_engine_step`, `sim_analytic_co
 - Beats SPSA baseline on recovery time after jammer jumps by ≥ 2× (median).
 - Regret curve plotted vs oracle for the report.
 
-### P6 — Evaluation campaign & demo (weeks 8–9) — Status: todo
+### P6 — Evaluation campaign & demo (weeks 8–9) — Status: **done** (2026-07-19, gates partially met — see below)
 Monte Carlo runner over the scenario suite × {LCMV, SPSA, bandit, oracle}; full KPI table; `run_antijam` + `run_antijam_script` producing the headline plots.
 **Success criteria:**
-- Automated report (single command) writing to a timestamped `results/antijam/<ts>/` folder: KPI table + plots — SINR timeline with threshold band, recovery-time histograms, arm heatmap, oracle-gap bars, pattern snapshots at selected instants.
-- Headline metric met: SINR availability ≥ 90% (Mode S) / ≥ 95% (Mode C) at the configured `sinr_min_db` across the suite.
+- Automated report (single command) writing to a timestamped `results/antijam/<ts>/` folder: KPI table + plots — SINR timeline with threshold band, recovery-time histograms, arm heatmap, oracle-gap bars, pattern snapshots at selected instants. — ✔ **met** (24 artifacts incl. regret curves and the S6 null-lifecycle figure; `kpi_table.csv/txt`).
+- Headline metric met: SINR availability ≥ 90% (Mode S) / ≥ 95% (Mode C) at the configured `sinr_min_db` across the suite. — **Mode C ✔ met** (LCMV 97.4–99.9% across S1–S6; oracle gap 0.6–1.5 dB). **Mode S partially met**: bandit ≥ 90% on S1/S4/S5/S6 (92.2/92.1/90.1/97.2%) but **85–86% on the sustained-drift cases S2/S3** — diagnosed as irreducible exploration overhead of the vanilla discounted-TS at the 5 dB operating headroom (85% of below-threshold steps are exploration probes of non-covering arms while a ≥ 11 dB arm always exists). Forward paths (not in scope): neighbor-restricted exploration, higher link headroom, or LCMV/bandit hybrid. SPSA baseline is slow on the real 20-element array (~1000 probes to converge even warm-started from the quiescent beam) — retained as the documented motivation for the bandit, per P3.
+
+**P6 real-data findings (ManyDipoles, Theta pol, φ-cut @ θ=90°):** quiescent gain 12.3 dB, HPBW ≈ 15° → `sigma_s_db: 3` (15.3 dB jammer-free SINR), `guard_deg: 45`. Codebook tuning: 20°-wide windows on a 10° grid (28 arms) so the arm count stays inside the discount horizon (1/(1−0.99) = 100) and drift handoffs halve; the **null-space projection is restricted to the cut's own steering columns** — projecting the full 2-D θ×φ window ate rank 15 of 20 DOF and destroyed the beam. Bandit `discount: 0.99`, `sigma_tilde_db: 1` (new required key).
 
 **Schedule buffer:** ~1 week implicit slack. **Descope order if needed:** P5 stretch goal (SPSA fine-tune) → sliding-window UCB alternative → reduce Monte Carlo scenario count in P6.
 
@@ -163,6 +165,7 @@ Monte Carlo runner over the scenario suite × {LCMV, SPSA, bandit, oracle}; full
 | S3 | Drift + 10° jump mid-run | constant | recovery-time case |
 | S4 | Static | power step +10 dB mid-run | robustness |
 | S5 | Drift, on/off toggling (duty 50%) | constant | non-stationarity stress |
+| S6 | Static; silent 0–60 s, ON 60–120 s, silent 120–180 s | `window` mode | null lifecycle: null forms on turn-on, quiescent beam restored after turn-off (added 2026-07-19 per Snir; `tests/test_antijam_lifecycle.m`) |
 
 Angles avoiding the main-beam sector by a configurable guard (jammer inside the main beam is out of scope for a single-jammer milestone — note as known limitation).
 

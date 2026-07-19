@@ -145,8 +145,14 @@ for i = 1:numel(centers)
     w_arm = result.weights_complex;
 
     % Null-space projection polish: exact zeros on the sampled window angles.
+    % The mask is restricted to the 1-D CUT the engine operates on (the
+    % milestone is 2-D azimuth): projecting the full 2-D theta x phi window
+    % nulls angles the simulation never uses and eats DOF quadratically —
+    % on the real 5-deg grid a 20-deg window spanned rank 15 of 20 DOF and
+    % destroyed the beam (P6 finding).
     mask = angular_window_mask(theta_deg(:), phi_deg(:), th_n, ph_n, ...
                                null_width, null_width);
+    mask = restrict_mask_to_cut(mask, theta_deg, phi_deg, cut_type, cut_fixed);
     E_win = window_steering_columns(element_patterns_stacked, mask);
     if ~isempty(element_patterns_secondary)
         E_win = [E_win, window_steering_columns(element_patterns_secondary, mask)]; %#ok<AGROW>
@@ -189,6 +195,22 @@ if ~isfield(s, key) || isempty(s.(key))
         'Missing required %s config key: ''%s''.', section, key);
 end
 v = s.(key);
+end
+
+
+function mask = restrict_mask_to_cut(mask, theta_deg, phi_deg, cut_type, cut_fixed)
+% Keep only the window points that lie ON the engine's 1-D cut.
+if strcmp(cut_type, 'phi_cut')
+    it = nearest_index(theta_deg(:), cut_fixed);
+    keep = false(size(mask));
+    keep(it, :) = true;
+else
+    ip0   = nearest_index(phi_deg(:), mod(cut_fixed, 360));
+    ip180 = nearest_index(phi_deg(:), mod(cut_fixed + 180, 360));
+    keep = false(size(mask));
+    keep(:, [ip0, ip180]) = true;
+end
+mask = mask & keep;
 end
 
 

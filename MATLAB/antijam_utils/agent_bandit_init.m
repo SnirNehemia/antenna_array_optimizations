@@ -38,7 +38,7 @@ function state = agent_bandit_init(agent_config, codebook, seed)
 %
 %   Part of: Antenna Array Pattern Optimization Tool — anti-jam milestone [P5].
 
-REQUIRED = {'method', 'discount', 'window'};
+REQUIRED = {'method', 'discount', 'window', 'sigma_tilde_db'};
 for i = 1:numel(REQUIRED)
     if ~isfield(agent_config, REQUIRED{i}) || isempty(agent_config.(REQUIRED{i}))
         error('agent_bandit_init:MissingKey', ...
@@ -53,11 +53,14 @@ end
 
 CLIP_LO = -10;      % dB — plan decision #3 (locked P0)
 CLIP_HI =  40;
-SIGMA_TILDE = 1;    % dB — posterior/confidence scale. Small: the pattern-level
-                    % reward is near-deterministic, so discrimination should be
-                    % sharp after one pull; re-exploration under drift comes
-                    % from the DISCOUNT decaying n_i, not from this scale.
-                    % (P5 sweep: 5 -> 40% static identification, 1 -> ~95%.)
+% Posterior/confidence scale [dB] (config agent.sigma_tilde_db). Small: the
+% pattern-level reward is near-deterministic, so discrimination is sharp
+% after one pull; re-exploration under drift comes from the DISCOUNT decaying
+% n_i. It also sets the exploration-overhead rate: far arms get resampled
+% when sigma_tilde/sqrt(n_i) grows to their reward gap. (P5 sweep: 5 dB ->
+% 40% static identification, 1 dB -> ~95%; P6 real-data sweep drove it lower
+% still to cut steady-state exploration.)
+SIGMA_TILDE = agent_config.sigma_tilde_db;
 PRIOR_COUNT = 1e-2; % optimistic prior weight
 
 n_arms = size(codebook.W, 2);

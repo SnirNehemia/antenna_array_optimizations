@@ -205,6 +205,55 @@ or `ValueError` — never silently fall back to a hardcoded default.
 > Claude Code must append an entry here at the end of every working session.
 > Format shown below. Newest entry at the top.
 
+### 2026-07-19 — [P6] Campaign driver, KPIs, report; S6 null-lifecycle scenario; real-data tuning
+
+**Implemented**:
+- `run_antijam` — full campaign driver: config validation, polarization
+  selection (mirrors run_optimization incl. 'total'), phi_cut/theta_cut
+  extraction, cached codebook, scenarios × algorithms × `sim.n_runs` seeds,
+  KPI table (CSV + txt), report figures, config snapshot. Oracle runs once
+  per scenario × seed (one-step-lag perfect-knowledge LCMV) and its SINR
+  timeline is the shared reference. SPSA warm-starts from the quiescent MVDR
+  beam (uniform start sits 10–20 dB deeper on the real array).
+- `kpi_evaluate` — the 5 KPIs (availability, per-event recovery,
+  null-pointing error via nearest pattern local-min, noise-normalized
+  peak-gain penalty vs quiescent MVDR, oracle gap). `tests/test_antijam_kpi.m`
+  (hand-computable 2-el cases).
+- `plot_antijam_report` — SINR timelines (jammer-on shading), recovery
+  histograms, bandit arm-track vs true θ_j, oracle-gap bars, pattern
+  snapshots, regret curves, and a dedicated **null-lifecycle** figure for
+  'window' scenarios.
+- **S6 scenario** (per Snir): silent 60 s → static jammer 60 s → silent
+  60 s. New sim_scenario power mode `window` (on_time_s/off_time_s,
+  turn_on + turn_off events) + per-scenario `duration_s` override.
+  `tests/test_antijam_lifecycle.m`: LCMV forms a −41 dB null within 1 step
+  of turn-on and restores the quiescent beam (<0.2 dB penalty) within ~1 s
+  of turn-off; the bandit recovers instantly but WANDERS between arms after
+  turn-off (all arms tie within ~0.3 dB when silent) — its return to peak
+  is asserted on gain penalty, not arm identity.
+
+**Real-data campaign** (ManyDipoles, 20 el, Theta pol, φ-cut @ θ=90°;
+results/antijam/<ts>/, 6 scenarios × 4 algorithms × 5 seeds):
+- Calibration: quiescent gain 12.3 dB, HPBW ≈ 15° → sigma_s_db 3
+  (jammer-free SINR 15.3 dB), guard_deg 45, peak_width_deg 15.
+- **Mode C gate MET**: LCMV availability 97.4–99.9% (≥ 95%) on all
+  scenarios, oracle gap 0.6–1.5 dB, recovery ≤ 1 step.
+- **Mode S partially met**: bandit 92.2/86.2/85.4/92.1/90.1/97.2% on
+  S1–S6 — ≥ 90% everywhere except sustained drift (S2/S3). Diagnosis: with
+  the tuned codebook a ≥ 11 dB arm always exists; 85% of below-threshold
+  steps are vanilla-TS exploration probes of non-covering arms. Paths
+  forward (out of scope): neighbor-restricted exploration, more headroom,
+  LCMV hybrid.
+- Tuning that got there (60–88% → 85–97%): 20°-wide null windows on a 10°
+  grid (28 arms ≤ discount horizon 100; halves drift handoffs);
+  **projection restricted to the cut's steering columns** (full 2-D window
+  spanned rank 15/20 DOF and destroyed the beam — worst arm penalty −5.3 →
+  −2.7 dB); discount 0.99; new required agent key `sigma_tilde_db: 1`.
+- SPSA on real data: converges but needs ~1000 probes even warm-started →
+  availability 5–15% on 60 s runs; documented baseline per P3.
+
+**Suite**: all 6 antijam test files pass after the changes.
+
 ### 2026-07-19 — [P2][P3][P4][P5] Tracker, SPSA, codebook, bandit — all gates pass (20/20 antijam tests)
 
 **[P2] Mode C covariance tracker** (`adapt_tracking_init/update`):
