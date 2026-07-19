@@ -192,3 +192,104 @@ output:
   # Maximum number of frames in the GIF. Strides automatically when the
   # iteration count exceeds this value.
   gif_max_frames: 100
+
+
+# ══════════════════════════════════════════════════════════════════
+# ANTI-JAM MILESTONE (antijam_milestone_plan.md, MATLAB/antijam_utils/)
+# Consumed by run_antijam. All four sections below are required by it;
+# missing keys raise descriptive errors (no silent defaults).
+# NOTE: keep nesting block-style — the MATLAB YAML reader does not
+# support inline flow mappings ({a: 1}).
+# ══════════════════════════════════════════════════════════════════
+
+antijam:
+  # Desired peak direction along the cut axis [deg] and the operating
+  # threshold: "system still operates" when SINR >= sinr_min_db.
+  theta_s_deg: 0.0
+  sinr_min_db: 10.0
+
+  # Power levels relative to the sigma_n^2 = 1 per-element noise floor.
+  sigma_s_db: 0.0           # desired-signal power [dB]
+  jn_ratio_db: 20.0         # jammer-to-noise ratio [dB]
+
+  # Jammer exclusion sector around the main beam [deg] (single-jammer
+  # milestone limitation: jammer inside the main beam is out of scope).
+  guard_deg: 10.0
+
+  # 1-D azimuth cut the engine operates on (mirrors output.plot_cut_type).
+  # "phi_cut"   : azimuth sweep at fixed Theta = cut_theta_deg (use for the
+  #               ManyDipoles data: ring peak at theta = 90).
+  # "theta_cut" : principal plane combining phi = cut_phi_deg / +180
+  #               half-planes into a -90..+90 deg axis.
+  cut_type: "phi_cut"
+  cut_theta_deg: 90.0       # used when cut_type = "phi_cut"
+  cut_phi_deg: 0.0          # used when cut_type = "theta_cut"
+
+  # Algorithms to run in the campaign. Modes are fixed per algorithm:
+  # oracle, lcmv -> Mode C (snapshots); spsa, bandit -> Mode S (scalar SINR).
+  algorithms: ["oracle", "lcmv", "spsa", "bandit"]
+
+  # Standard scenario suite (plan Section 5). motion: "static" | "drift";
+  # power: "constant" | "step" | "onoff". Static/initial angle is drawn per
+  # seed, uniform over the cut span minus the guard sector.
+  scenarios:
+    - id: "S1"              # identification baseline
+      motion: "static"
+      power: "constant"
+    - id: "S2"              # primary tracking case
+      motion: "drift"
+      drift_deg_per_s: 2.0
+      power: "constant"
+    - id: "S3"              # recovery-time case
+      motion: "drift"
+      drift_deg_per_s: 2.0
+      jump_deg: 10.0
+      jump_time_s: 30.0
+      power: "constant"
+    - id: "S4"              # robustness (power step)
+      motion: "static"
+      power: "step"
+      power_step_db: 10.0
+      step_time_s: 30.0
+    - id: "S5"              # non-stationarity stress (on/off)
+      motion: "drift"
+      drift_deg_per_s: 2.0
+      power: "onoff"
+      duty_cycle: 0.5
+      toggle_period_s: 10.0
+
+sim:
+  dt_s: 0.05                # closed-loop step [s]
+  duration_s: 60.0
+  snapshots_per_step: 16    # Mode C snapshot count K per step
+  seed: 1234                # base seed; Monte Carlo runs offset from it
+
+adapt:
+  # Diagonal loading for LCMV, dB relative to the sigma_n^2 = 1 noise floor.
+  # P2 sweep result: snapshots contain the desired signal (MPDR), so light
+  # loading self-nulls the signal — at J/N = 20 dB, +10 dB loading gave
+  # oracle gap 0.8 dB vs 2-3.7 dB at -10 dB. Keep well below the jammer
+  # eigenvalue (~ J/N + 10*log10(N_el) dB) or nulling degrades.
+  diagonal_loading_db: 10
+  # Exponential forgetting factor for the recursive covariance estimate.
+  forgetting_lambda: 0.98
+  # SPSA gains: a_k = a / (A + k)^alpha, c_k = c / k^gamma; ascent steps are
+  # clamped to norm <= step_max. P3 sweep: A and step_max are load-bearing —
+  # the dB-scale SINR gradient explodes near deep nulls, and unclamped steps
+  # strand the estimate on a plateau (fails the static gate on most seeds).
+  spsa:
+    a: 2.0
+    c: 0.2
+    alpha: 0.602
+    gamma: 0.101
+    A: 15
+    step_max: 0.3
+
+agent:
+  null_grid_deg: 5.0        # codebook arm spacing along the cut axis
+  null_width_deg: 10.0      # null-sector width per arm (> spacing = overlap)
+  peak_width_deg: 20.0      # peak-directive window for arm synthesis
+  null_weight: 100.0        # null-vs-peak weight in the arm synthesis cost
+  method: "thompson"        # "thompson" | "swucb"
+  discount: 0.97            # discounted Thompson sampling
+  window: 50                # sliding-window UCB alternative

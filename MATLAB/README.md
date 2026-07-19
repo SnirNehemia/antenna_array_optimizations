@@ -5,7 +5,7 @@ MATLAB port of the antenna array pattern optimization pipeline (`src/` +
 the MATLAB MCP server — every core function has a unit test that compares its
 output to a Python-generated reference fixture.
 
-**Requires:** MATLAB R2026a + **Optimization Toolbox** (`fmincon`). No Signal
+**Requires:** MATLAB R2020a + **Optimization Toolbox** (`fmincon`). No Signal
 Processing Toolbox needed — the window functions are reimplemented from the
 numpy/scipy definitions (`besseli` covers Kaiser).
 

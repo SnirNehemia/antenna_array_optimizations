@@ -68,3 +68,23 @@ Module boundaries are strict: no plotting in `optimize/`, no optimization in `pl
 
 - Mutual coupling correction
 - Dynamic jammer tracking (future project, separate codebase)
+
+
+## Milestone: Adaptive anti-jam beamforming (Option B)
+
+Plan of record: `antijam_milestone_plan.md` — phased plan (P0–P6), module contracts,
+KPIs, scenario suite, and success criteria. Phase `Status` fields there are the single
+source of truth for progress; do not duplicate plan content here.
+
+- **MATLAB only**, R2020a + Optimization Toolbox: implemented in a new
+  `MATLAB/antijam_utils/` flat function folder (prefixes `sim_` / `adapt_` /
+  `agent_` / `kpi_` / `plot_`) on top of the existing `MATLAB/matlab_utils/`
+  port, which is reused unmodified — any change to it must be noted in the plan
+  first. The Python `src/` tree stays frozen at Milestone 1.
+- Scope: single slowly-moving jammer, 2D azimuth, pattern-level SINR simulation.
+- Algorithms may consume ONLY the `obs` struct returned by `sim_engine_step` for
+  their declared mode (Mode C: snapshots; Mode S: scalar SINR). Never leak θ_j
+  into an algorithm.
+- Session log entries in `notes.md` must reference the phase ID (e.g., `[P2] ...`).
+- Open decisions live in plan Section 7; resolve or defer explicitly in P0 before
+  implementation. Decision #4 (total power vs co-pol) blocks the SINR engine.

@@ -205,6 +205,177 @@ or `ValueError` — never silently fall back to a hardcoded default.
 > Claude Code must append an entry here at the end of every working session.
 > Format shown below. Newest entry at the top.
 
+### 2026-07-19 — [P2][P3][P4][P5] Tracker, SPSA, codebook, bandit — all gates pass (20/20 antijam tests)
+
+**[P2] Mode C covariance tracker** (`adapt_tracking_init/update`):
+- λ × loading sweep (scratch script): snapshots contain the desired signal
+  (MPDR), so the plan's −10 dB loading self-nulls — oracle gap 2–3.7 dB.
+  Chose **λ = 0.98, diagonal_loading_db = +10** (config updated): gap
+  0.39–0.80 dB across S1–S5 (gate < 1), recovery 1 update after the 10° jump
+  (gate ≤ 25), availability 97.4% on S2 (gate ≥ 95%). Toy-array threshold in
+  tests is 5 dB (8-el ULA SINR_max ≈ 9 dB; threshold is array-dependent).
+  `tests/test_antijam_tracking.m`.
+
+**[P3] SPSA baseline** (`adapt_spsa_init/update`):
+- Textbook SPSA diverged on the SINR-dB landscape (probes near deep nulls →
+  exploding gradients → catapulted onto plateaus; verified machinery on a
+  quadratic first). Fixes: Spall stability constant `A` in a_k = a/(A+k)^α
+  and an ascent-step norm clamp `step_max` — both now REQUIRED `adapt.spsa`
+  keys (config: a=2, c=0.2, A=15, step_max=0.3). Gate: median **10 probes**
+  to oracle−3 dB, 50/50 seeds (≤ 150 median). Drift characterization
+  (`results/antijam/p3_spsa_drift_characterization.png`): availability
+  collapses to 34–64% under 0.5–4°/s drift vs 97% for Mode C → motivates P5.
+  `tests/test_antijam_spsa.m`.
+
+**[P4] Codebook** (`agent_codebook_build`):
+- Arm = run_optimizer(peak@θ_s + null sector) then **null-space projection**
+  onto the window steering columns → numerically exact nulls at sampled
+  angles. Two design findings baked into the builder: peak directive uses
+  `aggregation 'min'` (with 'mean', solid-angle weighting parks the beam at
+  the window edge, off θ_s — observed −15 dB "gains"); the composite cost
+  alone plateaus at ~−25 dB depth (true Pareto point — bounds/tolerances
+  ruled out), hence the projection. New required agent keys:
+  `peak_width_deg` (≈ HPBW!), `null_weight` (=100). Builder warns when
+  guard < (peak_width+null_width)/2 (overlapping windows fight) — and the
+  P4 scan showed guard must also keep windows ~4 beamwidths off boresight
+  (toy: 30° for a 6.4° HPBW 16-el ULA). Arm-depth gate refined: depth at
+  null CENTER ≤ −30 dB + coverage ≤ −25 dB (window-MEAN depth is
+  DOF-limited for filled nulls; reported, not gated). Cache (.mat, param
+  echo, staleness detection) verified. Coverage plot:
+  `results/antijam/p4_codebook_coverage.png`. `tests/test_antijam_codebook.m`.
+
+**[P5] Bandit** (`agent_bandit_init/update`):
+- Discounted Thompson sampling, Gaussian posterior N(s_i/n_i, σ̃²/n_i),
+  optimistic prior (first ~n_arms probes sweep every arm); swucb
+  config-selectable alternative. Reward = SINR dB clipped [−10, 40].
+  σ̃ = 1 dB is load-bearing (5 dB → 40% identification; rewards are
+  near-deterministic at pattern level). Gate 1 refined: arms whose natural
+  sidelobe nulls coincide with θ_j tie with the designated arm, so success =
+  window coverage OR within 1 dB of best arm — **93/100** in ≤ 30 probes.
+  S2 availability **95.1%** median (≥ 90%). Recovery after the S3 jump:
+  median **0 probes** vs SPSA's **25** (≥ 2× gate; jump usually lands in an
+  adjacent covered window). Stretch goal (SPSA fine-tune) not needed.
+  `tests/test_antijam_bandit.m`.
+
+**Suite:** 20/20 antijam tests green; pre-existing `test_metrics` gain_dbi
+failure unrelated. **Next**: [P6] `run_antijam` campaign driver +
+`kpi_evaluate` + `plot_antijam_report` (incl. regret curve), Monte Carlo over
+S1–S5 × {oracle, LCMV, SPSA, bandit}, KPI table, headline plots.
+
+### 2026-07-18 — [P1] Simulation harness implemented; all four P1 gates pass
+
+**Implemented** (`MATLAB/antijam_utils/`):
+- `sim_scenario` — S1–S5 timeline generation. Jammer path = linear drift (+
+  optional jump) in offset coords u = θ − θ_s, FOLDED (billiard reflection)
+  into the allowed interval so it never enters the guard sector or leaves the
+  span: `phi_cut` → [guard, 360−guard]; `theta_cut` → the side of the main
+  beam the seeded initial draw lands on. Power profiles constant/step/onoff;
+  events (jump / power_step / turn_on) recorded for the recovery-time KPI.
+- `sim_engine_init` / `sim_engine_step` — pattern-level SINR per plan Section
+  2 with equal power split over 1–2 polarization components; Mode C snapshots
+  x = e_s·s + e_j·j + n drawn from a private `RandStream('mt19937ar')`;
+  θ_j mapped to the nearest cut-grid column. Required-key validation
+  throughout (`:MissingKey` errors, no silent defaults).
+- `sim_analytic_covariance` — interference-plus-noise R (no signal term) from
+  ground truth; oracle/KPI use only.
+- `adapt_lcmv` — general LCMV (C = 1–2 constraint columns, distortionless per
+  component; reduces to MVDR for n_c = 1) with linear diagonal loading.
+  Implemented EARLY (nominally P2) because the P1 oracle gate needs it.
+
+**P1 gates** (`MATLAB/tests/test_antijam_sim.m`, 5 tests, all pass):
+- Oracle LCMV null depth **−75.9 dB** at θ_j (gate ≤ −40) on an 8-el ULA,
+  J/N = 20 dB, analytic R; distortionless constraint |w'e_s| = 1 to 1e-12.
+- Sample covariance vs full analytic E[xx']: **1.3%** rel Frobenius error at
+  N = 50·N_el = 400 snapshots (gate < 5%).
+- Drift rate **1.9986°/s** measured vs 2.0 configured (**0.07%**, gate ±2%);
+  trajectory verified guard/span-respecting; identical under same seed,
+  different under different seed.
+- 2-element hand-computed SINR matches to **1e-10 relative**.
+- Contract checks: Mode C snapshots (N_el × K) vs Mode S `[]`; same scalar
+  SINR across modes under the same seed; error paths (`:NotStepped`,
+  `:EndOfScenario`, `:MissingKey`).
+
+**Full suite:** 37/38 — the one failure is the pre-existing
+`test_metrics/test_evaluate_metrics_matches_python` gain_dbi phi-wrap
+discrepancy (known issue, unrelated to this milestone).
+
+**Next**: [P2] `adapt_tracking_init/update` (exponential-forgetting R̂ +
+LCMV recompute), diagonal-loading and λ sweeps, oracle-gap / recovery /
+availability gates on the scenario suite.
+
+### 2026-07-18 — [P0] Interface freeze: antijam_utils stubs, config schema, decisions resolved
+
+**Implemented**:
+- Created `MATLAB/antijam_utils/` with 14 stub functions (full interface headers
+  in the repo docstring style; bodies raise `<name>:NotImplemented` with the
+  target phase): `sim_scenario`, `sim_engine_init`, `sim_engine_step`,
+  `sim_analytic_covariance`, `adapt_lcmv`, `adapt_tracking_init/update`,
+  `adapt_spsa_init/update`, `agent_codebook_build`, `agent_bandit_init/update`,
+  `kpi_evaluate`, `plot_antijam_report`, `run_antijam`; plus the entry wrapper
+  `MATLAB/scripts/run_antijam_script.m`.
+- Extended `config.yaml` with the `antijam` / `sim` / `adapt` / `agent`
+  sections, including the full S1–S5 scenario suite and cut selection
+  (`cut_type: phi_cut` at θ=90° for the current ManyDipoles data). Block-style
+  nesting only (the minimal reader has no inline flow mappings).
+- **Parse verified** via MATLAB MCP: all sections, nested `spsa` block, the
+  5-scenario block sequence, and the string list `algorithms` round-trip with
+  correct types; Milestone-1 sections unaffected. `checkcode` over all stubs
+  shows only the expected unused-arg/unset-return stub noise.
+- Plan updated: Status ACTIVE, P0 in-progress, `_init` files added to the
+  module tree, Section 6 marked implemented-in-config.
+
+**Decisions (Section 7 — resolved with Snir)**:
+- #4 SINR-engine field convention: **config-selectable** via `polarization`
+  (mirrors `run_optimization`); `total` = incoherent sum, equal power split
+  (unpolarized source, verify in P1). #1/#2/#3/#5: plan defaults locked
+  (10 dB threshold, 5° arm grid, clipped-dB reward, 16 snapshots/step).
+
+**Design notes**:
+- Frozen contracts: `[obs, sim_state] = sim_engine_step(sim_state, w)` with
+  `obs.sinr_db` + `obs.snapshots` (Mode C only, `[]` in Mode S); algorithm
+  pairs `state = <alg>_init(...)`, `[w, state] = <alg>_update(state, obs)`.
+- Private `RandStream('mt19937ar')` per engine/algorithm instead of the global
+  rng, so Monte Carlo runs stay independent and reproducible.
+- Power reference: σ_n² = 1 per element; σ_j², σ_s² from `jn_ratio_db` /
+  `sigma_s_db`.
+
+**Next**: P0 gate — interface signatures reviewed/approved in-session, then P1
+(implement `sim_scenario` + engine + analytic covariance, with the four
+quantitative P1 tests in `MATLAB/tests/test_antijam_*.m`).
+
+### 2026-07-18 — [P0] Anti-jam milestone plan reworked for direct MATLAB implementation
+
+**Implemented**:
+- Rewrote `antijam_milestone_plan.md` from Python-first (with MATLAB migration as
+  final phase P7) to a **MATLAB-only** plan built directly on the existing
+  `MATLAB/matlab_utils/` port. P7 dropped; phases now P0–P6, target 8–9 weeks.
+- New code will live in a flat `MATLAB/antijam_utils/` folder (file = function,
+  prefixes `sim_` / `adapt_` / `agent_` / `kpi_` / `plot_`), entry wrapper in
+  `MATLAB/scripts/`, tests in `MATLAB/tests/test_antijam_*.m`.
+- Interface contracts restated in MATLAB idiom: `<alg>_init` / `<alg>_update`
+  function pairs over plain state structs; `[obs, sim_state] =
+  sim_engine_step(sim_state, w)` is the only observation channel.
+- Config sketch fixed to the `read_config_yaml` subset (the `spsa:` section was
+  an inline flow mapping, which the minimal reader does not support — now block
+  style).
+- Validation strategy replaced Python golden tests with analytic/toy-case unit
+  tests (closed-form LCMV null depth, hand-computed 2-element SINR,
+  covariance-convergence rates, fixed-seed regression).
+- Updated the milestone section of `CLAUDE.md` to match (P0–P6, MATLAB-only,
+  `antijam_utils` layout, `sim_engine_step` contract).
+
+**Decisions (confirmed with Snir)**:
+- MATLAB only — no Python counterpart, Python `src/` frozen at Milestone 1.
+- New `antijam_utils/` folder rather than adding to `matlab_utils/` or using
+  `+package` namespaces.
+- Compatibility target: R2020a + Optimization Toolbox only (same as the
+  Milestone-1 compatibility pass).
+- Correctness via analytic/toy-case tests; no Python-generated fixtures.
+
+**Next**: plan approval, then P0 (freeze interfaces, extend `config.yaml`,
+stub `antijam_utils` functions, resolve/defer Section 7 open decisions —
+decision #4, co-pol vs total power, blocks the SINR engine).
+
 ### 2026-06-11 — Generic CST polarization-column parsing (Python + MATLAB) and weight-tuner default changes
 
 **Implemented**:
