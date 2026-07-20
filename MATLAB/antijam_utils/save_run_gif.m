@@ -25,8 +25,10 @@ function save_run_gif(run_log, scenario, stack1, stack2, theta_deg, phi_deg, ...
 %       aj          : antijam config (theta_s_deg, sinr_min_db, cut_type,
 %                     cut_theta_deg / cut_phi_deg).
 %       gif_cfg     : struct. Required: max_frames, fps, dynamic_range_db.
+%                     Optional: format 'gif' (default) | 'mp4' (VideoWriter
+%                     MPEG-4 — H.264, ~20x smaller files).
 %       title_label : char shown in the title (e.g. 'J1 / lcmv').
-%       out_path    : destination .gif path.
+%       out_path    : destination path; extension should match the format.
 %
 %   Part of: Antenna Array Pattern Optimization Tool — anti-jam milestone [P6].
 
@@ -34,6 +36,20 @@ for key = {'max_frames', 'fps', 'dynamic_range_db'}
     if ~isfield(gif_cfg, key{1}) || isempty(gif_cfg.(key{1}))
         error('save_run_gif:MissingKey', 'Missing required gif config key: ''%s''.', key{1});
     end
+end
+fmt = 'gif';
+if isfield(gif_cfg, 'format') && ~isempty(gif_cfg.format)
+    fmt = lower(gif_cfg.format);
+end
+if ~any(strcmp(fmt, {'gif', 'mp4'}))
+    error('save_run_gif:BadFormat', ...
+        'Unknown gif.format ''%s'' (expected ''gif'' or ''mp4'').', fmt);
+end
+writer = [];
+if strcmp(fmt, 'mp4')
+    writer = VideoWriter(out_path, 'MPEG-4');
+    writer.FrameRate = gif_cfg.fps;
+    open(writer);
 end
 
 T       = numel(scenario.t_s);
@@ -118,16 +134,25 @@ for k = frames
         'AutoUpdate', 'off');
 
     % ── Append frame ──────────────────────────────────────────────
-    frame = getframe(fig);
-    [A, map] = rgb2ind(frame2im(frame), 256);
-    if first
-        imwrite(A, map, out_path, 'gif', 'LoopCount', Inf, ...
-            'DelayTime', 1 / gif_cfg.fps);
-        first = false;
+    im = frame2im(getframe(fig));
+    if strcmp(fmt, 'mp4')
+        % H.264 needs even frame dimensions; crop a stray row/column.
+        im = im(1:end - mod(size(im, 1), 2), 1:end - mod(size(im, 2), 2), :);
+        writeVideo(writer, im);
     else
-        imwrite(A, map, out_path, 'gif', 'WriteMode', 'append', ...
-            'DelayTime', 1 / gif_cfg.fps);
+        [A, map] = rgb2ind(im, 256);
+        if first
+            imwrite(A, map, out_path, 'gif', 'LoopCount', Inf, ...
+                'DelayTime', 1 / gif_cfg.fps);
+            first = false;
+        else
+            imwrite(A, map, out_path, 'gif', 'WriteMode', 'append', ...
+                'DelayTime', 1 / gif_cfg.fps);
+        end
     end
+end
+if ~isempty(writer)
+    close(writer);
 end
 close(fig);
 end

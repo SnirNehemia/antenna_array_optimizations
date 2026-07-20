@@ -14,9 +14,10 @@ function output_dir = run_jammer_demo(config_path)
 %     - runs the closed loop (closed_loop_run) with the oracle timeline as
 %       reference,
 %     - evaluates the 5 KPIs (kpi_evaluate -> kpi_table.csv/txt),
-%     - renders gif_<scenario>_<algorithm>.gif (save_run_gif): the full 2-D
+%     - renders vid_<scenario>_<algorithm>.<ext> (save_run_gif): the full 2-D
 %       radiation pattern evolving over time, the jammer's position/strength
-%       as a dot, and live SINR + gain-to-target traces.
+%       as a dot, and live SINR + gain-to-target traces. Extension follows
+%       gif.format ('gif' default, or 'mp4' for MPEG-4).
 %
 %   Inputs:
 %       config_path : path to the demo YAML. Default: <repo>/jammer_config.yaml.
@@ -112,9 +113,13 @@ for isc = 1:numel(aj.scenarios)
         runs{end + 1} = struct('scenario_id', scn.id, 'algorithm', alg, ...
             'seed', config.sim.seed, 'run_log', log, 'kpi', kpi, ...
             'scenario', scn); %#ok<AGROW>
-        gif_path = fullfile(output_dir, sprintf('gif_%s_%s.gif', scn.id, alg));
+        vid_ext = 'gif';
+        if isfield(config.gif, 'format') && ~isempty(config.gif.format)
+            vid_ext = lower(config.gif.format);
+        end
+        vid_path = fullfile(output_dir, sprintf('vid_%s_%s.%s', scn.id, alg, vid_ext));
         save_run_gif(log, scn, stack1, stack2, theta_deg, phi_deg, aj, ...
-            config.gif, sprintf('%s / %s', scn.id, alg), gif_path);
+            config.gif, sprintf('%s / %s', scn.id, alg), vid_path);
         fprintf('%s ', alg);
     end
     fprintf('\n');
