@@ -46,7 +46,9 @@ n_el   = size(sim_state.E1, 1);
 n_comp = 1 + double(~isempty(sim_state.E2));
 
 % True jammer steering column(s) at the current step.
-idx_j = nearest_index(sim_state.angle_deg(:), scn.theta_j_deg(k));
+[it_j, ip_j] = nearest_index_2d(sim_state.theta_deg, sim_state.phi_deg, ...
+    scn.theta_j_deg(k), scn.phi_j_deg(k));
+idx_j = (ip_j - 1) * numel(sim_state.theta_deg) + it_j;
 e_j   = sim_state.E1(:, idx_j);
 if n_comp == 2
     e_j = [e_j, sim_state.E2(:, idx_j)];

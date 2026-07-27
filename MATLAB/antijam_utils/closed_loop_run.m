@@ -1,34 +1,39 @@
-function log = closed_loop_run(alg, E1c, E2c, cut_ang, scn, aj, sim_cfg, config, codebook)
+function log = closed_loop_run(alg, stack1, stack2, theta_deg, phi_deg, scn, aj, sim_cfg, config, codebook)
 % CLOSED_LOOP_RUN  One closed-loop run of an algorithm against a scenario.
 %
-%   log = CLOSED_LOOP_RUN(alg, E1c, E2c, cut_ang, scn, aj, sim_cfg, config, codebook)
+%   log = CLOSED_LOOP_RUN(alg, stack1, stack2, theta_deg, phi_deg, scn, aj, ...
+%                         sim_cfg, config, codebook)
 %
 %   Modes are fixed per algorithm: oracle, lcmv -> Mode C; spsa, bandit ->
 %   Mode S. The oracle applies the perfect-knowledge LCMV weights with a
 %   one-step lag (R of step k -> w applied at k+1); SPSA warm-starts from the
 %   quiescent MVDR beam. Shared by run_antijam and run_jammer_demo.
 %
+%   [P7]: operates on the full 2-D (theta, phi) far-field grid — no 1-D cut.
+%
 %   Inputs:
-%       alg      : 'oracle' | 'lcmv' | 'spsa' | 'bandit'.
-%       E1c, E2c : (N_el x N_angles) cut matrices (E2c may be []).
-%       cut_ang  : cut angle axis [deg].
-%       scn      : struct from sim_scenario.
-%       aj       : antijam config section.
-%       sim_cfg  : sim config section (seed set per run).
-%       config   : full parsed config (adapt / agent sections).
-%       codebook : struct from agent_codebook_build ([] unless alg = bandit).
+%       alg            : 'oracle' | 'lcmv' | 'spsa' | 'bandit'.
+%       stack1, stack2 : (N_el x N_theta x N_phi) far-field stacks (stack2 may
+%                        be [] for single-component operation).
+%       theta_deg      : (1 x N_theta) elevation grid [deg].
+%       phi_deg        : (1 x N_phi) azimuth grid [deg].
+%       scn            : struct from sim_scenario.
+%       aj             : antijam config section.
+%       sim_cfg        : sim config section (seed set per run).
+%       config         : full parsed config (adapt / agent sections).
+%       codebook       : struct from agent_codebook_build ([] unless alg = bandit).
 %
 %   Outputs:
 %       log : struct with sinr_db (1 x T), W (N_el x T), arm_index (1 x T,
-%             NaN except bandit), cut (E1/E2/angle_deg/e_s), and for bandit
-%             runs null_center_deg. Caller adds oracle_sinr_db.
+%             NaN except bandit), grid (E1/E2/theta_deg/phi_deg/e_s), and for
+%             bandit runs null_center_deg. Caller adds oracle_sinr_db.
 %
-%   Part of: Antenna Array Pattern Optimization Tool — anti-jam milestone [P6].
+%   Part of: Antenna Array Pattern Optimization Tool — anti-jam milestone [P6, P7].
 
 mode = 'S';
 if any(strcmp(alg, {'oracle', 'lcmv'})), mode = 'C'; end
-st   = sim_engine_init(E1c, E2c, cut_ang, scn, aj, sim_cfg, mode);
-n_el = size(E1c, 1);
+st   = sim_engine_init(stack1, stack2, theta_deg, phi_deg, scn, aj, sim_cfg, mode);
+n_el = size(stack1, 1);
 T    = numel(scn.t_s);
 
 switch alg
@@ -70,7 +75,8 @@ for k = 1:T
             [w, bd] = agent_bandit_update(bd, obs);
     end
 end
-log.cut = struct('E1', E1c, 'E2', E2c, 'angle_deg', cut_ang, 'e_s', st.e_s);
+log.grid = struct('E1', st.E1, 'E2', st.E2, 'theta_deg', theta_deg, ...
+    'phi_deg', phi_deg, 'e_s', st.e_s);
 if strcmp(alg, 'bandit')
     log.null_center_deg = codebook.null_center_deg;   % for the arm heatmap
 end

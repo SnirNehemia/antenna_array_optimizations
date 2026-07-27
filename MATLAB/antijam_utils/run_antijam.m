@@ -4,8 +4,9 @@ function output_dir = run_antijam(config_path)
 %   output_dir = RUN_ANTIJAM(config_path)
 %
 %   Top-level driver (analogue of run_optimization for this milestone):
-%   loads config + CST element patterns, extracts the 1-D azimuth cut,
-%   builds/loads the codebook (cached), runs every scenario x algorithm x
+%   loads config + CST element patterns, [P7] operates on the full 2-D
+%   (theta, phi) grid natively (no 1-D cut extraction), builds/loads the
+%   codebook (cached), runs every scenario x algorithm x
 %   Monte Carlo seed closed loop (closed_loop_run), evaluates the 5 KPIs per
 %   run, and writes a KPI table (CSV + txt) + report figures + config
 %   snapshot to a timestamped results/antijam/<ts>/ folder.
@@ -39,7 +40,7 @@ for key = {'element_patterns_dir', 'antijam', 'sim', 'adapt', 'agent', 'output'}
 end
 aj  = config.antijam;
 smc = config.sim;
-for key = {'theta_s_deg', 'sinr_min_db', 'algorithms', 'scenarios', 'cut_type'}
+for key = {'theta_s_deg', 'phi_s_deg', 'sinr_min_db', 'algorithms', 'scenarios'}
     if ~isfield(aj, key{1}) || isempty(aj.(key{1}))
         error('run_antijam:MissingKey', 'Missing required antijam config key: ''%s''.', key{1});
     end
@@ -72,8 +73,6 @@ phi_deg   = patterns(1).phi_deg;
 [stack1, stack2, pol_label] = select_polarization_stacks(patterns, config);
 fprintf('  %d elements, grid %dx%d, polarization: %s\n', ...
     size(stack1, 1), numel(theta_deg), numel(phi_deg), pol_label);
-[E1c, E2c, cut_ang] = extract_cut(stack1, stack2, theta_deg, phi_deg, aj);
-fprintf('  Cut: %s, %d angles\n', aj.cut_type, numel(cut_ang));
 
 % ── Codebook (cached) ─────────────────────────────────────────────
 codebook = [];
@@ -98,7 +97,7 @@ for isc = 1:numel(aj.scenarios)
         fprintf('%s seed %d: ', scn.id, sim_cfg.seed);
 
         % Oracle first — its SINR timeline is the reference for all logs.
-        o_log = closed_loop_run('oracle', E1c, E2c, cut_ang, scn, aj, sim_cfg, config, codebook);
+        o_log = closed_loop_run('oracle', stack1, stack2, theta_deg, phi_deg, scn, aj, sim_cfg, config, codebook);
         o_log.oracle_sinr_db = o_log.sinr_db;
 
         for ia = 1:numel(algorithms)
@@ -106,7 +105,7 @@ for isc = 1:numel(aj.scenarios)
             if strcmp(alg, 'oracle')
                 log = o_log;
             else
-                log = closed_loop_run(alg, E1c, E2c, cut_ang, scn, aj, sim_cfg, config, codebook);
+                log = closed_loop_run(alg, stack1, stack2, theta_deg, phi_deg, scn, aj, sim_cfg, config, codebook);
                 log.oracle_sinr_db = o_log.sinr_db;
             end
             kpi = kpi_evaluate(log, scn, aj);

@@ -13,12 +13,14 @@ here = fileparts(mfilename('fullpath'));
 addpath(fullfile(fileparts(here), 'matlab_utils'));
 addpath(fullfile(fileparts(here), 'antijam_utils'));
 
-testCase.TestData.aj = struct('theta_s_deg', 0.0, 'guard_deg', 10.0, ...
-    'jn_ratio_db', 20.0, 'sigma_s_db', 0.0, 'cut_type', 'theta_cut');
+testCase.TestData.aj = struct('theta_s_deg', 0.0, 'phi_s_deg', 0.0, ...
+    'guard_deg', 10.0, 'jn_ratio_db', 20.0, 'sigma_s_db', 0.0);
 testCase.TestData.spsa_cfg = struct('a', 2.0, 'c', 0.2, 'alpha', 0.602, ...
     'gamma', 0.101, 'A', 15, 'step_max', 0.3);
-testCase.TestData.ang = linspace(-90, 90, 361);
-testCase.TestData.E   = exp(1i * pi * (0:7).' * sind(testCase.TestData.ang));
+testCase.TestData.theta_deg = linspace(0, 180, 361);
+testCase.TestData.phi_deg   = 0;
+testCase.TestData.E   = exp(1i * pi * (0:7).' * sind(testCase.TestData.theta_deg));
+testCase.TestData.stack = reshape(testCase.TestData.E, 8, 361, 1);
 end
 
 
@@ -36,13 +38,13 @@ for s = 1:n_seeds
                        td.aj, sc);
 
     % Oracle SINR for this seed's jammer angle (static -> constant over time).
-    st = sim_engine_init(td.E, [], td.ang, scn, td.aj, sc, 'S');
+    st = sim_engine_init(td.stack, [], td.theta_deg, td.phi_deg, scn, td.aj, sc, 'S');
     [~, st1] = sim_engine_step(st, ones(8, 1));
     R = sim_analytic_covariance(st1);
     oracle_db = 10 * log10(st1.sigma_s_sq * real(st1.e_s' * (R \ st1.e_s)));
 
     % SPSA closed loop from uniform weights.
-    st   = sim_engine_init(td.E, [], td.ang, scn, td.aj, sc, 'S');
+    st   = sim_engine_init(td.stack, [], td.theta_deg, td.phi_deg, scn, td.aj, sc, 'S');
     spsa = adapt_spsa_init(td.spsa_cfg, ones(8, 1), 2000 + s);
     w = spsa.w;
     for k = 1:n_probes

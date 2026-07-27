@@ -9,6 +9,9 @@ function tests = test_antijam_tracking
 % The SINR threshold here is 5 dB, not the config default 10 dB: the 8-element
 % unit-gain toy ULA tops out at SINR_max = sigma_s^2 * N_el ~ 9 dB, so the
 % operational threshold is array-dependent (customer-set for the real array).
+%
+% [P7]: native 2-D engine — toy ULA lives on physical theta domain [0, 180],
+% boresight (theta_s_deg) at the pole (0), phi fixed at 0.
 tests = functiontests(localfunctions);
 end
 
@@ -18,27 +21,34 @@ here = fileparts(mfilename('fullpath'));
 addpath(fullfile(fileparts(here), 'matlab_utils'));
 addpath(fullfile(fileparts(here), 'antijam_utils'));
 
-aj = struct('theta_s_deg', 0.0, 'guard_deg', 10.0, 'jn_ratio_db', 20.0, ...
-            'sigma_s_db', 0.0, 'cut_type', 'theta_cut');
+aj = struct('theta_s_deg', 0.0, 'phi_s_deg', 0.0, 'guard_deg', 10.0, ...
+            'jn_ratio_db', 20.0, 'sigma_s_db', 0.0);
 sc = struct('dt_s', 0.05, 'duration_s', 60.0, 'snapshots_per_step', 16, 'seed', 1234);
 acfg = struct('forgetting_lambda', 0.98, 'diagonal_loading_db', 10);
-ang  = linspace(-90, 90, 361);
-E    = exp(1i * pi * (0:7).' * sind(ang));   % half-wavelength 8-el ULA
+theta_deg = linspace(0, 180, 361);
+phi_deg   = 0;
+E    = exp(1i * pi * (0:7).' * sind(theta_deg));   % half-wavelength 8-el ULA
+stack = reshape(E, 8, 361, 1);
 
 testCase.TestData.aj = aj;
 testCase.TestData.sc = sc;
 testCase.TestData.acfg = acfg;
-testCase.TestData.ang = ang;
+testCase.TestData.theta_deg = theta_deg;
+testCase.TestData.phi_deg = phi_deg;
 testCase.TestData.E = E;
+testCase.TestData.stack = stack;
 testCase.TestData.thr_db = 5.0;
 testCase.TestData.suite = { ...
     struct('id', 'S1', 'motion', 'static', 'power', 'constant'), ...
-    struct('id', 'S2', 'motion', 'drift', 'drift_deg_per_s', 2.0, 'power', 'constant'), ...
-    struct('id', 'S3', 'motion', 'drift', 'drift_deg_per_s', 2.0, ...
-           'jump_deg', 10.0, 'jump_time_s', 30.0, 'power', 'constant'), ...
+    struct('id', 'S2', 'motion', 'drift', 'theta_drift_deg_per_s', 2.0, ...
+           'phi_drift_deg_per_s', 0.0, 'power', 'constant'), ...
+    struct('id', 'S3', 'motion', 'drift', 'theta_drift_deg_per_s', 2.0, ...
+           'phi_drift_deg_per_s', 0.0, ...
+           'theta_jump_deg', 10.0, 'jump_time_s', 30.0, 'power', 'constant'), ...
     struct('id', 'S4', 'motion', 'static', 'power', 'step', ...
            'power_step_db', 10.0, 'step_time_s', 30.0), ...
-    struct('id', 'S5', 'motion', 'drift', 'drift_deg_per_s', 2.0, 'power', 'onoff', ...
+    struct('id', 'S5', 'motion', 'drift', 'theta_drift_deg_per_s', 2.0, ...
+           'phi_drift_deg_per_s', 0.0, 'power', 'onoff', ...
            'duty_cycle', 0.5, 'toggle_period_s', 10.0)};
 end
 
@@ -48,7 +58,7 @@ end
 function log = track_loop(td, scn)
 % Honest closed loop: w applied at step k comes from the update on obs(k-1).
 % Oracle SINR via the MVDR max-SINR identity sigma_s^2 * e_s' R^-1 e_s.
-st  = sim_engine_init(td.E, [], td.ang, scn, td.aj, td.sc, 'C');
+st  = sim_engine_init(td.stack, [], td.theta_deg, td.phi_deg, scn, td.aj, td.sc, 'C');
 trk = adapt_tracking_init(td.acfg, st.e_s, size(td.E, 1));
 T   = numel(scn.t_s);
 log = struct('sinr_db', zeros(1, T), 'oracle_sinr_db', zeros(1, T));
@@ -124,12 +134,12 @@ end
 
 function test_tracker_requires_mode_c(testCase)
 td   = testCase.TestData;
-trk  = adapt_tracking_init(td.acfg, td.E(:, 181), 8);
+trk  = adapt_tracking_init(td.acfg, td.E(:, 1), 8);
 obs_s = struct('sinr_db', 0.0, 'snapshots', []);
 verifyError(testCase, @() adapt_tracking_update(trk, obs_s), ...
     'adapt_tracking_update:NoSnapshots');
 % Missing config key raises (no silent defaults).
 verifyError(testCase, ...
-    @() adapt_tracking_init(struct('forgetting_lambda', 0.98), td.E(:, 181), 8), ...
+    @() adapt_tracking_init(struct('forgetting_lambda', 0.98), td.E(:, 1), 8), ...
     'adapt_tracking_init:MissingKey');
 end

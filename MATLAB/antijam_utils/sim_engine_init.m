@@ -1,16 +1,15 @@
-function sim_state = sim_engine_init(E_primary, E_secondary, angle_deg, ...
+function sim_state = sim_engine_init(stack1, stack2, theta_deg, phi_deg, ...
                                      scenario, antijam_config, sim_config, mode)
 % SIM_ENGINE_INIT  Build the closed-loop simulation state struct.
 %
-%   sim_state = SIM_ENGINE_INIT(E_primary, E_secondary, angle_deg, scenario, ...
+%   sim_state = SIM_ENGINE_INIT(stack1, stack2, theta_deg, phi_deg, scenario, ...
 %                               antijam_config, sim_config, mode)
 %
-%   Precomputes steering data and power levels for sim_engine_step. The engine
-%   operates on a 1-D azimuth cut: callers extract E_primary/E_secondary from
-%   the (N_el, N_theta, N_phi) stack per config antijam.cut_type (see
-%   run_antijam). Polarization convention is config-selectable and enters ONLY
-%   through whether E_secondary is empty (copol / single component) or not
-%   ('total': incoherent sum over the two components) — mirroring
+%   Precomputes steering data and power levels for sim_engine_step. [P7]: the
+%   engine operates natively on the full 2-D (theta, phi) far-field grid — no
+%   1-D cut is extracted. Polarization convention is config-selectable and
+%   enters ONLY through whether stack2 is empty (copol / single component) or
+%   not ('total': incoherent sum over the two components) — mirroring
 %   run_optimizer's element_patterns_secondary argument.
 %
 %   Power reference: sigma_n^2 = 1 (0 dB noise floor per element);
@@ -19,24 +18,31 @@ function sim_state = sim_engine_init(E_primary, E_secondary, angle_deg, ...
 %   between the two components (unpolarized-source assumption, independent
 %   complex-Gaussian amplitudes per component).
 %
-%   The true jammer angle is mapped to the NEAREST column of the cut grid
-%   (nearest_index), so angular resolution is limited by the CST export step.
+%   The true jammer (theta, phi) is mapped to the NEAREST grid point
+%   (nearest_index_2d), so angular resolution is limited by the CST export
+%   step. The desired direction (theta_s_deg, phi_s_deg) likewise maps to a
+%   single nearest grid point (matching the pre-[P7] theta_s_deg-only behavior,
+%   which also had no explicit peak width).
 %
 %   Inputs:
-%       E_primary      : (N_el x N_angles) complex cut of the primary component.
-%       E_secondary    : (N_el x N_angles) complex cut of the secondary
-%                        component, or [] for single-component operation.
-%       angle_deg      : (1 x N_angles) cut angle axis [deg].
+%       stack1, stack2 : (N_el x N_theta x N_phi) complex far-field stacks
+%                        (primary / secondary polarization component); stack2
+%                        may be [] for single-component operation.
+%       theta_deg      : (1 x N_theta) elevation grid [deg].
+%       phi_deg        : (1 x N_phi) azimuth grid [deg].
 %       scenario       : struct from sim_scenario.
-%       antijam_config : struct. Required: theta_s_deg, sigma_s_db.
+%       antijam_config : struct. Required: theta_s_deg, phi_s_deg, sigma_s_db.
 %       sim_config     : struct. Required: seed; snapshots_per_step (Mode C).
 %       mode           : 'C' (obs carries snapshots) | 'S' (scalar SINR only).
 %
 %   Outputs:
 %       sim_state : struct with fields
-%           E1, E2      : the cut matrices ([] E2 when single-component).
-%           angle_deg   : (1 x N_angles) cut axis.
-%           e_s         : (N_el x n_comp) steering column(s) at theta_s_deg.
+%           E1, E2      : (N_el x N_theta*N_phi) flattened stacks ([] E2 when
+%                         single-component), column-major over (theta, phi)
+%                         i.e. matching reshape(stack, N_el, N_theta*N_phi).
+%           theta_deg, phi_deg : grid axes.
+%           e_s         : (N_el x n_comp) steering column(s) at
+%                         (theta_s_deg, phi_s_deg).
 %           scenario    : as passed in.
 %           mode        : 'C' | 'S'.
 %           k           : current step index (0 = not stepped yet; advanced by
@@ -47,9 +53,10 @@ function sim_state = sim_engine_init(E_primary, E_secondary, angle_deg, ...
 %           stream      : RandStream('mt19937ar', seed) — private stream so
 %                         Monte Carlo runs are independent of the global rng.
 %
-%   Part of: Antenna Array Pattern Optimization Tool — anti-jam milestone [P1].
+%   Part of: Antenna Array Pattern Optimization Tool — anti-jam milestone [P1, P7].
 
 req_field(antijam_config, 'theta_s_deg', 'antijam');
+req_field(antijam_config, 'phi_s_deg',   'antijam');
 req_field(antijam_config, 'sigma_s_db',  'antijam');
 req_field(sim_config, 'seed', 'sim');
 
@@ -62,19 +69,25 @@ else
     n_snapshots = 0;
 end
 
-angle_deg = angle_deg(:).';
-n_angles  = numel(angle_deg);
-if size(E_primary, 2) ~= n_angles
+theta_deg = theta_deg(:).';
+phi_deg   = phi_deg(:).';
+n_theta   = numel(theta_deg);
+n_phi     = numel(phi_deg);
+n_el      = size(stack1, 1);
+% [size(stack1,3) rather than size(stack1) avoids MATLAB silently dropping a
+% trailing singleton dimension (n_phi = 1 degenerate grids, e.g. toy tests).]
+if size(stack1, 1) ~= n_el || size(stack1, 2) ~= n_theta || size(stack1, 3) ~= n_phi
     error('sim_engine_init:BadShape', ...
-        'E_primary has %d columns but angle_deg has %d entries.', ...
-        size(E_primary, 2), n_angles);
+        'stack1 must be (N_el x %d x %d); got %s.', ...
+        n_theta, n_phi, mat2str(size(stack1)));
 end
-if ~isempty(E_secondary) && ~isequal(size(E_secondary), size(E_primary))
+if ~isempty(stack2) && ...
+        (size(stack2, 1) ~= n_el || size(stack2, 2) ~= n_theta || size(stack2, 3) ~= n_phi)
     error('sim_engine_init:BadShape', ...
-        'E_secondary size must match E_primary or be [].');
+        'stack2 size must match stack1 or be [].');
 end
 
-REQUIRED_SCENARIO = {'t_s', 'theta_j_deg', 'jammer_on', 'jn_ratio_db'};
+REQUIRED_SCENARIO = {'t_s', 'theta_j_deg', 'phi_j_deg', 'jammer_on', 'jn_ratio_db'};
 for i = 1:numel(REQUIRED_SCENARIO)
     if ~isfield(scenario, REQUIRED_SCENARIO{i})
         error('sim_engine_init:BadScenario', ...
@@ -82,16 +95,25 @@ for i = 1:numel(REQUIRED_SCENARIO)
     end
 end
 
-idx_s = nearest_index(angle_deg(:), antijam_config.theta_s_deg);
-e_s   = E_primary(:, idx_s);
-if ~isempty(E_secondary)
-    e_s = [e_s, E_secondary(:, idx_s)];
+E1 = reshape(stack1, n_el, n_theta * n_phi);
+E2 = [];
+if ~isempty(stack2)
+    E2 = reshape(stack2, n_el, n_theta * n_phi);
+end
+
+[it_s, ip_s] = nearest_index_2d(theta_deg, phi_deg, ...
+    antijam_config.theta_s_deg, antijam_config.phi_s_deg);
+idx_s = (ip_s - 1) * n_theta + it_s;   % linear index into the (theta,phi) flatten
+e_s   = E1(:, idx_s);
+if ~isempty(E2)
+    e_s = [e_s, E2(:, idx_s)];
 end
 
 sim_state = struct( ...
-    'E1',          E_primary, ...
-    'E2',          E_secondary, ...
-    'angle_deg',   angle_deg, ...
+    'E1',          E1, ...
+    'E2',          E2, ...
+    'theta_deg',   theta_deg, ...
+    'phi_deg',     phi_deg, ...
     'e_s',         e_s, ...
     'scenario',    scenario, ...
     'mode',        mode, ...

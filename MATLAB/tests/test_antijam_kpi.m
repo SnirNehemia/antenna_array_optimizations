@@ -1,6 +1,8 @@
 function tests = test_antijam_kpi
 % TEST_ANTIJAM_KPI  Unit tests for kpi_evaluate on hand-computable logs
-% (P6). Uses a 2-element toy cut where every KPI has a closed-form value.
+% (P6). Uses a 2-element toy grid where every KPI has a closed-form value.
+% [P7]: native 2-D (theta, phi) engine — toy grid lives on physical theta
+% domain [0, 180], boresight at the pole (theta_s_deg = 0), phi fixed at 0.
 tests = functiontests(localfunctions);
 end
 
@@ -13,29 +15,33 @@ end
 
 
 function [run_log, scenario, aj] = toy_case()
-% 2-el ULA cut over -90..90 (61 points); jammer static at +40 deg, one
-% turn_on event at t = 1 s; T = 5 steps of dt = 1 s.
-ang = linspace(-90, 90, 61);
-E   = exp(1i * pi * (0:1).' * sind(ang));       % 2-el half-wavelength ULA
-e_s = E(:, 31);                                  % boresight
+% 2-el ULA over theta in [0, 180] (61 points, boresight at the pole, theta =
+% 0); jammer static at 40 deg off boresight, one turn_on event at t = 1 s;
+% T = 5 steps of dt = 1 s.
+theta_deg = linspace(0, 180, 61);
+phi_deg   = 0;
+E   = exp(1i * pi * (0:1).' * sind(theta_deg));   % 2-el half-wavelength ULA
+e_s = E(:, 1);                                     % boresight (theta = 0)
 T   = 5;
 scenario = struct('id', 'toy', 't_s', 0:T-1, ...
     'theta_j_deg', 40 * ones(1, T), ...
+    'phi_j_deg',   0 * ones(1, T), ...
     'jammer_on',  logical([0 1 1 1 1]), ...
     'jn_ratio_db', 20 * ones(1, T), ...
     'events', {{struct('t_s', 1.0, 'type', 'turn_on')}});
-aj = struct('sinr_min_db', 5.0, 'theta_s_deg', 0.0);
+aj = struct('sinr_min_db', 5.0, 'theta_s_deg', 0.0, 'phi_s_deg', 0.0);
 
 % Weights: steps 1-2 quiescent (matched filter), steps 3-5 = MVDR against
-% the jammer -> exact null at +40, SINR above threshold.
+% the jammer -> exact null at 40 deg, SINR above threshold.
 w_q = adapt_lcmv(eye(2), e_s, 0);
-R   = 100 * (E(:, nearest_index(ang(:), 40)) * E(:, nearest_index(ang(:), 40))') + eye(2);
+idx_j = nearest_index(theta_deg(:), 40);
+R   = 100 * (E(:, idx_j) * E(:, idx_j)') + eye(2);
 w_n = adapt_lcmv(R, e_s, 0);
 W   = [w_q, w_q, w_n, w_n, w_n];
 
 run_log = struct();
 run_log.W = W;
-run_log.cut = struct('E1', E, 'E2', [], 'angle_deg', ang, 'e_s', e_s);
+run_log.grid = struct('E1', E, 'E2', [], 'theta_deg', theta_deg, 'phi_deg', phi_deg, 'e_s', e_s);
 % SINR timeline chosen by hand around the 5 dB threshold:
 run_log.sinr_db        = [10, -3, 2, 7, 8];     % dips at turn-on, recovers @ k=4
 run_log.oracle_sinr_db = [10,  8, 8, 8, 8];
@@ -59,7 +65,7 @@ function test_null_pointing_and_gain_penalty(testCase)
 [run_log, scenario, aj] = toy_case();
 kpi = kpi_evaluate(run_log, scenario, aj);
 % Jammer off at k=1 -> NaN. MVDR steps: nearest pattern null within one
-% grid cell (3 deg) of +40. (The quiescent 2-el pattern also has SOME null,
+% grid cell (3 deg) of 130. (The quiescent 2-el pattern also has SOME null,
 % so k=2 is finite but far-off is fine — only check the MVDR steps.)
 verifyTrue(testCase, isnan(kpi.null_pointing_err_deg(1)));
 verifyLessThanOrEqual(testCase, max(kpi.null_pointing_err_deg(3:5)), 3.0);
@@ -68,6 +74,6 @@ verifyEqual(testCase, kpi.peak_gain_penalty_db(1:2), zeros(1, 2), 'AbsTol', 1e-9
 % MVDR-with-jammer steps sacrifice a little gain, never gain any.
 verifyLessThanOrEqual(testCase, kpi.peak_gain_penalty_db(3:5), zeros(1, 3) + 1e-9);
 % Missing threshold key raises.
-verifyError(testCase, @() kpi_evaluate(run_log, scenario, struct('theta_s_deg', 0)), ...
+verifyError(testCase, @() kpi_evaluate(run_log, scenario, struct('theta_s_deg', 90)), ...
     'kpi_evaluate:MissingKey');
 end

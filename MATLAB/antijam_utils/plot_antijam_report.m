@@ -68,25 +68,32 @@ for a = 1:numel(algs)
 end
 save_png(f, output_dir, 'recovery_hist.png');
 
-% ── 3. Bandit arm heatmap per scenario ────────────────────────────
+% ── 3. Bandit arm heatmap per scenario — [P7] theta and phi tracks ─
 if any(strcmp(algs, 'bandit'))
     for s = 1:numel(scn_ids)
         r = pick(runs, scn_ids{s}, 'bandit', seed0);
         if isempty(r), continue; end
-        cb_centers = arm_centers(r);
-        f = figure('Visible', 'off', 'Position', [50 50 950 380]);
-        hold on; grid on;
-        shade_jammer_on(r.scenario);
+        cb_centers = arm_centers(r);   % (2 x n_arms): row 1 theta, row 2 phi
         played = r.run_log.arm_index;
-        ok = ~isnan(played) & ~isnan(cb_centers(max(played, 1)));
-        scatter(r.scenario.t_s(ok), cb_centers(played(ok)), 6, 'b', 'filled', ...
-            'DisplayName', 'played arm center');
+        ok = ~isnan(played);
+        ok(ok) = ~isnan(cb_centers(1, played(ok)));
+        f = figure('Visible', 'off', 'Position', [50 50 950 560]);
+        subplot(2, 1, 1); hold on; grid on;
+        shade_jammer_on(r.scenario);
+        scatter(r.scenario.t_s(ok), cb_centers(1, played(ok)), 6, 'b', 'filled', ...
+            'DisplayName', 'played arm center \theta');
         plot(r.scenario.t_s, r.scenario.theta_j_deg, 'r-', 'LineWidth', 1.2, ...
             'DisplayName', '\theta_j (truth)');
-        xlabel('t [s]'); ylabel('cut angle [deg]');
-        title(sprintf('%s — bandit arm selection vs true jammer angle (seed %d)', ...
+        ylabel('\theta [deg]'); legend('Location', 'best');
+        title(sprintf('%s — bandit arm selection vs true jammer position (seed %d)', ...
             scn_ids{s}, seed0));
-        legend('Location', 'best');
+        subplot(2, 1, 2); hold on; grid on;
+        shade_jammer_on(r.scenario);
+        scatter(r.scenario.t_s(ok), cb_centers(2, played(ok)), 6, 'b', 'filled', ...
+            'DisplayName', 'played arm center \phi');
+        plot(r.scenario.t_s, r.scenario.phi_j_deg, 'r-', 'LineWidth', 1.2, ...
+            'DisplayName', '\phi_j (truth)');
+        xlabel('t [s]'); ylabel('\phi [deg]'); legend('Location', 'best');
         save_png(f, output_dir, sprintf('arm_heatmap_%s.png', scn_ids{s}));
     end
 end
@@ -111,30 +118,37 @@ ylabel('mean oracle gap [dB]'); legend(algs, 'Location', 'northwest');
 title('Oracle gap per scenario \times algorithm (Monte Carlo mean)');
 save_png(f, output_dir, 'oracle_gap_bars.png');
 
-% ── 5. Pattern snapshots around events ────────────────────────────
+% ── 5. Pattern snapshots around events — [P7] 2-D heatmaps ────────
+% One row per algorithm, one column per snapshot instant; target (green
+% pentagram) and true jammer (magenta/gray dot) overlaid, same visual
+% language as save_run_gif.
 for s = 1:numel(scn_ids)
     r0 = pick(runs, scn_ids{s}, algs{1}, seed0);
     if isempty(r0.scenario.events), continue; end
     t_ev = r0.scenario.events{1}.t_s;
     T_end = r0.scenario.t_s(end);
     snap_t = unique(max(0, min([t_ev - 5, t_ev + 5, T_end - 1], T_end)));
-    f = figure('Visible', 'off', 'Position', [50 50 1200 320]);
     plot_algs = intersect({'lcmv', 'bandit'}, algs, 'stable');
-    for si = 1:numel(snap_t)
-        subplot(1, numel(snap_t), si); hold on; grid on;
-        k = find(r0.scenario.t_s >= snap_t(si), 1);
-        for a = 1:numel(plot_algs)
-            r = pick(runs, scn_ids{s}, plot_algs{a}, seed0);
-            p = cut_pattern_db(r.run_log.W(:, k), r.run_log.cut);
-            plot(r.run_log.cut.angle_deg, p, 'DisplayName', plot_algs{a});
+    if isempty(plot_algs), continue; end
+    f = figure('Visible', 'off', 'Position', [50 50 1200 320 * numel(plot_algs)]);
+    for a = 1:numel(plot_algs)
+        r = pick(runs, scn_ids{s}, plot_algs{a}, seed0);
+        for si = 1:numel(snap_t)
+            subplot(numel(plot_algs), numel(snap_t), (a - 1) * numel(snap_t) + si);
+            hold on;
+            k = find(r0.scenario.t_s >= snap_t(si), 1);
+            dbi = grid_pattern_dbi(r.run_log.W(:, k), r.run_log.grid);
+            pcolor(r.run_log.grid.phi_deg, r.run_log.grid.theta_deg, dbi);
+            shading flat; colormap(gca, 'jet'); caxis([max(dbi(:)) - 40, max(dbi(:))]);
+            set(gca, 'YDir', 'reverse');
+            plot(aj.phi_s_deg, aj.theta_s_deg, 'gp', 'MarkerSize', 10, 'MarkerFaceColor', 'g');
+            if r0.scenario.jammer_on(k)
+                plot(r0.scenario.phi_j_deg(k), r0.scenario.theta_j_deg(k), 'mo', ...
+                    'MarkerFaceColor', 'm', 'MarkerEdgeColor', 'w');
+            end
+            xlabel('\phi [deg]'); ylabel('\theta [deg]');
+            title(sprintf('%s / %s @ t=%.0fs', scn_ids{s}, plot_algs{a}, snap_t(si)));
         end
-        xline(aj.theta_s_deg, 'g:', '\theta_s');
-        if r0.scenario.jammer_on(k)
-            xline(r0.scenario.theta_j_deg(k), 'r--', '\theta_j');
-        end
-        ylim([-70, 5]); xlabel('cut angle [deg]'); ylabel('pattern [dB]');
-        title(sprintf('%s @ t = %.0f s', scn_ids{s}, snap_t(si)));
-        if si == 1, legend('Location', 'southwest'); end
     end
     save_png(f, output_dir, sprintf('patterns_%s.png', scn_ids{s}));
 end
@@ -234,21 +248,27 @@ end
 end
 
 
-function p_db = cut_pattern_db(w, cut)
-p = abs(w' * cut.E1).^2;
-if ~isempty(cut.E2), p = p + abs(w' * cut.E2).^2; end
-p_db = 10 * log10(p / max(p));
+function dbi = grid_pattern_dbi(w, grid)
+% Full (N_theta x N_phi) directivity dBi grid for one weight vector.
+p = abs(w' * grid.E1).^2;
+if ~isempty(grid.E2), p = p + abs(w' * grid.E2).^2; end
+n_theta = numel(grid.theta_deg);
+n_phi   = numel(grid.phi_deg);
+af  = reshape(sqrt(p), n_theta, n_phi);
+dbi = compute_directivity_dbi_grid(af, grid.theta_deg(:), grid.phi_deg(:), []);
 end
 
 
 function centers = arm_centers(r)
-% Reconstruct arm null centers from a bandit log: NaN for the unconstrained
-% arm. Stored in the codebook; recovered here from the run's codebook file if
-% present in the log, else approximated by played-arm indices only.
+% Reconstruct arm null centers from a bandit log: (2 x n_arms), NaN column
+% for the unconstrained arm. Stored in the codebook; recovered here from the
+% run's codebook file if present in the log, else approximated by played-arm
+% indices only. [P7]: rows are (theta; phi).
 if isfield(r.run_log, 'null_center_deg')
     centers = r.run_log.null_center_deg;
 else
-    centers = 1:max(r.run_log.arm_index);   % fallback: index axis
+    idx = 1:max(r.run_log.arm_index);   % fallback: index axis on both rows
+    centers = [idx; idx];
 end
 end
 
@@ -262,15 +282,19 @@ end
 
 function depth = null_depth_at_thetaj(r)
 scn = r.scenario;
+grid = r.run_log.grid;
 T = numel(scn.t_s);
 depth = NaN(1, T);
+n_theta = numel(grid.theta_deg);
 for k = 1:T
     if ~scn.jammer_on(k), continue; end
-    p = abs(r.run_log.W(:, k)' * r.run_log.cut.E1).^2;
-    if ~isempty(r.run_log.cut.E2)
-        p = p + abs(r.run_log.W(:, k)' * r.run_log.cut.E2).^2;
+    p = abs(r.run_log.W(:, k)' * grid.E1).^2;
+    if ~isempty(grid.E2)
+        p = p + abs(r.run_log.W(:, k)' * grid.E2).^2;
     end
-    idx = nearest_index(r.run_log.cut.angle_deg(:), scn.theta_j_deg(k));
+    [it_j, ip_j] = nearest_index_2d(grid.theta_deg, grid.phi_deg, ...
+        scn.theta_j_deg(k), scn.phi_j_deg(k));
+    idx = (ip_j - 1) * n_theta + it_j;
     depth(k) = 10 * log10(p(idx) / max(p));
 end
 end

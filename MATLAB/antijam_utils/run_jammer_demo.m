@@ -44,7 +44,7 @@ for key = {'element_patterns_dir', 'polarization', 'antijam', 'sim', 'adapt', ..
     end
 end
 aj = config.antijam;
-for key = {'theta_s_deg', 'sinr_min_db', 'algorithms', 'scenarios', 'cut_type'}
+for key = {'theta_s_deg', 'phi_s_deg', 'sinr_min_db', 'algorithms', 'scenarios'}
     if ~isfield(aj, key{1}) || isempty(aj.(key{1}))
         error('run_jammer_demo:MissingKey', ...
             'Missing required antijam config key: ''%s''.', key{1});
@@ -75,7 +75,6 @@ phi_deg   = patterns(1).phi_deg;
 [stack1, stack2, pol_label] = select_polarization_stacks(patterns, config);
 fprintf('  %d elements, grid %dx%d, polarization: %s\n', ...
     size(stack1, 1), numel(theta_deg), numel(phi_deg), pol_label);
-[E1c, E2c, cut_ang] = extract_cut(stack1, stack2, theta_deg, phi_deg, aj);
 
 % ── Codebook (cached, shared with run_antijam) ────────────────────
 codebook = [];
@@ -96,7 +95,7 @@ for isc = 1:numel(aj.scenarios)
     scn = sim_scenario(scn_cfg, aj, config.sim);
     fprintf('%s (theta_j start %.0f deg): ', scn.id, scn.theta_j_deg(1));
 
-    o_log = closed_loop_run('oracle', E1c, E2c, cut_ang, scn, aj, config.sim, ...
+    o_log = closed_loop_run('oracle', stack1, stack2, theta_deg, phi_deg, scn, aj, config.sim, ...
                             config, codebook);
     o_log.oracle_sinr_db = o_log.sinr_db;
 
@@ -105,7 +104,7 @@ for isc = 1:numel(aj.scenarios)
         if strcmp(alg, 'oracle')
             log = o_log;
         else
-            log = closed_loop_run(alg, E1c, E2c, cut_ang, scn, aj, config.sim, ...
+            log = closed_loop_run(alg, stack1, stack2, theta_deg, phi_deg, scn, aj, config.sim, ...
                                   config, codebook);
             log.oracle_sinr_db = o_log.sinr_db;
         end

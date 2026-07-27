@@ -8,25 +8,29 @@ function codebook = agent_codebook_build(element_patterns_stacked, ...
 %       agent_config, optimizer_config, cache_path)
 %
 %   One arm per candidate null sector: calls the Milestone-1 run_optimizer with
-%   two directives — peak at theta_s_deg (width agent_config.peak_width_deg,
-%   weight 1) + null sector centered on the arm's angle (width
-%   agent_config.null_width_deg, weight agent_config.null_weight) — on the
-%   FULL 2-D grid (the same directives convention as run_optimization), then
-%   POLISHES each arm by null-space projection: w <- (I - U*U') * w with U an
-%   orthonormal basis of the null-window steering columns (both polarization
-%   components when a secondary stack is given). The projection places exact
-%   zeros at the sampled window angles; the optimizer solution provides the
-%   well-shaped beam the projection perturbs only slightly. (P4 finding: the
-%   composite cost alone plateaus near -25 dB null depth — a true Pareto
-%   point, not a solver artifact.)
-%   Arm 1 is the UNCONSTRAINED peak-only solution (null_center_deg = NaN): it
-%   serves jammer-off periods and is the peak-gain reference for the P4 gate.
-%   Null centers span the cut axis on an agent_config.null_grid_deg grid,
-%   excluding the main-beam guard sector.
-%
-%   Cut-axis angles map to full-grid directive coordinates as:
-%       'phi_cut'   : theta = cut_theta_deg, phi = mod(angle, 360)
-%       'theta_cut' : theta = |angle|, phi = cut_phi_deg (+180 for angle < 0)
+%   two directives — peak at (theta_s_deg, phi_s_deg) (width
+%   agent_config.peak_width_deg, weight 1) + null sector centered on the arm's
+%   (theta, phi) (width agent_config.null_width_deg, weight
+%   agent_config.null_weight) — on the FULL 2-D grid (the same directives
+%   convention as run_optimization), then POLISHES each arm by null-space
+%   projection: w <- w - U*(U'*w) with U the top-r left singular vectors of
+%   the null-window steering columns (both polarization components when a
+%   secondary stack is given), r capped at agent_config.null_rank_cap. The
+%   projection places (approximately, for r below the window's true rank)
+%   exact zeros at the sampled window angles; the optimizer solution provides
+%   the well-shaped beam the projection perturbs only slightly.
+%   [P7]: candidate null centers are native 2-D (theta, phi) grid points, no
+%   1-D cut restriction. Because a 2-D window covers O(width^2) grid points
+%   vs O(width) on the old 1-D cut, the projection rank is capped
+%   (null_rank_cap) rather than derived purely from the window's numerical
+%   rank, to avoid the DOF blowup that destroyed the beam pre-[P7] (P6
+%   finding, now handled structurally instead of by restricting to a cut).
+%   Arm 1 is the UNCONSTRAINED peak-only solution (null_center_deg = [NaN;NaN]):
+%   it serves jammer-off periods and is the peak-gain reference for the P4 gate.
+%   Null centers span a (theta, phi) grid at agent_config.null_grid_deg
+%   spacing on both axes, excluding points within antijam_config.guard_deg
+%   (true spherical separation) of the target. NOTE: grid spacing is O(n^2) in
+%   arm count on the full sphere — keep null_grid_deg coarse for 2-D use.
 %
 %   Offline and cached: if cache_path exists and its stored build parameters
 %   match the current config (isequaln on the params echo), the codebook is
@@ -38,11 +42,11 @@ function codebook = agent_codebook_build(element_patterns_stacked, ...
 %       element_patterns_secondary : secondary-component stack or [] (same
 %                                    polarization convention as run_optimizer).
 %       theta_deg, phi_deg         : full angle grids [deg].
-%       antijam_config             : struct. Required: theta_s_deg, guard_deg,
-%                                    cut_type, and cut_theta_deg (phi_cut) or
-%                                    cut_phi_deg (theta_cut).
+%       antijam_config             : struct. Required: theta_s_deg, phi_s_deg,
+%                                    guard_deg.
 %       agent_config               : struct. Required: null_grid_deg,
-%                                    null_width_deg, peak_width_deg, null_weight.
+%                                    null_width_deg, peak_width_deg,
+%                                    null_weight, null_rank_cap.
 %       optimizer_config           : struct, per run_optimizer requirements.
 %       cache_path                 : char, .mat file for the cached codebook;
 %                                    [] disables caching.
@@ -50,41 +54,41 @@ function codebook = agent_codebook_build(element_patterns_stacked, ...
 %   Outputs:
 %       codebook : struct with fields
 %           W               : (N_el x n_arms) complex weight columns.
-%           null_center_deg : (1 x n_arms) arm null centers on the cut axis
-%                             (NaN for the unconstrained arm 1).
+%           null_center_deg : (2 x n_arms) arm null centers, row 1 = theta,
+%                             row 2 = phi (NaN column for the unconstrained
+%                             arm 1).
 %           meta            : struct with params (build-parameter echo used
 %                             for cache validation) and built (timestamp).
 %
-%   Part of: Antenna Array Pattern Optimization Tool — anti-jam milestone [P4].
+%   Part of: Antenna Array Pattern Optimization Tool — anti-jam milestone [P4, P7].
 
 if nargin < 8
     cache_path = [];
 end
 
 theta_s = req_field(antijam_config, 'theta_s_deg', 'antijam');
+phi_s   = req_field(antijam_config, 'phi_s_deg',   'antijam');
 guard   = req_field(antijam_config, 'guard_deg',   'antijam');
-cut_type = req_field(antijam_config, 'cut_type',   'antijam');
-null_grid  = req_field(agent_config, 'null_grid_deg',  'agent');
-null_width = req_field(agent_config, 'null_width_deg', 'agent');
-peak_width = req_field(agent_config, 'peak_width_deg', 'agent');
+null_grid   = req_field(agent_config, 'null_grid_deg',  'agent');
+null_width  = req_field(agent_config, 'null_width_deg', 'agent');
+peak_width  = req_field(agent_config, 'peak_width_deg', 'agent');
 null_weight = req_field(agent_config, 'null_weight',   'agent');
+null_rank_cap = req_field(agent_config, 'null_rank_cap', 'agent');
 
-% ── Candidate null centers on the cut axis, guard sector excluded ─
-switch cut_type
-    case 'phi_cut'
-        cut_fixed = req_field(antijam_config, 'cut_theta_deg', 'antijam');
-        cand = 0:null_grid:(360 - null_grid / 2);
-        dist = abs(mod(cand - theta_s + 180, 360) - 180);   % circular distance
-    case 'theta_cut'
-        cut_fixed = req_field(antijam_config, 'cut_phi_deg', 'antijam');
-        cand = -90:null_grid:90;
-        dist = abs(cand - theta_s);
-    otherwise
-        error('agent_codebook_build:BadCutType', ...
-            'Unknown cut_type ''%s'' (expected ''phi_cut'' or ''theta_cut'').', cut_type);
-end
-centers = cand(dist >= guard);
-n_arms  = numel(centers) + 1;
+% ── Candidate null centers on a 2-D (theta, phi) grid, guard cap excluded ──
+% Bounded to the actual data grid extent (not the full [0, 180] physical
+% range) — many arrays (e.g. a planar array) only have measured pattern data
+% over a partial theta span, and a candidate outside that span would yield an
+% empty null window below.
+theta_cand = min(theta_deg):null_grid:max(theta_deg);
+phi_cand   = 0:null_grid:(360 - null_grid / 2);
+[TC, PC] = ndgrid(theta_cand, phi_cand);
+TC = TC(:).'; PC = PC(:).';
+dist = angular_separation_deg(TC, PC, theta_s, phi_s);
+keep = dist >= guard;
+centers_theta = TC(keep);
+centers_phi   = PC(keep);
+n_arms = numel(centers_theta) + 1;
 
 % A null window overlapping the peak window makes the two directives fight;
 % the optimizer then sacrifices one of them (observed in P4 tuning).
@@ -98,10 +102,10 @@ end
 
 % ── Cache check ───────────────────────────────────────────────────
 params = struct( ...
-    'theta_s_deg', theta_s, 'guard_deg', guard, 'cut_type', cut_type, ...
-    'cut_fixed_deg', cut_fixed, 'null_grid_deg', null_grid, ...
-    'null_width_deg', null_width, 'peak_width_deg', peak_width, ...
-    'null_weight', null_weight, 'optimizer', optimizer_config, ...
+    'theta_s_deg', theta_s, 'phi_s_deg', phi_s, 'guard_deg', guard, ...
+    'null_grid_deg', null_grid, 'null_width_deg', null_width, ...
+    'peak_width_deg', peak_width, 'null_weight', null_weight, ...
+    'null_rank_cap', null_rank_cap, 'optimizer', optimizer_config, ...
     'n_elements', size(element_patterns_stacked, 1), ...
     'has_secondary', ~isempty(element_patterns_secondary), ...
     'grid_size', [numel(theta_deg), numel(phi_deg)]);
@@ -123,52 +127,60 @@ end
 % window edge, off theta_s entirely (P4 tuning finding). Consequence:
 % peak_width_deg must be ~ the achievable beamwidth, or 'min' forces an
 % unrealizably fat beam and sacrifices gain.
-[th_s, ph_s] = cut_to_theta_phi(theta_s, cut_type, cut_fixed);
-peak_dir = struct('type', 'peak', 'theta', th_s, 'phi', ph_s, ...
+peak_dir = struct('type', 'peak', 'theta', theta_s, 'phi', phi_s, ...
                   'width', peak_width, 'weight', 1.0, 'aggregation', 'min');
 
 W = complex(zeros(size(element_patterns_stacked, 1), n_arms));
-null_center_deg = NaN(1, n_arms);
+null_center_deg = NaN(2, n_arms);
 
 fprintf('Codebook: building %d arms (1 unconstrained + %d null sectors)...\n', ...
-    n_arms, numel(centers));
+    n_arms, numel(centers_theta));
 result = run_optimizer(element_patterns_stacked, theta_deg, phi_deg, ...
     {peak_dir}, optimizer_config, element_patterns_secondary);
 W(:, 1) = result.weights_complex;
 
-for i = 1:numel(centers)
-    [th_n, ph_n] = cut_to_theta_phi(centers(i), cut_type, cut_fixed);
+for i = 1:numel(centers_theta)
+    th_n = centers_theta(i);
+    ph_n = centers_phi(i);
     null_dir = struct('type', 'null', 'theta', th_n, 'phi', ph_n, ...
                       'width', null_width, 'weight', null_weight);
     result = run_optimizer(element_patterns_stacked, theta_deg, phi_deg, ...
         {peak_dir, null_dir}, optimizer_config, element_patterns_secondary);
     w_arm = result.weights_complex;
 
-    % Null-space projection polish: exact zeros on the sampled window angles.
-    % The mask is restricted to the 1-D CUT the engine operates on (the
-    % milestone is 2-D azimuth): projecting the full 2-D theta x phi window
-    % nulls angles the simulation never uses and eats DOF quadratically —
-    % on the real 5-deg grid a 20-deg window spanned rank 15 of 20 DOF and
-    % destroyed the beam (P6 finding).
+    % Null-space projection polish: exact (rank-capped) zeros on the sampled
+    % window angles. [P7]: the full 2-D window is used (no cut restriction),
+    % but the projection rank is capped at null_rank_cap to bound the DOF the
+    % projection consumes — a 2-D window covers O(width^2) grid points, so
+    % using every one of them (as the 1-D cut version safely did) would eat
+    % most of the array's DOF and destroy the beam (P6 finding).
     mask = angular_window_mask(theta_deg(:), phi_deg(:), th_n, ph_n, ...
                                null_width, null_width);
-    mask = restrict_mask_to_cut(mask, theta_deg, phi_deg, cut_type, cut_fixed);
-    E_win = window_steering_columns(element_patterns_stacked, mask);
-    if ~isempty(element_patterns_secondary)
-        E_win = [E_win, window_steering_columns(element_patterns_secondary, mask)]; %#ok<AGROW>
+    if any(mask(:))
+        E_win = window_steering_columns(element_patterns_stacked, mask);
+        if ~isempty(element_patterns_secondary)
+            E_win = [E_win, window_steering_columns(element_patterns_secondary, mask)]; %#ok<AGROW>
+        end
+        [U, S, ~] = svd(E_win, 'econ');
+        sv = diag(S);
+        r_full = sum(sv > 1e-6 * sv(1));
+        r = min(r_full, null_rank_cap);
+        if r_full > size(W, 1) / 2
+            warning('agent_codebook_build:WindowRankHigh', ...
+                'Null window at (%g, %g) deg spans rank %d of %d DOF (capped to %d); beam quality may suffer.', ...
+                th_n, ph_n, r_full, size(W, 1), r);
+        end
+        w_arm = w_arm - U(:, 1:r) * (U(:, 1:r)' * w_arm);
+    else
+        % No grid point falls inside the window (narrow width vs coarse grid
+        % resolution) — the optimizer's null directive is the best we can do.
+        warning('agent_codebook_build:EmptyNullWindow', ...
+            'Null window at (%g, %g) deg contains no grid point; skipping the projection polish for this arm.', ...
+            th_n, ph_n);
     end
-    [U, S, ~] = svd(E_win, 'econ');
-    sv = diag(S);
-    r  = sum(sv > 1e-6 * sv(1));
-    if r > size(W, 1) / 2
-        warning('agent_codebook_build:WindowRankHigh', ...
-            'Null window at %g deg spans rank %d of %d DOF; beam quality will suffer.', ...
-            centers(i), r, size(W, 1));
-    end
-    w_arm = w_arm - U(:, 1:r) * (U(:, 1:r)' * w_arm);
 
     W(:, i + 1) = w_arm;
-    null_center_deg(i + 1) = centers(i);
+    null_center_deg(:, i + 1) = [th_n; ph_n];
 end
 
 codebook = struct('W', W, 'null_center_deg', null_center_deg, ...
@@ -198,38 +210,10 @@ v = s.(key);
 end
 
 
-function mask = restrict_mask_to_cut(mask, theta_deg, phi_deg, cut_type, cut_fixed)
-% Keep only the window points that lie ON the engine's 1-D cut.
-if strcmp(cut_type, 'phi_cut')
-    it = nearest_index(theta_deg(:), cut_fixed);
-    keep = false(size(mask));
-    keep(it, :) = true;
-else
-    ip0   = nearest_index(phi_deg(:), mod(cut_fixed, 360));
-    ip180 = nearest_index(phi_deg(:), mod(cut_fixed + 180, 360));
-    keep = false(size(mask));
-    keep(:, [ip0, ip180]) = true;
-end
-mask = mask & keep;
-end
-
-
 function E_win = window_steering_columns(stack, mask)
 % Collect the (N_el x M) steering columns of the M grid points where the
 % (N_theta x N_phi) window mask is true.
 n_el  = size(stack, 1);
 flat  = reshape(stack, n_el, []);        % (N_el x N_theta*N_phi), grid flattened
 E_win = flat(:, mask(:));
-end
-
-
-function [th, ph] = cut_to_theta_phi(angle_deg, cut_type, cut_fixed)
-% Map a cut-axis angle to (theta, phi) directive coordinates on the full grid.
-if strcmp(cut_type, 'phi_cut')
-    th = cut_fixed;
-    ph = mod(angle_deg, 360);
-else
-    th = abs(angle_deg);
-    ph = mod(cut_fixed + 180 * (angle_deg < 0), 360);
-end
 end

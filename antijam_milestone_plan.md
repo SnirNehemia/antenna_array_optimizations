@@ -19,7 +19,7 @@ Extend the existing pattern-synthesis tool (Milestone 1: user-specified peaks/nu
 |---|---|
 | Language | MATLAB only (no Python counterpart; no migration phase) |
 | Jammers | 1 simultaneous, unknown angle, slow drift (seconds timescale), power steps / on-off allowed |
-| Geometry | 2D azimuth cut (consistent with Milestone 1) |
+| Geometry | ~~2D azimuth cut~~ **AMENDED [P7], 2026-07-20: native 2-D (theta, phi) tracking** — see P7 below |
 | Element data | CST embedded element patterns via `load_element_patterns` + `stack_component` → `(N_el, N_theta, N_phi)` complex stack; the anti-jam engine works on a principal-plane cut → `E` matrix `(N_el × N_angles)` complex. Common phase center; no geometric phase re-added. |
 | Simulation fidelity | Pattern-level: SINR computed from pattern gains + jammer/noise powers. No waveform/IQ modeling. |
 | Observation modes | **Mode C (covariance):** per-element snapshots available → classical LCMV/MVDR. **Mode S (scalar):** only output SINR feedback → bandit + SPSA. |
@@ -152,6 +152,37 @@ Monte Carlo runner over the scenario suite × {LCMV, SPSA, bandit, oracle}; full
 **P6 real-data findings (ManyDipoles, Theta pol, φ-cut @ θ=90°):** quiescent gain 12.3 dB, HPBW ≈ 15° → `sigma_s_db: 3` (15.3 dB jammer-free SINR), `guard_deg: 45`. Codebook tuning: 20°-wide windows on a 10° grid (28 arms) so the arm count stays inside the discount horizon (1/(1−0.99) = 100) and drift handoffs halve; the **null-space projection is restricted to the cut's own steering columns** — projecting the full 2-D θ×φ window ate rank 15 of 20 DOF and destroyed the beam. Bandit `discount: 0.99`, `sigma_tilde_db: 1` (new required key).
 
 **Schedule buffer:** ~1 week implicit slack. **Descope order if needed:** P5 stretch goal (SPSA fine-tune) → sliding-window UCB alternative → reduce Monte Carlo scenario count in P6.
+
+### P7 — Native 2D (theta, phi) engine (amendment) — Status: **done** (2026-07-20, demo-scoped; see below)
+Triggered by a real request the 1-D cut couldn't express: target and jammer at
+independently different theta AND phi. Full plan:
+`C:\Users\snirn\.claude\plans\giggly-wishing-whisper.md`; session-log detail in
+`docs/notes.md` `[P7]` entry (2026-07-20).
+
+Replaced the 1-D cut end-to-end: `sim_scenario`/`sim_engine_init/step`/
+`sim_analytic_covariance`/`closed_loop_run` operate on the full `(theta, phi)`
+grid natively; `agent_codebook_build` synthesizes nulls on a genuine 2-D
+candidate grid with a rank-capped projection (new `agent.null_rank_cap` key,
+replacing the old cut-restriction trick); `kpi_evaluate`'s null-pointing KPI
+and the report/GIF jammer-dot plotting are natively 2-D. `extract_cut.m`
+deleted. Config schema: `theta_s_deg` + `phi_s_deg` replace `cut_type` /
+`cut_theta_deg` / `cut_phi_deg`; scenarios take `theta_j_deg` + `phi_j_deg` (or
+per-axis drift rates) instead of a single `angle_deg`.
+
+**What's validated:** all `test_antijam_*.m` unit/gate tests pass under the
+new 2-D contracts (some toy-array gate thresholds relaxed for 2-D codebook
+density — see `docs/notes.md`). `run_jammer_demo` end-to-end on real CST data
+(`data/patchs_with_monopoles`, target θ=30°/φ=90°, jammer θ=45°/φ=180°) runs
+to completion and renders the jammer at its true 2-D position.
+
+**What's NOT validated (follow-up, not blocking):** the full P1–P6 Monte
+Carlo campaign (`run_antijam` on `config.yaml`'s real-array scenario suite)
+has not been rerun under 2-D geometry — the quantitative KPI numbers quoted
+in P1–P6 above are from the 1-D-cut engine and are stale for a 2-D reading.
+`config.yaml`'s antijam section was updated to the new schema (parses, and
+`null_grid_deg`/`null_rank_cap` set to plausible values) but not re-tuned.
+Re-running and re-tuning that campaign is the natural next step before
+trusting the P1–P6 gate numbers again.
 
 ---
 

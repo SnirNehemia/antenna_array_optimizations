@@ -22,8 +22,7 @@ function save_run_gif(run_log, scenario, stack1, stack2, theta_deg, phi_deg, ...
 %       scenario    : struct from sim_scenario.
 %       stack1/2    : full (N_el, N_theta, N_phi) stacks (stack2 may be []).
 %       theta_deg, phi_deg : full grids [deg].
-%       aj          : antijam config (theta_s_deg, sinr_min_db, cut_type,
-%                     cut_theta_deg / cut_phi_deg).
+%       aj          : antijam config (theta_s_deg, phi_s_deg, sinr_min_db).
 %       gif_cfg     : struct. Required: max_frames, fps, dynamic_range_db.
 %                     Optional: format 'gif' (default) | 'mp4' (VideoWriter
 %                     MPEG-4 — H.264, ~20x smaller files).
@@ -63,7 +62,7 @@ flat2   = [];
 if ~isempty(stack2), flat2 = reshape(stack2, n_el, []); end
 
 % Precompute the live traces (full resolution — cheap).
-e_s = run_log.cut.e_s;
+e_s = run_log.grid.e_s;
 n_c = size(e_s, 2);
 gain_db = zeros(1, T);
 for k = 1:T
@@ -71,8 +70,9 @@ for k = 1:T
     gain_db(k) = 10 * log10((sum(abs(w' * e_s).^2) / n_c) / real(w' * w));
 end
 
-% Jammer / steer positions on the full grid.
-[th_s, ph_s] = cut_to_theta_phi(aj.theta_s_deg, aj);
+% Jammer / steer positions — [P7] native (theta, phi), no cut projection.
+th_s = aj.theta_s_deg;
+ph_s = aj.phi_s_deg;
 
 % Fixed color scale from the first frame's pattern.
 dbi = frame_dbi(run_log.W(:, frames(1)), flat1, flat2, theta_deg, phi_deg, n_theta, n_phi);
@@ -99,7 +99,8 @@ for k = frames
     ylim(ax_map, [min(theta_deg), max(theta_deg)]);
     xlabel(ax_map, 'Azimuth \phi [deg]'); ylabel(ax_map, 'Elevation \theta [deg]');
     plot(ax_map, ph_s, th_s, 'gp', 'MarkerSize', 14, 'MarkerFaceColor', 'g');
-    [th_j, ph_j] = cut_to_theta_phi(scenario.theta_j_deg(k), aj);
+    th_j = scenario.theta_j_deg(k);
+    ph_j = scenario.phi_j_deg(k);
     if scenario.jammer_on(k)
         msize = 6 + 0.7 * 10^(scenario.jn_ratio_db(k) / 20);
         plot(ax_map, ph_j, th_j, 'o', 'MarkerSize', msize, ...
@@ -110,9 +111,9 @@ for k = frames
             'MarkerEdgeColor', [0.5 0.5 0.5], 'LineWidth', 1.5);
         state = 'OFF';
     end
-    title(ax_map, sprintf('%s — t = %.1f s | jammer @ %.0f\\circ (%s)', ...
+    title(ax_map, sprintf('%s — t = %.1f s | jammer @ (\\theta=%.0f\\circ, \\phi=%.0f\\circ) (%s)', ...
         strrep(title_label, '_', '\_'), scenario.t_s(k), ...
-        scenario.theta_j_deg(k), state), 'Interpreter', 'tex');
+        th_j, ph_j, state), 'Interpreter', 'tex');
 
     % ── Live traces ───────────────────────────────────────────────
     cla(ax_tr);
@@ -168,16 +169,4 @@ if ~isempty(flat2)
 end
 af  = reshape(sqrt(p), n_theta, n_phi);   % magnitude AF; dbi squares it
 dbi = compute_directivity_dbi_grid(af, theta_deg(:), phi_deg(:), []);
-end
-
-
-function [th, ph] = cut_to_theta_phi(angle_deg, aj)
-% Map a cut-axis angle to (theta, phi) on the full grid.
-if strcmp(aj.cut_type, 'phi_cut')
-    th = aj.cut_theta_deg;
-    ph = mod(angle_deg, 360);
-else
-    th = abs(angle_deg);
-    ph = mod(aj.cut_phi_deg + 180 * (angle_deg < 0), 360);
-end
 end

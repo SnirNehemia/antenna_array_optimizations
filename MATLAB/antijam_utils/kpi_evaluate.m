@@ -3,8 +3,8 @@ function kpi = kpi_evaluate(run_log, scenario, antijam_config)
 %
 %   kpi = KPI_EVALUATE(run_log, scenario, antijam_config)
 %
-%   KPI code IS allowed ground truth (scenario.theta_j_deg) — the Mode C/S
-%   restriction applies to algorithms only.
+%   KPI code IS allowed ground truth (scenario.theta_j_deg/phi_j_deg) — the
+%   Mode C/S restriction applies to algorithms only.
 %
 %   Inputs:
 %       run_log : struct logged by run_antijam, fields
@@ -12,11 +12,12 @@ function kpi = kpi_evaluate(run_log, scenario, antijam_config)
 %           oracle_sinr_db : (1 x T) perfect-knowledge LCMV SINR per step.
 %           W              : (N_el x T) applied weights per step.
 %           arm_index      : (1 x T) selected arm (bandit runs; NaN otherwise).
-%           cut            : struct with E1 (N_el x N_ang), E2 ([] or same),
-%                            angle_deg (1 x N_ang), e_s (N_el x n_c) — the
-%                            engine cut, for pattern-derived KPIs.
+%           grid           : struct with E1 (N_el x N_theta*N_phi), E2 ([] or
+%                            same), theta_deg (1 x N_theta), phi_deg
+%                            (1 x N_phi), e_s (N_el x n_c) — the full
+%                            far-field grid, for pattern-derived KPIs. [P7]
 %       scenario       : struct from sim_scenario (truth + events).
-%       antijam_config : struct. Required: sinr_min_db, theta_s_deg.
+%       antijam_config : struct. Required: sinr_min_db.
 %
 %   Outputs:
 %       kpi : struct with fields
@@ -24,21 +25,24 @@ function kpi = kpi_evaluate(run_log, scenario, antijam_config)
 %           recovery_steps        : (1 x n_events) steps from each scenario
 %                                   event until SINR re-crosses the threshold
 %                                   (NaN if never).
-%           null_pointing_err_deg : (1 x T) |nearest pattern null - theta_j(t)|;
-%                                   NaN while the jammer is off.
+%           null_pointing_err_deg : (1 x T) spherical separation from the
+%                                   nearest pattern null to (theta_j, phi_j)(t);
+%                                   NaN while the jammer is off. [P7: 2-D]
 %           peak_gain_penalty_db  : (1 x T) noise-normalized gain toward
 %                                   theta_s vs the quiescent MVDR reference
 %                                   (jammer-free optimum of the same family).
 %           oracle_gap_db         : (1 x T) oracle_sinr_db - sinr_db.
 %           oracle_gap_mean_db    : scalar mean of oracle_gap_db.
 %
-%   Part of: Antenna Array Pattern Optimization Tool — anti-jam milestone [P6].
+%   Part of: Antenna Array Pattern Optimization Tool — anti-jam milestone [P6, P7].
 
 thr  = req_field(antijam_config, 'sinr_min_db');
 sinr = run_log.sinr_db;
 T    = numel(sinr);
-cut  = run_log.cut;
-n_c  = size(cut.e_s, 2);
+grid = run_log.grid;
+n_c  = size(grid.e_s, 2);
+n_theta = numel(grid.theta_deg);
+n_phi   = numel(grid.phi_deg);
 
 % ── 1. Availability ───────────────────────────────────────────────
 kpi = struct();
@@ -55,29 +59,28 @@ for i = 1:n_ev
     end
 end
 
-% ── 3. Null-pointing error (jammer-on steps only) ─────────────────
+% ── 3. Null-pointing error (jammer-on steps only) — [P7] native 2-D ──
 kpi.null_pointing_err_deg = NaN(1, T);
 for k = 1:T
     if ~scenario.jammer_on(k)
         continue;
     end
-    p = pattern_power(run_log.W(:, k), cut);
-    % Local minima of the cut pattern; nearest one to the true jammer angle.
-    is_min = [false, p(2:end-1) < p(1:end-2) & p(2:end-1) < p(3:end), false];
-    mins = cut.angle_deg(is_min);
-    if isempty(mins)
+    p = reshape(pattern_power(run_log.W(:, k), grid), n_theta, n_phi);
+    [mins_theta, mins_phi] = local_minima_2d(p, grid.theta_deg, grid.phi_deg);
+    if isempty(mins_theta)
         continue;
     end
-    d = abs(mod(mins - scenario.theta_j_deg(k) + 180, 360) - 180);
-    kpi.null_pointing_err_deg(k) = min(d);
+    d = angular_separation_deg(mins_theta(:), mins_phi(:), ...
+        scenario.theta_j_deg(k), scenario.phi_j_deg(k));
+    kpi.null_pointing_err_deg(k) = min(d(:));
 end
 
 % ── 4. Peak-gain penalty vs quiescent MVDR reference ──────────────
-w_ref = adapt_lcmv(eye(size(cut.E1, 1)), cut.e_s, 0);
-g_ref = noise_norm_gain(w_ref, cut.e_s, n_c);
+w_ref = adapt_lcmv(eye(size(grid.E1, 1)), grid.e_s, 0);
+g_ref = noise_norm_gain(w_ref, grid.e_s, n_c);
 kpi.peak_gain_penalty_db = zeros(1, T);
 for k = 1:T
-    g = noise_norm_gain(run_log.W(:, k), cut.e_s, n_c);
+    g = noise_norm_gain(run_log.W(:, k), grid.e_s, n_c);
     kpi.peak_gain_penalty_db(k) = 10 * log10(g / g_ref);
 end
 
@@ -98,12 +101,39 @@ v = s.(key);
 end
 
 
-function p = pattern_power(w, cut)
-% (1 x N_ang) cut power pattern, summed over polarization components.
-p = abs(w' * cut.E1).^2;
-if ~isempty(cut.E2)
-    p = p + abs(w' * cut.E2).^2;
+function p = pattern_power(w, grid)
+% (1 x N_theta*N_phi) grid power pattern, summed over polarization components.
+p = abs(w' * grid.E1).^2;
+if ~isempty(grid.E2)
+    p = p + abs(w' * grid.E2).^2;
 end
+end
+
+
+function [mins_theta, mins_phi] = local_minima_2d(p, theta_deg, phi_deg)
+% Interior local minima of a (N_theta x N_phi) power grid, 4-neighbor test,
+% phi wrapped circularly (no toolbox dependency — base MATLAB only).
+n_theta = size(p, 1);
+if n_theta < 3
+    mins_theta = []; mins_phi = [];
+    return
+end
+center = p(2:end-1, :);
+up     = p(1:end-2, :);
+down   = p(3:end, :);
+if size(p, 2) < 2
+    % Degenerate single-phi-column grid (e.g. a 1-D toy pattern): no
+    % azimuth neighbor to test against, so theta-only local minima.
+    is_min = center < up & center < down;
+else
+    p_wrap = [p(:, end), p, p(:, 1)];           % circular phi padding
+    left   = p_wrap(2:end-1, 1:end-2);
+    right  = p_wrap(2:end-1, 3:end);
+    is_min = center < up & center < down & center < left & center < right;
+end
+[ri, ci] = find(is_min);
+mins_theta = theta_deg(ri + 1);
+mins_phi   = phi_deg(ci);
 end
 
 
