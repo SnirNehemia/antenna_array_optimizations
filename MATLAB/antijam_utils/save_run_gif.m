@@ -61,13 +61,24 @@ flat1   = reshape(stack1, n_el, []);
 flat2   = [];
 if ~isempty(stack2), flat2 = reshape(stack2, n_el, []); end
 
-% Precompute the live traces (full resolution — cheap).
+% Precompute the live traces (full resolution — cheap). The main-beam trace is
+% the DIRECTIVITY toward theta_s, using the same spherical-integral normalizer
+% as the pattern heatmap (compute_directivity_dbi_grid), so the trace value
+% equals the heatmap value at the green target marker. (A noise-normalized gain
+% would be ~10 dB higher than the displayed directivity and would not match.)
 e_s = run_log.grid.e_s;
-n_c = size(e_s, 2);
-gain_db = zeros(1, T);
+% Radiated-power Gram G: P_total(w) = w' G w = integral |AF|^2 sin(theta) dOmega.
+sin_theta = sin(deg2rad(theta_deg(:)));
+w_sa = repmat(sin_theta, n_phi, 1).';            % 1 x (n_theta*n_phi), theta-fastest
+if n_theta > 1, dth = deg2rad(mean(diff(theta_deg))); else, dth = pi;    end
+if n_phi   > 1, dph = deg2rad(mean(diff(phi_deg)));   else, dph = 2 * pi; end
+G = (flat1 .* w_sa) * flat1';
+if ~isempty(flat2), G = G + (flat2 .* w_sa) * flat2'; end
+G = G * dth * dph;
+dir_s_db = zeros(1, T);
 for k = 1:T
     w = run_log.W(:, k);
-    gain_db(k) = 10 * log10((sum(abs(w' * e_s).^2) / n_c) / real(w' * w));
+    dir_s_db(k) = 10 * log10(4 * pi * sum(abs(w' * e_s).^2) / real(w' * G * w));
 end
 
 % Jammer / steer positions — [P7] native (theta, phi), no cut projection.
@@ -125,14 +136,14 @@ for k = frames
     ylabel(ax_tr, 'SINR [dB]');
     ylim(ax_tr, [min(-5, min(run_log.sinr_db) - 2), max(run_log.oracle_sinr_db) + 3]);
     yyaxis(ax_tr, 'right');
-    plot(ax_tr, scenario.t_s(1:k), gain_db(1:k), '-', 'Color', [0.9 0.5 0.1], ...
+    plot(ax_tr, scenario.t_s(1:k), dir_s_db(1:k), '-', 'Color', [0.9 0.5 0.1], ...
         'LineWidth', 1.0);
-    ylabel(ax_tr, 'gain @ \theta_s [dB]');
-    ylim(ax_tr, [min(gain_db) - 1, max(gain_db) + 1]);
+    ylabel(ax_tr, 'directivity @ \theta_s [dBi]');
+    ylim(ax_tr, [min(dir_s_db) - 1, max(dir_s_db) + 1]);
     xlim(ax_tr, [0, scenario.t_s(end)]);
     xlabel(ax_tr, 't [s]');
     legend(ax_tr, {'SINR', 'oracle', 'threshold'}, 'Location', 'southeast', ...
-        'AutoUpdate', 'off');
+        'AutoUpdate', 'off', 'Color', 'w', 'TextColor', 'k', 'EdgeColor', [0.6 0.6 0.6]);
 
     % ── Append frame ──────────────────────────────────────────────
     im = frame2im(getframe(fig));

@@ -184,6 +184,137 @@ in P1–P6 above are from the 1-D-cut engine and are stale for a 2-D reading.
 Re-running and re-tuning that campaign is the natural next step before
 trusting the P1–P6 gate numbers again.
 
+### P8 — Mode C: MUSIC DoA + predictive (anticipatory) nulling (amendment) — Status: **in-progress** (2026-07-27: on/off-first path IMPLEMENTED + demo; gates pass — see below. Drift/CV-Kalman follow-up not started)
+Triggered by the customer's review request: exploit the jammer's **temporal
+predictability** (on/off duty cycle; later, linear trajectory) so the null is
+pre-positioned *before* the jammer returns/arrives, instead of reacting with the
+`~1/(1−λ)` covariance lag. Targets the residual gaps on the non-stationary
+scenarios (S5 toggling, S6 lifecycle; S2/S3 drift are a follow-up — see scope
+note). Runs as a **new Mode C algorithm alongside** the P2 `lcmv` tracker, which
+stays untouched as the reactive baseline for the comparison.
+
+**In-session design decisions (2026-07-27):**
+1. *Exploit which pattern first:* **on/off periodicity** (S5/S6). CV-Kalman drift
+   prediction (S2/S3) is a follow-up on the same substrate.
+2. *Predicted state → beamformer:* **hard LCMV null constraint at θ̂_pred**
+   (`adapt_lcmv_null`), not a synthesized predicted-R MVDR. The constraint is
+   deterministic in `w`, so it pre-nulls a currently-silent angle without needing
+   energy there — exactly the pre-form-before-turn-on behavior.
+3. *MUSIC model order:* **fixed at 2** (desired + 1 jammer, per locked scope).
+   Jammer presence from the signal/noise **eigengap**, not order estimation.
+4. *Coexistence:* **add** as algorithm `'predict'`; keep P2 `'lcmv'`.
+
+**New modules** (flat `antijam_utils/`, R2020a base-MATLAB only — `eig`, `fft`; no
+Signal Processing / Statistics Toolbox):
+- `adapt_music_doa.m` — pure estimator: `R̂ → eig` → jammer `(θ̂,φ̂)`, presence
+  (eigengap), power estimate, and (optionally) the pseudospectrum for the waterfall.
+- `adapt_predict_init.m` / `adapt_predict_update.m` — reuses the P2 forgetting
+  buffer for `R̂`; ring-buffers the presence indicator; `fft` periodogram detects
+  the duty period + phase; schedules a pre-null `lead_steps` ahead of the predicted
+  turn-on. Common `_init`/`_update` signature, consumes `obs.snapshots` ONLY.
+- `adapt_lcmv_null.m` — multi-constraint LCMV, `C=[e_s, e_null]`, `g=[1;0]`
+  (generalizes `adapt_lcmv`, which stays as-is). `e_null=[]` → plain MVDR.
+- `plot_doa_waterfall.m` — the showcase 3-panel figure (below).
+
+**Small edits to existing new-milestone files** (not `matlab_utils/`): add a
+`'predict'` case to `closed_loop_run` (Mode C) and record DoA/presence/pspec
+diagnostics into its `log`; add `'predict'` to `antijam.algorithms` at
+implementation time (kept out of the list while only stubs exist so the campaign
+doesn't error).
+
+**Config schema addition** (`adapt.predict` block, parse-verified in this phase):
+`presence_gap_db`, `buffer_len`, `min_periods`, `lead_steps`, `doa_stride`.
+Model order is hardcoded to 2 (not a key). Values are initial guesses; expect
+load-bearing keys to shift under P8 tuning (as with `adapt.spsa` in P3).
+
+**Demo / showcase** (`plot_doa_waterfall`, reusing the P6 run/KPI harness):
+(1) **DoA waterfall** — MUSIC pseudospectrum vs time, true `θ_j(t)` overlaid,
+OFF gaps visible; (2) **presence periodogram** with the detected duty period
+marked; (3) **SINR timeline** overlaying `lcmv` vs `predict` vs `oracle`, showing
+`predict` pre-filling the recovery notch at each toggle.
+
+**Success criteria (to gate at implementation):**
+- On the toggling scenario (S5) and lifecycle (S6): recovery time after a
+  turn-on ≤ the P2 `lcmv` baseline, with a clear reduction once the period is
+  learned (target: near-zero re-acquisition lag after `min_periods` cycles).
+- SINR availability on S5/S6 ≥ the P2 `lcmv` baseline (no regression); MUSIC
+  DoA-RMSE reported (new KPI, MUSIC-derived) while the jammer is ON.
+- Periodogram recovers the configured `toggle_period_s` within one grid bin on S5.
+- `adapt_lcmv_null` reproduces `adapt_lcmv` exactly when `e_null=[]` (unit test).
+
+**Scope note (honest, for the review):** on/off-first fully addresses S6 (static
+angle held through the OFF gap — note S6 is a single burst, so the *periodogram*
+finds no line; the "persist last predicted null" fallback carries it, not the
+frequency detector). **S5 improves but will not fully close**: the angle drifts
+*during* the OFF gap, so a held-static null is stale by `drift-rate × off-duration`.
+Fully closing S5 needs the CV-Kalman drift predictor on this same substrate —
+the deliberate P8 follow-up.
+
+**New KPIs** (added to `kpi_evaluate`, existing `matlab_utils` metrics untouched):
+DoA-RMSE (`θ̂_j` vs truth while ON) and prediction lead-time benefit on recovery.
+
+**Implemented (2026-07-27):** all five files real + `closed_loop_run` `'predict'`
+case + `test_antijam_predict.m` (4 gates pass: `adapt_lcmv_null`≡`adapt_lcmv`
+when `e_null=[]` to 1e-12 and −60 dB constrained null; MUSIC angle+presence on a
+toy analytic-R; on/off no-regression + period recovery + DoA-RMSE; Mode-C
+contract). **Key implementation findings:** (1) MUSIC must use the
+**normalized** metric `‖a‖²/‖Eₙᴴa‖²` — measured element-pattern column norms
+vary strongly across the grid, so the unnormalized `1/‖Eₙᴴa‖²` spuriously peaks
+at low-norm endfire directions (a ULA's constant `√N` norm hides this — the toy
+tests passed while the real array failed). (2) During ON, let the measured `R̂`
+form the null (identical to `lcmv`); use the explicit hard null ONLY for
+pre-nulling — this makes `predict` never worse than `lcmv` and avoids
+mis-steering on a transient estimate. (3) `buffer_len` must exceed
+`min_periods × period_in_steps` or the periodogram never trusts a line; sub-bin
+parabolic interpolation of the FFT peak is needed to time the pre-null (raw bin
+was off by ~5 steps at period 200). (4) `adapt_lcmv_null` uses `pinv` on the
+constraint gram to degrade gracefully if a predicted null coincides with the
+steer direction. New required key `adapt.predict` (buffer widened to 1024,
+`lead_steps` 6). **Demo** `scripts/run_mode_c_demo_script.m` on ManyDipoles/Theta,
+on/off jammer (5 s off-gap, 10 s period, 100 s): oracle/lcmv/predict — dead time
+**0.30 s (predict) vs 0.70 s (lcmv)**, availability 99.7 vs 99.3%, oracle gap
+0.60 vs 0.78 dB, recovery 0.30 vs 1.22 steps; MUSIC DoA-RMSE ≈0° while ON;
+periodogram recovers the 10 s period. Artifacts: `mode_c_comparison_*.png`,
+`doa_diag_*.png`, `vid_*_{oracle,lcmv,predict}.mp4`, `mode_c_stats.txt`.
+
+**Campaign integration (2026-07-27):** `'predict'` added to
+`antijam.algorithms` in `config.yaml` — `run_antijam` is algorithm-agnostic
+(loops `algorithms` → `closed_loop_run`), so no driver change was needed;
+`kpi_evaluate` / `write_kpi_table` / `plot_antijam_report` all handle a
+`predict` run (the extra DoA-diagnostic log fields are ignored by the generic
+report paths). Smoke campaign (oracle/lcmv/predict × S1/S5/S6, 1 seed):
+S1 (always-on static) predict ≡ lcmv exactly (no-regression invariant holds);
+S5 (drift+on/off) predict avail 99.5 vs 99.2%, recovery 0 vs 1, oracle gap
+0.86 vs 1.02, gain penalty −0.20 vs −0.32 dB; S6 (lifecycle) oracle gap 0.55
+vs 0.75, gain penalty −0.10 vs −0.30 dB (predict restores the quiescent beam
+better after turn-off). `plot_antijam_report` also given a light theme (white
+figure/axes/legend via scoped `groot` defaults + `exportgraphics` white
+background) so its figures match the demo — the report `print` path was
+capturing the session's dark theme.
+
+**Total-pol MVDR fix (2026-07-27):** `adapt_lcmv`/`adapt_lcmv_null` previously
+passed the 2-column total-pol steering `e_s = [copol, cross]` straight into a
+distortionless-on-EVERY-component LCMV (`wᴴe_copol = wᴴe_cross = 1`). That is
+over-constrained for a rank-2 desired signal (independent per-component
+amplitudes) and self-limiting when the components differ in magnitude — on
+spacing0.6 at (θ30,φ120) the "oracle" hit only 14.3 dB SINR while 32.8 dB was
+achievable (cross-pol there is ~18 dB stronger than co-pol, so forcing both to
+unit gain wrecked the beam). Fixed with new `adapt_maxsinr.m` (rank-r max-SINR =
+principal generalized eigenvector of `(R_s, R+load·I)`, optional exact hard null
+via projection onto `{w : e_nullᴴw = 0}`); `adapt_lcmv`/`adapt_lcmv_null`
+delegate to it for `n_c ≥ 2` and keep the exact rank-1 MVDR/LCMV for single
+components (byte-identical, `max|Δw| = 0`; all suites still pass). Verified: the
+`total` oracle now equals the true SINR upper bound (32.8 dB jammer-off,
+30.2 dB with a J/N 20 dB jammer at (30,150), −77.6 dB null; target directivity
+0.3→15.8 dBi). New regression gate `test_antijam_predict` gate 5. This fixes the
+oracle/`lcmv`/`predict` for `total` pol; single-component pol was never affected.
+
+**Not validated yet:** the **drift / CV-Kalman** predictor (S2/S3) — the P8
+follow-up. `plot_doa_waterfall` implemented as a DoA-track + periodogram figure
+(not a literal pseudospectrum waterfall — 2-D geometry). Also inherits the P7.4
+caveat: the full 2-D P1–P6 Monte-Carlo campaign has not been re-run/re-tuned, so
+those KPI numbers remain stale (the smoke run above is 1 seed, 3 scenarios).
+
 ---
 
 ## 5. KPIs and standard scenario suite

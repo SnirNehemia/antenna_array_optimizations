@@ -33,6 +33,16 @@ algs    = unique(cellfun(@(r) {r.algorithm}, runs), 'stable');
 cols    = lines(numel(algs));
 seed0   = min(cellfun(@(r) r.seed, runs));
 
+% Force this whole report to a light theme (white figure/axes/legend, black
+% text) regardless of the session's figure theme; restore on exit. Using groot
+% defaults keeps it to one block instead of styling every subplot by hand.
+THEME = {'defaultFigureColor', 'defaultAxesColor', 'defaultAxesXColor', ...
+    'defaultAxesYColor', 'defaultTextColor', 'defaultLegendColor', ...
+    'defaultLegendTextColor', 'defaultLegendEdgeColor'};
+prev_theme = get(groot, THEME);
+set(groot, THEME, {'w', 'w', 'k', 'k', 'k', 'w', 'k', [0.6 0.6 0.6]});
+restore_theme = onCleanup(@() set(groot, THEME, prev_theme));
+
 % ── 1. SINR timelines per scenario (first seed) ───────────────────
 for s = 1:numel(scn_ids)
     f = figure('Visible', 'off', 'Position', [50 50 950 420]);
@@ -301,6 +311,15 @@ end
 
 
 function save_png(f, output_dir, name)
-print(f, fullfile(output_dir, name), '-dpng', '-r120');
+% Force a white background on export regardless of the session's figure theme
+% (print/theme captures the dark background; exportgraphics honours the color).
+set(f, 'Color', 'w');
+out = fullfile(output_dir, name);
+if exist('exportgraphics', 'file')
+    exportgraphics(f, out, 'BackgroundColor', 'w', 'Resolution', 120);
+else
+    set(f, 'InvertHardcopy', 'on');
+    print(f, out, '-dpng', '-r120');
+end
 close(f);
 end

@@ -11,18 +11,18 @@
 # Path to the folder containing all CST element pattern .txt files.
 # One file per array element. All files in this folder are loaded.
 # The number of elements is inferred from the number of files found.
-# element_patterns_dir: "data/spacing0.9/"
-element_patterns_dir: "data/ManyDipoles/"
+element_patterns_dir: "data/spacing0.6/"
+# element_patterns_dir: "data/ManyDipoles/"
 
 # ────────────────────────── POLARIZATION ──────────────────────────
 
 # Which field component to use for optimization.
 # Options:
-#   "copol"       — Co-polarization (Abs(Copol) + Phase(Copol)). Default.
+#   "copol" / "theta"       — Co-polarization (Abs(Copol) + Phase(Copol)). Default.
 #   "cross"       — Cross-polarization (Abs(Cross) + Phase(Cross)).
 #   "total"       — Total E-field power |E_copol|² + |E_xpol|².
 #                   Manual tuner only (not wired through run_optimization.py).
-polarization: "Theta"
+polarization: "total"
 
 
 # ────────────────────────── OPTIMIZATION DIRECTIVES ───────────────
@@ -205,8 +205,8 @@ output:
 antijam:
   # Desired peak direction [deg] and the operating threshold: "system still
   # operates" when SINR >= sinr_min_db. [P7]: native (theta, phi), no 1-D cut.
-  theta_s_deg: 90.0
-  phi_s_deg: 0.0
+  theta_s_deg: 30.0
+  phi_s_deg: 120.0
   sinr_min_db: 10.0
 
   # Power levels relative to the sigma_n^2 = 1 per-element noise floor.
@@ -220,11 +220,11 @@ antijam:
   # milestone limitation: jammer inside the main beam is out of scope).
   # ~3 beamwidths for the measured 15 deg HPBW of the ManyDipoles cut:
   # null windows closer than this eat into the main lobe (P4 finding).
-  guard_deg: 45.0
+  guard_deg: 5.0
 
   # Algorithms to run in the campaign. Modes are fixed per algorithm:
   # oracle, lcmv -> Mode C (snapshots); spsa, bandit -> Mode S (scalar SINR).
-  algorithms: ["oracle", "lcmv", "spsa", "bandit"]
+  algorithms: ["oracle", "lcmv", "predict", "spsa", "bandit"]
 
   # Standard scenario suite (plan Section 5). motion: "static" | "drift";
   # power: "constant" | "step" | "onoff". Static/initial angle is drawn per
@@ -291,6 +291,18 @@ adapt:
     gamma: 0.101
     A: 15
     step_max: 0.3
+  # [P8] Predictive (anticipatory) Mode C nuller: MUSIC DoA + on/off-period
+  # detection -> pre-form the null before the jammer turns back on. Model order
+  # is hardcoded to 2 (desired + 1 jammer, single-jammer scope) — not a key.
+  # These are initial guesses; expect load-bearing keys to shift under P8 tuning.
+  predict:
+    presence_gap_db: 6.0    # signal/noise eigengap to declare the jammer present
+    buffer_len: 1024        # presence-history window for the periodogram [steps]
+                            # (must exceed min_periods * toggle_period_in_steps)
+    min_periods: 3          # on/off cycles observed before trusting the period
+    lead_steps: 6           # pre-form the null this many steps before turn-on
+                            # (cover MUSIC-presence detection lag at turn-on)
+    doa_stride: 1           # MUSIC grid subsample (1 = full far-field grid)
 
 agent:
   # [P7]: null_grid_deg widened from the old 1-D-cut value (10) — candidates

@@ -31,7 +31,7 @@ function log = closed_loop_run(alg, stack1, stack2, theta_deg, phi_deg, scn, aj,
 %   Part of: Antenna Array Pattern Optimization Tool — anti-jam milestone [P6, P7].
 
 mode = 'S';
-if any(strcmp(alg, {'oracle', 'lcmv'})), mode = 'C'; end
+if any(strcmp(alg, {'oracle', 'lcmv', 'predict'})), mode = 'C'; end
 st   = sim_engine_init(stack1, stack2, theta_deg, phi_deg, scn, aj, sim_cfg, mode);
 n_el = size(stack1, 1);
 T    = numel(scn.t_s);
@@ -42,6 +42,11 @@ switch alg
     case 'lcmv'
         trk = adapt_tracking_init(config.adapt, st.e_s, n_el);
         w = trk.w;
+    case 'predict'
+        % P8 MUSIC + on/off-prediction Mode C nuller.
+        pr = adapt_predict_init(config.adapt, aj, st.e_s, stack1, stack2, ...
+            theta_deg, phi_deg, n_el);
+        w = pr.w;
     case 'spsa'
         % Warm start from the quiescent MVDR beam — the uniform start sits
         % ~10-20 dB deeper on the real array and dominates the probe budget.
@@ -59,6 +64,14 @@ log = struct();
 log.sinr_db   = zeros(1, T);
 log.W         = complex(zeros(n_el, T));
 log.arm_index = NaN(1, T);
+if strcmp(alg, 'predict')
+    % MUSIC/prediction diagnostics (for KPIs and plot_doa_waterfall).
+    log.doa_theta_deg = NaN(1, T);
+    log.doa_phi_deg   = NaN(1, T);
+    log.present       = false(1, T);
+    log.predicted_on  = false(1, T);
+    log.period_est    = NaN(1, T);
+end
 for k = 1:T
     log.W(:, k) = w;
     [obs, st] = sim_engine_step(st, w);
@@ -68,6 +81,13 @@ for k = 1:T
             w = adapt_lcmv(sim_analytic_covariance(st), st.e_s, 0);
         case 'lcmv'
             [w, trk] = adapt_tracking_update(trk, obs);
+        case 'predict'
+            [w, pr] = adapt_predict_update(pr, obs);
+            log.doa_theta_deg(k) = pr.last.theta_j_deg;
+            log.doa_phi_deg(k)   = pr.last.phi_j_deg;
+            log.present(k)       = pr.last.present;
+            log.predicted_on(k)  = pr.last.predicted_on;
+            log.period_est(k)    = pr.last.period_est;
         case 'spsa'
             [w, sp] = adapt_spsa_update(sp, obs);
         case 'bandit'
