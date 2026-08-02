@@ -11,8 +11,9 @@
 # Path to the folder containing all CST element pattern .txt files.
 # One file per array element. All files in this folder are loaded.
 # The number of elements is inferred from the number of files found.
-element_patterns_dir: "data/spacing0.6/"
+# element_patterns_dir: "data/spacing0.6/"
 # element_patterns_dir: "data/ManyDipoles/"
+element_patterns_dir: "data/patchs_with_monopoles/"
 
 # ────────────────────────── POLARIZATION ──────────────────────────
 
@@ -205,15 +206,15 @@ output:
 antijam:
   # Desired peak direction [deg] and the operating threshold: "system still
   # operates" when SINR >= sinr_min_db. [P7]: native (theta, phi), no 1-D cut.
-  theta_s_deg: 30.0
-  phi_s_deg: 120.0
+  theta_s_deg: 90.0
+  phi_s_deg: 260.0
   sinr_min_db: 10.0
 
   # Power levels relative to the sigma_n^2 = 1 per-element noise floor.
   # sigma_s_db = 3 places the jammer-free SINR at ~15.3 dB for the
   # ManyDipoles Theta cut (quiescent gain 12.3 dB) -> 5 dB headroom over
   # sinr_min_db. [P6 calibration]
-  sigma_s_db: 3.0           # desired-signal power [dB]
+  sigma_s_db: 30.0           # desired-signal power [dB]
   jn_ratio_db: 20.0         # jammer-to-noise ratio [dB]
 
   # Jammer exclusion sector around the main beam [deg] (single-jammer

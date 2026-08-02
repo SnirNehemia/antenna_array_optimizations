@@ -23,6 +23,12 @@
 %              lag at turn-on.  -> adapt_predict_init/_update (MUSIC + FFT).
 %
 %   The demo runs one on/off jammer scenario through all three, then produces:
+%     * trace_<scn>_<alg>.png    fast static glimpse per method: the same live
+%                                SINR/directivity trace panel as the video's
+%                                bottom subplot, fully populated, rendered as
+%                                one PNG (save_run_trace_png) — no per-frame
+%                                heatmap loop, so it's available almost
+%                                instantly, well before the video below;
 %     * vid_<scn>_<alg>.mp4      one video per method: the 2-D radiation pattern
 %                                evolving over time, the jammer dot, and the live
 %                                SINR trace (save_run_gif);
@@ -79,18 +85,18 @@ fprintf('Steer to (theta_s=%.0f, phi_s=%.0f) deg; SINR threshold %.0f dB\n', ...
 scn_cfg = struct( ...
     'id',              'ONOFF', ...
     'motion',          'static', ...     % fixed angle (see plan S5/S6 for drift)
-    'theta_j_deg',     25.0, ...         % jammer elevation [deg]
-    'phi_j_deg',       150.0, ...        % jammer azimuth [deg] (opposite the beam)
+    'theta_j_deg',     90.0, ...         % jammer elevation [deg]
+    'phi_j_deg',       200.0, ...        % jammer azimuth [deg] (opposite the beam)
     'power',           'onoff', ...      % periodic on/off
     'duty_cycle',      0.5, ...           % 50% on
-    'toggle_period_s', 10.0, ...         % 5 s ON / 5 s OFF
-    'jn_ratio_db',     1.0, ...         % JAMMER power vs the noise floor [dB].
+    'toggle_period_s', 20.0, ...         % 5 s ON / 5 s OFF
+    'jn_ratio_db',     10.0, ...         % JAMMER power vs the noise floor [dB].
     ...                                   %   Desired-signal power is
     ...                                   %   antijam.sigma_s_db (config.yaml), so
     ...                                   %   jammer-to-signal J/S = jn_ratio_db -
     ...                                   %   sigma_s_db. Raise this (or lower
     ...                                   %   sigma_s_db) to make the jammer stronger.
-    'duration_s',      40.0);           % 10 toggle cycles
+    'duration_s',      100.0);           % 10 toggle cycles
 t_stage = tic;
 scn = sim_scenario(scn_cfg, aj, config.sim);
 timings = tlog('build scenario', t_stage, timings);
@@ -103,6 +109,21 @@ output_dir = fullfile(repo_root, 'results', 'mode_c_demo', timestamp);
 if ~isfolder(output_dir), mkdir(output_dir); end
 fprintf('Output: %s\n', output_dir);
 gif_cfg = struct('format', 'mp4', 'max_frames', 150, 'fps', 12, 'dynamic_range_db', 40);
+% Video rendering (save_run_gif) is the slow part (~1-1.5 min/method); the
+% trace_<scn>_<alg>.png glimpse (below) is produced either way in ~seconds.
+% Set false to skip the videos entirely for a fast iteration loop.
+save_video = true;
+% Set false to skip 'predict' (MUSIC DoA + anticipatory nulling) — it is the
+% slowest of the three methods and its own diagnostic figure (step 8 below).
+% Runs oracle + lcmv only, for a faster iteration loop.
+run_predict = false;
+methods = {'oracle', 'lcmv'};
+if run_predict, methods{end + 1} = 'predict'; end        % order shown in plots
+
+% Record the scenario/antijam/sim/video settings for this run so the
+% timestamped folder is self-describing later.
+save_run_params(scn_cfg, aj, config.sim, gif_cfg, methods, pol, ...
+    fullfile(output_dir, 'run_params.json'));
 
 % ── 5. Oracle reference run (perfect-knowledge upper bound) ─────────
 % Run first so every other method can be scored against its SINR timeline.
@@ -114,8 +135,7 @@ o_log.oracle_sinr_db = o_log.sinr_db;                    % (its own SINR is the 
 timings = tlog('closed-loop oracle', t_stage, timings);
 
 % ── 6. Run each Mode C method, score it, and render its video ───────
-methods = {'oracle', 'lcmv', 'predict'};                 % order shown in plots
-runs    = {};
+runs = {};
 for m = 1:numel(methods)
     alg = methods{m};
     fprintf('Running %s...\n', alg);
@@ -134,12 +154,23 @@ for m = 1:numel(methods)
     runs{end + 1} = struct('algorithm', alg, 'run_log', log, ...
         'kpi', kpi, 'scenario', scn); %#ok<SAGROW>
 
-    % Video: 2-D pattern + jammer dot + live SINR trace for this method.
-    vid_path = fullfile(output_dir, sprintf('vid_%s_%s.%s', scn.id, alg, gif_cfg.format));
+    % Fast glimpse: static PNG of just the SINR/directivity trace panel (no
+    % per-frame heatmap loop, no video encoding) — near-instant, so it's
+    % worth having before the full video renders.
+    trace_path = fullfile(output_dir, sprintf('trace_%s_%s.png', scn.id, alg));
     t_stage = tic;
-    save_run_gif(log, scn, stack1, stack2, theta_deg, phi_deg, aj, gif_cfg, ...
-        sprintf('%s / %s', scn.id, alg), vid_path);
-    timings = tlog(['render video ' alg], t_stage, timings);
+    save_run_trace_png(log, scn, stack1, stack2, theta_deg, phi_deg, aj, ...
+        sprintf('%s / %s', scn.id, alg), trace_path);
+    timings = tlog(['trace png ' alg], t_stage, timings);
+
+    % Video: 2-D pattern + jammer dot + live SINR trace for this method.
+    if save_video
+        vid_path = fullfile(output_dir, sprintf('vid_%s_%s.%s', scn.id, alg, gif_cfg.format));
+        t_stage = tic;
+        save_run_gif(log, scn, stack1, stack2, theta_deg, phi_deg, aj, gif_cfg, ...
+            sprintf('%s / %s', scn.id, alg), vid_path);
+        timings = tlog(['render video ' alg], t_stage, timings);
+    end
 end
 
 % ── 7. Comparison figure + statistics table ────────────────────────
@@ -166,11 +197,13 @@ fprintf(fid, '%s\n', report);
 fclose(fid);
 
 % ── 8. How 'predict' works: MUSIC + periodogram diagnostics ────────
-predict_log = runs{strcmp(methods, 'predict')}.run_log;
-doa_path = fullfile(output_dir, sprintf('doa_diag_%s.png', scn.id));
-t_stage = tic;
-plot_doa_waterfall(predict_log, scn, aj, doa_path);
-timings = tlog('doa figure', t_stage, timings);
+if run_predict
+    predict_log = runs{strcmp(methods, 'predict')}.run_log;
+    doa_path = fullfile(output_dir, sprintf('doa_diag_%s.png', scn.id));
+    t_stage = tic;
+    plot_doa_waterfall(predict_log, scn, aj, doa_path);
+    timings = tlog('doa figure', t_stage, timings);
+end
 
 % ── Timing summary ─────────────────────────────────────────────────
 fprintf('\nTiming summary (major stages):\n');

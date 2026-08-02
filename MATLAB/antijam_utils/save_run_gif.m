@@ -9,10 +9,11 @@ function save_run_gif(run_log, scenario, stack1, stack2, theta_deg, phi_deg, ...
 %     - the full theta x phi radiation pattern (directivity dBi heatmap, same
 %       pcolor/jet/reversed-theta style as the manual weight-tuner GUI) for
 %       the weights applied at that instant, with a fixed color scale;
-%     - the true jammer position as a dot on the map — filled magenta while
-%       transmitting (marker size grows with its linear amplitude 10^(JNR/20)),
-%       hollow gray while silent; the steered direction theta_s as a green
-%       pentagram;
+%     - the true jammer position as a fixed-size, semi-transparent red
+%       outline circle that flashes (every other rendered frame) while the
+%       jammer transmits and disappears entirely while silent; the title
+%       text always reports ON/OFF and J/N; the steered direction theta_s
+%       as a green pentagram;
 %     - a lower panel with the live traces up to the current instant:
 %       achieved SINR, oracle SINR, the sinr_min_db threshold, and (right
 %       axis) the noise-normalized gain toward theta_s.
@@ -66,20 +67,7 @@ if ~isempty(stack2), flat2 = reshape(stack2, n_el, []); end
 % as the pattern heatmap (compute_directivity_dbi_grid), so the trace value
 % equals the heatmap value at the green target marker. (A noise-normalized gain
 % would be ~10 dB higher than the displayed directivity and would not match.)
-e_s = run_log.grid.e_s;
-% Radiated-power Gram G: P_total(w) = w' G w = integral |AF|^2 sin(theta) dOmega.
-sin_theta = sin(deg2rad(theta_deg(:)));
-w_sa = repmat(sin_theta, n_phi, 1).';            % 1 x (n_theta*n_phi), theta-fastest
-if n_theta > 1, dth = deg2rad(mean(diff(theta_deg))); else, dth = pi;    end
-if n_phi   > 1, dph = deg2rad(mean(diff(phi_deg)));   else, dph = 2 * pi; end
-G = (flat1 .* w_sa) * flat1';
-if ~isempty(flat2), G = G + (flat2 .* w_sa) * flat2'; end
-G = G * dth * dph;
-dir_s_db = zeros(1, T);
-for k = 1:T
-    w = run_log.W(:, k);
-    dir_s_db(k) = 10 * log10(4 * pi * sum(abs(w' * e_s).^2) / real(w' * G * w));
-end
+dir_s_db = compute_directivity_trace(run_log, stack1, stack2, theta_deg, phi_deg);
 
 % Jammer / steer positions — [P7] native (theta, phi), no cut projection.
 th_s = aj.theta_s_deg;
@@ -96,7 +84,9 @@ ax_tr  = subplot(3, 1, 3);
 % Force light styling regardless of the session's figure theme.
 set([ax_map, ax_tr], 'Color', 'w', 'XColor', 'k', 'YColor', 'k');
 first = true;
+fi = 0;
 for k = frames
+    fi = fi + 1;
     w = run_log.W(:, k);
     dbi = frame_dbi(w, flat1, flat2, theta_deg, phi_deg, n_theta, n_phi);
 
@@ -113,37 +103,20 @@ for k = frames
     th_j = scenario.theta_j_deg(k);
     ph_j = scenario.phi_j_deg(k);
     if scenario.jammer_on(k)
-        msize = 6 + 0.7 * 10^(scenario.jn_ratio_db(k) / 20);
-        plot(ax_map, ph_j, th_j, 'o', 'MarkerSize', msize, ...
-            'MarkerFaceColor', 'm', 'MarkerEdgeColor', 'w', 'LineWidth', 1.5);
+        if mod(fi, 2) == 1
+            scatter(ax_map, ph_j, th_j, 200, 'o', 'MarkerFaceColor', 'none', ...
+                'MarkerEdgeColor', 'r', 'MarkerEdgeAlpha', 0.5, 'LineWidth', 2);
+        end
         state = sprintf('ON, J/N %.0f dB', scenario.jn_ratio_db(k));
     else
-        plot(ax_map, ph_j, th_j, 'o', 'MarkerSize', 8, ...
-            'MarkerEdgeColor', [0.5 0.5 0.5], 'LineWidth', 1.5);
         state = 'OFF';
     end
     title(ax_map, sprintf('%s — t = %.1f s | jammer @ (\\theta=%.0f\\circ, \\phi=%.0f\\circ) (%s)', ...
         strrep(title_label, '_', '\_'), scenario.t_s(k), ...
-        th_j, ph_j, state), 'Interpreter', 'tex');
+        th_j, ph_j, state), 'Interpreter', 'tex', 'Color', 'k');
 
     % ── Live traces ───────────────────────────────────────────────
-    cla(ax_tr);
-    yyaxis(ax_tr, 'left'); cla(ax_tr); hold(ax_tr, 'on'); grid(ax_tr, 'on');
-    plot(ax_tr, scenario.t_s(1:k), run_log.sinr_db(1:k), 'b-', 'LineWidth', 1.2);
-    plot(ax_tr, scenario.t_s(1:k), run_log.oracle_sinr_db(1:k), 'k:', 'LineWidth', 1.0);
-    yline(ax_tr, aj.sinr_min_db, 'r--');
-    plot(ax_tr, scenario.t_s(k), run_log.sinr_db(k), 'bo', 'MarkerFaceColor', 'b');
-    ylabel(ax_tr, 'SINR [dB]');
-    ylim(ax_tr, [min(-5, min(run_log.sinr_db) - 2), max(run_log.oracle_sinr_db) + 3]);
-    yyaxis(ax_tr, 'right');
-    plot(ax_tr, scenario.t_s(1:k), dir_s_db(1:k), '-', 'Color', [0.9 0.5 0.1], ...
-        'LineWidth', 1.0);
-    ylabel(ax_tr, 'directivity @ \theta_s [dBi]');
-    ylim(ax_tr, [min(dir_s_db) - 1, max(dir_s_db) + 1]);
-    xlim(ax_tr, [0, scenario.t_s(end)]);
-    xlabel(ax_tr, 't [s]');
-    legend(ax_tr, {'SINR', 'oracle', 'threshold'}, 'Location', 'southeast', ...
-        'AutoUpdate', 'off', 'Color', 'w', 'TextColor', 'k', 'EdgeColor', [0.6 0.6 0.6]);
+    plot_run_trace_panel(ax_tr, scenario, run_log, aj, dir_s_db, k);
 
     % ── Append frame ──────────────────────────────────────────────
     im = frame2im(getframe(fig));
