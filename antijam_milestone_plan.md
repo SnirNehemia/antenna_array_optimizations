@@ -315,6 +315,43 @@ follow-up. `plot_doa_waterfall` implemented as a DoA-track + periodogram figure
 caveat: the full 2-D P1–P6 Monte-Carlo campaign has not been re-run/re-tuned, so
 those KPI numbers remain stale (the smoke run above is 1 seed, 3 scenarios).
 
+**Covariance-tracker batching fix + re-tune (2026-08-01):** `adapt_tracking_update`/
+`adapt_predict_update` were folding the `K` snapshots/step in via K sequential
+per-column `(1-lambda)` recursions instead of one batch-averaged per-step
+update — an accidental `lambda^K` per-step decay that the original P2 sweep's
+`forgetting_lambda = 0.98` was unknowingly tuned against. Fixed to match the
+plan's own formula (Section 2); re-swept `forgetting_lambda` to **0.90** on
+both `test_antijam_tracking` and `test_antijam_predict` (full margin 0.85–0.92).
+`mode_c_demo` steady-state oracle gap improved 8.64→5.65 dB (`lcmv`), 5.78→4.74
+dB (`predict`); residual gap on that specific demo scenario is attributed to a
+genuinely sharp optimum (embedded cross-pol gain at the demo's jammer angle
+rivals the desired-signal eigenvalue), not the tracker itself — see
+`docs/notes.md` `[P8]` 2026-08-01 entry for full detail. This changes the
+effective memory time constant of every P2/P8-gated result quoted above in this
+section (all measured under the old `lambda=0.98`/buggy-decay combination);
+none of those suite gates were re-run against the fix beyond the two files
+named, so treat quantitative KPI numbers elsewhere in this P8 section (and P2's
+1-D-cut-era numbers) as superseded pending a full re-run.
+
+**Weight-vector smoothing feature (2026-08-01/02):** even with the batching
+fix, `lcmv`/`predict` still "snap" to a fresh closed-form solution every step —
+no amount of `R_hat` smoothing produces a genuine gradual approach to the
+optimum on a sharp-optimum scenario. Added optional `adapt.weight_smoothing_mu`
+(new key, default off): phase-aligned EMA on the *applied* weights,
+`w <- (1-mu)*w + mu*w_target`, in `adapt_tracking_update.m`/
+`adapt_predict_update.m`. Opt-in only (`mu` absent/1 reproduces prior behavior
+exactly, verified `max|Δw|=0`); costs measurable availability/reacquisition
+speed as mu drops, so it has NOT been folded into the P2/P8 gate suites (which
+still test the un-smoothed tracker) — only `config.yaml`'s demo/campaign
+tuning uses it (`weight_smoothing_mu: 0.25`, alongside `snapshots_per_step:
+128`). Final mode_c_demo (25 dB jammer, 20 s toggle scenario): avail
+96.1%/96.1%, oracle gap 3.06/2.93 dB (`lcmv`/`predict`), visibly smooth climb
+after every turn-on. See `docs/notes.md` `[P8]` 2026-08-01/02 entries for the
+full sweep data and the base-tuning correction (reverted `diagonal_loading_db`/
+`forgetting_lambda` to 10 dB/0.90 after re-sweeping against the demo's actual
+scenario — an earlier "14 dB/0.95" combo had been fit to a since-changed,
+much weaker 1 dB jammer scenario).
+
 ---
 
 ## 5. KPIs and standard scenario suite

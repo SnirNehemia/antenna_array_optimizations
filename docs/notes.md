@@ -205,6 +205,217 @@ or `ValueError` — never silently fall back to a hardcoded default.
 > Claude Code must append an entry here at the end of every working session.
 > Format shown below. Newest entry at the top.
 
+### 2026-08-01 — [P8] Fast trace-only PNG glimpse alongside mode_c_demo videos
+
+User flagged that video rendering is by far the slowest part of
+`run_mode_c_demo_script.m` (confirmed: ~68-92 s per method vs ~0.2-60 s for
+the closed-loop run itself, out of a ~335 s total run). Root cause is
+`save_run_gif`'s per-frame loop (up to `gif_cfg.max_frames` frames):
+redrawing the `pcolor` pattern heatmap and re-encoding it (rgb2ind/GIF or
+VideoWriter/MPEG-4) every frame — the bottom SINR/directivity trace panel is
+comparatively cheap (line plots only).
+
+**Change**: extracted the trace-panel computation (`compute_directivity_trace.m`)
+and drawing (`plot_run_trace_panel.m`) out of `save_run_gif.m` into shared
+helpers (behavior-preserving refactor — video output unchanged), then added
+`save_run_trace_png.m`, which draws that same panel **once**, fully populated
+for the whole run, and saves it as a single PNG — no per-frame loop, no video
+encoding. Wired into `run_mode_c_demo_script.m` right before each
+`save_run_gif` call, producing `trace_<scn>_<alg>.png` per method as a
+near-instant "what happened" glimpse (SINR/oracle/threshold, dead-time dips)
+while the full animated video renders. Also fixed a latent bug found along
+the way: neither panel's `title()` set an explicit text `Color`, so on a
+dark-themed MATLAB session the title rendered near-invisible light gray
+despite the panel's forced white background — added `'Color', 'k'` to both.
+
+**Verified**: ran the full demo end-to-end (MATLAB MCP). Trace PNGs cost
+2.7-10.6 s vs 68-92 s for the corresponding video (~10-25x faster); videos
+and KPI table unchanged (avail/dead-time/oracle-gap match the prior run).
+Output artifacts: `results/mode_c_demo/2026-08-01_212726/`.
+
+### 2026-08-01 — [P8] Fixed covariance-tracker snapshot batching bug; forgetting_lambda re-tuned 0.98 -> 0.90
+
+User reported the `lcmv`/`predict` mode_c_demo videos looked noisy: even a
+static jammer never let the tracker settle, it would reach a good point then
+"jump away," and there was no smooth SINR ramp toward a steady optimum.
+
+**Diagnosis (confirmed empirically via MATLAB, not just theory)**: ran `lcmv`
+against a permanently-static/always-on jammer (no toggling) for 40 s — even
+20+ s past any transient, steady-state oracle gap stayed 10.4±2.8 dB (range
+3.9-18.2 dB) and consecutive-step weight-vector cosine similarity averaged
+only 0.82 (dipping to 0.29). So it was not an on/off artifact — the reactive
+tracker itself never converges.
+
+Two contributing causes:
+1. **Physical, not a bug**: at this demo's jammer angle (25,150) the embedded
+   cross-pol column norm^2 (~2037) dwarfs co-pol's (~10), so despite the
+   "weak" configured J/N=1 dB, the jammer's true covariance eigenvalue
+   (~1285) rivals the desired signal's (~1908) — a razor-thin optimum,
+   inherently sensitive to covariance-estimation noise.
+2. **Implementation bug (fixed)**: `adapt_tracking_update.m` /
+   `adapt_predict_update.m` looped over the `K` per-step snapshots and applied
+   the `(1-lambda)` EWMA recursion ONCE PER SNAPSHOT COLUMN instead of
+   batch-averaging the K within-step snapshots into one sample covariance and
+   applying a single per-step update. Since `lambda` is the documented
+   *inter-step* forgetting rate (plan Section 2: `R_hat(t) = lambda*R_hat(t-1)
+   + (1-lambda)*x(t)x(t)'`, one `x(t)` per step), looping the recursion K times
+   inside one step silently applied `lambda^K` decay per step instead of
+   `lambda` — verified: raising `snapshots_per_step` under the old code made
+   things WORSE, not better (K 16->256 at fixed lambda increased noise), and
+   setting the new single-update code's lambda to `0.98^16 = 0.7237`
+   reproduced the old buggy numbers almost exactly (gap 10.35 vs 10.43, cosine
+   0.8211 vs 0.8223) — confirming the root cause.
+
+**Fix**: `adapt_tracking_update.m` and `adapt_predict_update.m` now compute
+`R_batch = (X*X')/K` and apply ONE `R_hat = lambda*R_hat + (1-lambda)*R_batch`
+per step.
+
+**Consequence — re-tuning required**: the P2/P8 sweep's `forgetting_lambda =
+0.98` was implicitly calibrated against the buggy fast (~lambda^16/step)
+decay. Under the corrected code, 0.98 decays far too slowly to fully forget a
+jammer across a 5 s on/off gap, so `adapt_predict`'s presence detector got
+stuck "on" and the periodogram never learned the period
+(`test_antijam_predict` regression). Re-swept `forgetting_lambda` on both gate
+suites: **0.90** passes `test_antijam_tracking` (all gaps < 0.5 dB, avail >
+99.9%, recovery 1 update) and `test_antijam_predict` (period recovered to 205
+vs true 200 steps, DoA RMSE 0) with margin (0.85-0.92 both pass). Updated
+`config.yaml` and the hardcoded fixtures in `test_antijam_tracking.m` /
+`test_antijam_predict.m` to 0.90; `test_antijam_lifecycle.m` (own hardcoded
+0.98 fixture, long 60 s silent windows so decay time isn't the bottleneck)
+unaffected — reran, still 3/3. Full suite after the fix: sim/tracking/predict/
+lifecycle/kpi all green.
+
+**Regenerated mode_c_demo** (`results/mode_c_demo/2026-08-01_082754/`):
+steady-state oracle gap 8.64 dB -> 5.65 dB (`lcmv`), 5.78 dB -> 4.74 dB
+(`predict`); SINR trace visibly smoother with a genuine gradual climb during
+ON periods rather than a jittery flat band. Gap is still above the plan's <1 dB
+P2 headline because this demo scenario (spacing0.6, `polarization: total`,
+`jn_ratio_db: 1.0`) is a harder regime than the P2 sweep's own suite — cause
+(1) above is inherent to this array/angle/pol combo, not something the
+batching fix alone can close. Flagged as a follow-up if a fully-smooth demo is
+wanted: either re-sweep `diagonal_loading_db` specifically for this regime, or
+pick a less pathological demo jammer angle/`jn_ratio_db`.
+
+**Not touched**: `docs/mode_c_demo.md` still quotes the older ManyDipoles/
+single-component P8 numbers (dead time 0.30 vs 0.70 s, oracle gap 0.60 vs
+0.78 dB) — those predate the `spacing0.6`/`total`-pol config this demo now
+runs against and were already stale before this session (see the P7.4/P8
+"not validated yet" caveats in the plan); worth a documentation pass if the
+demo's narrative numbers need to match the current config.
+
+**Follow-up same session — parameter sweep + weight-smoothing feature**: user
+still found the batching-fix-only result too jagged and asked to see it
+"crawl" toward a better solution rather than jump. Ran a 6-way + 3-way
+parameter-sweep comparison on the ONOFF scenario (`smoothness_param_sweep.png`,
+`smoothness_param_sweep2.png`, both in `results/mode_c_demo/`) varying
+`diagonal_loading_db` / `forgetting_lambda` / `sim.snapshots_per_step`, plus a
+prototype weight-vector EMA. Findings:
+- `snapshots_per_step` (K) is the best "free" lever now that the batching fix
+  makes it meaningful — no reactivity cost, pure noise reduction. K 16->128
+  alone: steady-state gap 6.04+-3.28 -> 1.93+-1.24 dB, visibly smoother.
+- `forgetting_lambda` up trades noise for reactivity (expected).
+- `diagonal_loading_db` up is NOT a good smoothing knob here — 25 dB made
+  both the mean gap AND the noise worse (starves achievable null depth).
+- None of the R_hat-side knobs alone produce a genuine gradual-climb shape,
+  because `adapt_lcmv`/`adapt_lcmv_null` recompute a full closed-form solution
+  from R_hat every step (a "snap," not an iterative climb) — however smooth
+  R_hat is, the map from R_hat to w can still move w non-negligibly step to
+  step near this scenario's sharp optimum.
+
+**Implemented** (user chose "K=128 + tuned combo" base tuning, and asked for
+the weight-smoothing to be a real feature, not just a demo prototype):
+new optional `state.mu` in `adapt_tracking_init.m`/`adapt_predict_init.m`
+(from `adapt_config.weight_smoothing_mu`; absent/empty -> 1.0 = off, NOT
+subject to the "no silent defaults" rule since this is a deliberate opt-in
+feature, unlike `forgetting_lambda`/`diagonal_loading_db` which stay required).
+New shared-logic local helper `smooth_weights` in both `adapt_tracking_update.m`
+and `adapt_predict_update.m`: `w <- (1-mu)*w_prev + mu*w_target`, phase-aligned
+first (`w_target * conj(w_prev'*w_target)/|w_prev'*w_target|`) since
+MVDR/max-SINR/null-constrained solutions carry an arbitrary global phase — a
+naive blend without alignment can destructively interfere. Verified: (1) `mu`
+absent is byte-identical to `mu=1` explicit (max|w diff| = 0 over a full run —
+existing behavior untouched, all of `test_antijam_tracking`/`test_antijam_predict`/
+`test_antijam_lifecycle` still pass unmodified); (2) `mu=0.2` measurably damps
+the mean step-to-step `|Delta w|` (0.0059 -> 0.0025 on a toy static-jammer
+check).
+
+**Final config.yaml values** (all under `adapt`/`sim`, per-key rationale
+comments in the file): `sim.snapshots_per_step: 128` (was 16),
+`adapt.diagonal_loading_db: 14` (was 10), `adapt.forgetting_lambda: 0.95`
+(was 0.90 from the earlier fix), new `adapt.weight_smoothing_mu: 0.15`. NOTE:
+the gate-test fixtures (`test_antijam_tracking.m`/`test_antijam_predict.m`)
+are self-contained by design (their own hardcoded toy-array acfg, unaffected
+by config.yaml) and were NOT changed to match — they keep testing the tracker
+mechanism at `lambda=0.90`, `mu` absent (off), which is sufficient to gate
+correctness; the "combo" tuning + smoothing is a config-only choice for the
+real demo/campaign and has not been separately gated. If `weight_smoothing_mu`
+is ever adopted for the real `run_antijam` Monte Carlo campaign (not just this
+demo), the P2/P8 recovery-time gates should be re-checked at the chosen mu,
+since smoothing measurably slows reacquisition (see dead-time regression
+below).
+
+**Regenerated mode_c_demo** (`results/mode_c_demo/2026-08-01_215926/`) with
+the real (patched) repo code end-to-end: steady-state oracle gap
+2.70 dB (`lcmv`), 2.78 dB (`predict`) — down from the batching-fix-only run's
+5.65/4.74 dB, and from the original bug's 8.64/5.78 dB. SINR trace now shows a
+genuine smooth, near-monotonic climb from each turn-on toward the ceiling
+(`mode_c_comparison_ONOFF.png`) — the "crawl" shape requested, not a jittery
+plateau. Cost, as expected: availability 98.9%/98.4% (was 99.3/99.4% pre-session),
+dead time 0.45 s/0.65 s (was 0.25/0.30 s) — the smoothing adds real reacquisition
+lag in exchange for the gradual-approach visual. Not yet re-tuned further to
+recover some of that lag (e.g. a smaller mu, or mu that only engages once R_hat
+has partly converged) — flagged as a possible next step if the reactivity cost
+matters for the real campaign.
+
+**Same session, part 3 — mu iteration + scenario change mid-session**: user
+asked to iterate on mu before committing. Swept mu on the ONOFF demo scenario
+as it stood then (theta_j=25,phi_j=150, 5s/5s toggle, J/N=1dB) — user picked
+0.25 (`mu_sweep_traces.png`: avail/gap [99.4%/1.87dB @1.0 (off) ... 96.1%/3.63dB
+@0.06]).
+
+Before committing, discovered `run_mode_c_demo_script.m`'s scenario had changed
+underneath this session (never edited by Claude) — user was iterating on it
+directly in parallel: `phi_j_deg` 150->140, `toggle_period_s` 10->20 (comment
+still says "5s ON/5s OFF", now actually 10s/10s), `jn_ratio_db` 1.0->25.0 (a
+much stronger jammer, not the razor-thin near-noise regime this whole session
+had been diagnosing). Confirmed intentional with the user; re-swept both the
+base tuning and mu against the ACTUAL current scenario rather than assume the
+old sweep still applied:
+
+- Base tuning re-check: on the 25 dB scenario, plain `loading=10dB/lambda=0.90`
+  + `K=128` (2.06 dB gap) slightly BEATS the earlier "combo" `14dB/0.95`
+  (2.33 dB) — the combo was fit to the old 1 dB-jammer regime and didn't
+  transfer. Reverted `diagonal_loading_db`/`forgetting_lambda` to 10/0.90 in
+  config.yaml (matches the gate-test fixtures now too).
+- mu re-swept at the corrected base tuning (`mu_sweep_traces_v2.png`,
+  `mu_sweep_data_v2.mat`): mu [1.0, 0.5, 0.35, 0.25, 0.15, 0.10] -> lcmv avail
+  [99.6, 98.3, 97.4, 96.1, 93.1, 89.6]%, gap [2.03, 2.33, 2.60, 3.02, 4.01,
+  5.25] dB. The cost curve is steeper on this scenario than the old one
+  (longer 20 s period + bigger ON/OFF SINR swing makes smoothing lag matter
+  more) — mu=0.10 now dips below the milestone's usual 90% availability floor.
+  User re-picked **mu=0.25** (avail 96.1%, gap ~3.0 dB, comfortably above the
+  floor) after reviewing the new chart.
+
+**Final config.yaml** (`adapt`): `diagonal_loading_db: 10` (back from 14),
+`forgetting_lambda: 0.90` (back from 0.95), `weight_smoothing_mu: 0.25`
+(unchanged value, re-validated against the real scenario); `sim`:
+`snapshots_per_step: 128` (unchanged, independently re-confirmed best on the
+new scenario too). Regenerated `mode_c_demo` one more time end-to-end
+(`results/mode_c_demo/2026-08-02_090507/`) against the final config and the
+script's actual current scenario: avail 96.1%/96.1%, dead time 1.55/1.55 s,
+oracle gap 3.06/2.93 dB (`lcmv`/`predict`). `mode_c_comparison_ONOFF.png`
+shows a clean gradual climb both after each turn-on and through the full
+OFF-window recovery — no residual jaggedness. Re-ran
+`test_antijam_tracking`/`test_antijam_predict`/`test_antijam_lifecycle` one
+final time against the settled code: still 4/4, 5/5, 3/3.
+
+**Lesson for next time**: when a long-running investigation's config/tuning
+depends on a specific scenario definition living in a script file the user can
+edit directly (not config.yaml), re-verify that scenario hasn't drifted before
+trusting sweep results computed against it — this session almost committed
+tuning validated against a scenario that no longer matched what the demo
+script actually runs.
+
 ### 2026-07-19 — [P6] Jammer-scenario GIF demo (run_jammer_demo + jammer_config.yaml)
 
 **Implemented** (per Snir: config-driven scenario runner with animated GIFs):

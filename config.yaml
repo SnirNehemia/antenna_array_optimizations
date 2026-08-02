@@ -267,7 +267,16 @@ antijam:
 sim:
   dt_s: 0.05                # closed-loop step [s]
   duration_s: 60.0
-  snapshots_per_step: 16    # Mode C snapshot count K per step
+  # Mode C snapshot count K per step. [P8, 2026-08-01] Was 16; raised to 128
+  # after the adapt_tracking_update/adapt_predict_update batching fix made K a
+  # genuine per-step noise-reduction knob (previously it silently accelerated
+  # forgetting instead — see forgetting_lambda note below). K=128 alone (same
+  # loading/lambda) cut the mode_c_demo static-jammer steady-state oracle gap
+  # from 6.04+-3.28 dB to 1.93+-1.24 dB with no reactivity cost — the best
+  # "free" smoothing lever found (diagonal_loading_db and forgetting_lambda
+  # both trade accuracy or reactivity for smoothness; K does not). Cheap at
+  # this array size (16-20 elements).
+  snapshots_per_step: 128
   seed: 1234                # base seed; Monte Carlo runs offset from it
   n_runs: 5                 # Monte Carlo runs per scenario x algorithm
 
@@ -277,9 +286,47 @@ adapt:
   # loading self-nulls the signal — at J/N = 20 dB, +10 dB loading gave
   # oracle gap 0.8 dB vs 2-3.7 dB at -10 dB. Keep well below the jammer
   # eigenvalue (~ J/N + 10*log10(N_el) dB) or nulling degrades.
+  # [P8, 2026-08-01/02] Tried raising to 14 dB alongside the snapshots_per_step
+  # re-tune below, but re-swept against the demo's actual scenario
+  # (mode_c_demo.md's ONOFF case, 25 dB jammer / 20 s toggle) and found plain
+  # 10 dB + K=128 slightly BEATS 14 dB (gap 2.06 vs 2.33 dB) — kept at 10.
+  # Heavier loading is not a good smoothing knob here regardless: 25 dB loading
+  # makes both accuracy AND noise worse (starves achievable null depth; see
+  # docs/notes.md [P8] 2026-08-01 sweep, panel F).
   diagonal_loading_db: 10
-  # Exponential forgetting factor for the recursive covariance estimate.
-  forgetting_lambda: 0.98
+  # Exponential forgetting factor for the recursive covariance estimate,
+  # applied ONCE per step to the within-step batch-averaged snapshot
+  # covariance (adapt_tracking_update / adapt_predict_update).
+  # [P8 fix, 2026-08-01] Was 0.98, chosen by the original P2 sweep against a
+  # bug where the K snapshots/step were folded in via K SEQUENTIAL per-column
+  # recursions instead of one batch-averaged update — that accidentally
+  # applied ~lambda^K decay per step (0.98^16 = 0.72), not the documented
+  # per-step 0.98. Fixing the accumulation to match the plan's formula
+  # (Section 2) exposed that 0.98 is now far too slow (a 5 s on/off gap no
+  # longer fully decays -> adapt_predict's presence detector never resets;
+  # see test_antijam_predict). Re-swept to 0.90 (gate-test fixtures pin the
+  # same value — see test_antijam_tracking.m/test_antijam_predict.m headers).
+  # NOTE: the gate-test suites are self-contained (own hardcoded acfg,
+  # unaffected by this file) — only run_antijam / the mode_c_demo script
+  # actually read config.yaml.
+  forgetting_lambda: 0.90
+  # [P8, 2026-08-01/02] Optional: rate-limits the APPLIED weight vector toward
+  # the closed-form target instead of snapping to it every step (see
+  # adapt_tracking_init.m / smooth_weights in adapt_tracking_update.m).
+  # w <- (1-mu)*w + mu*w_target, phase-aligned. mu=1 or key absent = off
+  # (original snap-to-target behavior; this is how every gate-test fixture
+  # runs, since none set this key). NOT a pure improvement — it adds
+  # reacquisition lag (a visible post-toggle dip before climbing) in exchange
+  # for a smoother, more gradual rise-to-optimum shape; both grow as mu drops.
+  # Swept on the demo's actual ONOFF scenario (25 dB jammer, 20 s toggle) at
+  # loading=10dB/lambda=0.90/K=128: mu [1.0, 0.5, 0.35, 0.25, 0.15, 0.10] ->
+  # lcmv availability [99.6, 98.3, 97.4, 96.1, 93.1, 89.6]%, oracle gap
+  # [2.03, 2.33, 2.60, 3.02, 4.01, 5.25] dB (mu=0.10 dips below the milestone's
+  # usual 90% availability floor). 0.25 chosen (2026-08-02, user's pick after
+  # reviewing results/mode_c_demo/mu_sweep_traces_v2.png): clearly smoother
+  # than off/0.35 while staying comfortably above 90% availability. Remove
+  # this key (or set to 1) to fall back to the pre-smoothing behavior.
+  weight_smoothing_mu: 0.25
   # SPSA gains: a_k = a / (A + k)^alpha, c_k = c / k^gamma; ascent steps are
   # clamped to norm <= step_max. P3 sweep: A and step_max are load-bearing —
   # the dB-scale SINR gradient explodes near deep nulls, and unclamped steps

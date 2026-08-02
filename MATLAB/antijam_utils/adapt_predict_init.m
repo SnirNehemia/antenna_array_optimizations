@@ -32,6 +32,11 @@ function state = adapt_predict_init(adapt_config, aj_config, e_s, E1, E2, theta_
 %           R_hat      : (N_el x N_el) running covariance estimate.
 %           lambda     : forgetting factor (per snapshot column).
 %           loading    : linear diagonal loading (from diagonal_loading_db).
+%           mu         : weight-vector smoothing factor. Optional
+%                        adapt_config.weight_smoothing_mu; absent -> 1 (off).
+%                        See adapt_tracking_init.m for the full rationale —
+%                        applies uniformly to whichever of the three w_target
+%                        branches adapt_predict_update selects each step.
 %           e_s        : constraint column(s).
 %           E1,E2,theta_deg,phi_deg : grid refs (MUSIC + null steering).
 %           doa_cfg    : struct passed to adapt_music_doa each step.
@@ -74,6 +79,11 @@ state = struct();
 state.R_hat   = eye(n_elements);                  % quiescent start (unit noise)
 state.lambda  = adapt_config.forgetting_lambda;
 state.loading = 10^(adapt_config.diagonal_loading_db / 10);
+if isfield(adapt_config, 'weight_smoothing_mu') && ~isempty(adapt_config.weight_smoothing_mu)
+    state.mu = adapt_config.weight_smoothing_mu;
+else
+    state.mu = 1.0;                                    % opt-in feature: off by default
+end
 state.e_s     = e_s;
 
 % Grid references — needed each step to run MUSIC and to build the steering

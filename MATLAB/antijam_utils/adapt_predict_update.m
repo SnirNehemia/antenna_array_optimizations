@@ -5,8 +5,11 @@ function [w, state] = adapt_predict_update(state, obs)
 %
 %   Consumes obs.snapshots ONLY (Mode C contract; obs.sinr_db is ignored so the
 %   algorithm never depends on the scalar channel). Per step:
-%     1. Fold each snapshot column into R_hat with exponential forgetting
-%        (identical accumulation to adapt_tracking_update).
+%     1. Batch-average the K snapshot columns into a within-step sample
+%        covariance, then fold it into R_hat with ONE exponential-forgetting
+%        update (identical accumulation to adapt_tracking_update; see the
+%        [P8 fix, 2026-08-01] note there for why per-column recursion was
+%        wrong).
 %     2. doa = adapt_music_doa(R_hat, ...): jammer (theta,phi), presence, power.
 %     3. Push doa.present into the presence ring buffer; if present, refresh
 %        state.last_doa.
@@ -21,6 +24,11 @@ function [w, state] = adapt_predict_update(state, obs)
 %          - otherwise       -> no null (plain MVDR / distortionless beam).
 %        via w = adapt_lcmv_null(R, e_s, e_null, loading).
 %     6. Append this step's diagnostics to state.diag for plot_doa_waterfall.
+%
+%   state.mu (see adapt_predict_init) optionally rate-limits the APPLIED
+%   weights toward whichever w_target the branch above selected, instead of
+%   snapping to it directly — see smooth_weights below (shared logic with
+%   adapt_tracking_update.m).
 %
 %   S6 note: a single ON burst has no periodic line — the periodogram stays
 %   unlearned and the null is held from last_doa (persist-last fallback). S5's
@@ -47,10 +55,8 @@ k = state.k;
 
 % ── 1. Fold snapshots into R_hat (same forgetting as adapt_tracking) ──
 X = obs.snapshots;
-for i = 1:size(X, 2)
-    x = X(:, i);
-    state.R_hat = state.lambda * state.R_hat + (1 - state.lambda) * (x * x');
-end
+R_batch = (X * X') / size(X, 2);
+state.R_hat = state.lambda * state.R_hat + (1 - state.lambda) * R_batch;
 
 % ── 2. MUSIC: explicit jammer angle + presence from this R_hat ─────
 doa = adapt_music_doa(state.R_hat, state.E1, state.E2, ...
@@ -99,16 +105,17 @@ end
 % predicted-imminent OFF window, where R_hat carries no jammer energy.
 if doa.present
     % Jammer visible: reactive MPDR null from the measured covariance.
-    w = adapt_lcmv_null(state.R_hat, state.e_s, [], state.loading);
+    w_target = adapt_lcmv_null(state.R_hat, state.e_s, [], state.loading);
 elseif predicted_on && ~isnan(state.last_doa.idx)
     % About to return: pre-null the LAST-KNOWN direction from a quiescent R
     % (identity) — the hard constraint forms the null before any energy is back.
     e_null = steer_col(state, state.last_doa.idx);
-    w = adapt_lcmv_null(eye(state.n_el), state.e_s, e_null, state.loading);
+    w_target = adapt_lcmv_null(eye(state.n_el), state.e_s, e_null, state.loading);
 else
     % Jammer absent and no imminent return: restore the quiescent full-gain beam.
-    w = adapt_lcmv_null(eye(state.n_el), state.e_s, [], state.loading);
+    w_target = adapt_lcmv_null(eye(state.n_el), state.e_s, [], state.loading);
 end
+w = smooth_weights(state.w, w_target, state.mu);
 state.w = w;
 
 % ── 7. Record per-step diagnostics ─────────────────────────────────
@@ -156,4 +163,23 @@ if bin > 2 && bin < half + 1
 end
 period = n / (bin - 1 + delta);                    % bin frequency -> period [steps]
 trusted = n >= min_periods * period;               % enough cycles observed
+end
+
+
+function w = smooth_weights(w_prev, w_target, mu)
+% SMOOTH_WEIGHTS  Rate-limit the applied weights toward a closed-form target.
+%   mu = 1 (default, feature off) returns w_target unchanged. mu < 1 blends
+%   w_prev and w_target after aligning their global phase — MVDR/max-SINR/
+%   null-constrained solutions are only defined up to an arbitrary
+%   unit-modulus phase, so a naive blend could destructively interfere
+%   between two representations of the "same" beam and corrupt the result.
+if mu >= 1
+    w = w_target;
+    return
+end
+ph = w_prev' * w_target;
+ph = ph / max(abs(ph), eps);
+w_target_aligned = w_target * conj(ph) / abs(ph);
+w = (1 - mu) * w_prev + mu * w_target_aligned;
+w = w / norm(w);
 end

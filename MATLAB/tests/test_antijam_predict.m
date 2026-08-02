@@ -27,7 +27,15 @@ aj = struct('theta_s_deg', 0.0, 'phi_s_deg', 0.0, 'guard_deg', 10.0, ...
 sc = struct('dt_s', 0.05, 'duration_s', 100.0, 'snapshots_per_step', 16, 'seed', 1234);
 predict_cfg = struct('presence_gap_db', 6.0, 'buffer_len', 1024, ...
     'min_periods', 2, 'lead_steps', 6, 'doa_stride', 1);
-acfg = struct('forgetting_lambda', 0.98, 'diagonal_loading_db', 10, ...
+% [P8 fix, 2026-08-01] forgetting_lambda re-swept 0.98 -> 0.90 alongside
+% test_antijam_tracking (see that file's header note): fixing
+% adapt_predict_update's snapshot accumulation to batch-average once per step
+% (instead of once per snapshot column) slowed the true per-step decay from an
+% accidental ~0.98^16=0.72 to the intended 0.98 -- too slow to fully forget
+% the jammer across this test's 5 s (100-step) off-gap, so the presence
+% detector never reset (period_est stuck at NaN). 0.90 decays enough within
+% one off-gap while still passing test_antijam_tracking's steady-state gates.
+acfg = struct('forgetting_lambda', 0.90, 'diagonal_loading_db', 10, ...
     'predict', predict_cfg);
 theta_deg = linspace(0, 180, 361);                 % 0.5 deg grid
 phi_deg   = 0;

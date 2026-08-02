@@ -3,8 +3,16 @@ function tests = test_antijam_tracking
 % (antijam_milestone_plan.md Section 4): steady-state oracle gap < 1 dB on
 % the S1-S5 suite, recovery after a 10 deg jump <= 25 updates, SINR
 % availability >= 95% on the drifting scenario. Tuning per the P2 sweep:
-% forgetting_lambda = 0.98, diagonal_loading_db = +10 (MPDR snapshots —
+% forgetting_lambda = 0.90, diagonal_loading_db = +10 (MPDR snapshots —
 % signal present — need heavy loading against self-nulling).
+%
+% [P8 fix, 2026-08-01] forgetting_lambda re-swept from 0.98 to 0.90 after
+% fixing adapt_tracking_update to batch-average the K snapshots/step into ONE
+% per-step update (was applying the lambda recursion once PER SNAPSHOT COLUMN,
+% i.e. an accidental ~lambda^K per-step decay -- see adapt_tracking_update.m).
+% 0.90 re-passes this suite with margin (0.85-0.98 all pass) and is required
+% by test_antijam_predict's on/off presence detector (config.yaml carries the
+% same re-tuned value).
 %
 % The SINR threshold here is 5 dB, not the config default 10 dB: the 8-element
 % unit-gain toy ULA tops out at SINR_max = sigma_s^2 * N_el ~ 9 dB, so the
@@ -24,7 +32,7 @@ addpath(fullfile(fileparts(here), 'antijam_utils'));
 aj = struct('theta_s_deg', 0.0, 'phi_s_deg', 0.0, 'guard_deg', 10.0, ...
             'jn_ratio_db', 20.0, 'sigma_s_db', 0.0);
 sc = struct('dt_s', 0.05, 'duration_s', 60.0, 'snapshots_per_step', 16, 'seed', 1234);
-acfg = struct('forgetting_lambda', 0.98, 'diagonal_loading_db', 10);
+acfg = struct('forgetting_lambda', 0.90, 'diagonal_loading_db', 10);
 theta_deg = linspace(0, 180, 361);
 phi_deg   = 0;
 E    = exp(1i * pi * (0:7).' * sind(theta_deg));   % half-wavelength 8-el ULA
