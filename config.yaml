@@ -214,8 +214,15 @@ antijam:
   # sigma_s_db = 3 places the jammer-free SINR at ~15.3 dB for the
   # ManyDipoles Theta cut (quiescent gain 12.3 dB) -> 5 dB headroom over
   # sinr_min_db. [P6 calibration]
-  sigma_s_db: 30.0           # desired-signal power [dB]
+  sigma_s_db: 20.0           # desired-signal power [dB]
   jn_ratio_db: 20.0         # jammer-to-noise ratio [dB]
+
+  # [P10] Array design / CST export frequency [Hz]. Read only when the waveform
+  # layer is on (sim.fs_hz); all engine maths runs in baseband OFFSETS from it,
+  # so this is for labelling absolute frequencies in reports. The narrowband
+  # assumption behind the whole milestone is that element patterns do not vary
+  # across the captured band — true to first order at ~1% fractional bandwidth.
+  f_center_hz: 2.4e9
 
   # Jammer exclusion sector around the main beam [deg] (single-jammer
   # milestone limitation: jammer inside the main beam is out of scope).
@@ -230,15 +237,25 @@ antijam:
   # Standard scenario suite (plan Section 5). motion: "static" | "drift";
   # power: "constant" | "step" | "onoff". Static/initial angle is drawn per
   # seed, uniform over the cut span minus the guard sector.
+  # [P10] freq: "constant" (+ f_j_offset_hz) | "hop" (+ f_j_hop_offsets_hz +
+  # f_j_hop_period_s), as an offset from antijam.f_center_hz. These are inert
+  # while sim.fs_hz is off; they are pre-populated so that turning the waveform
+  # layer on does not require touching every scenario. Offsets are spread over
+  # the band and deliberately NOT on FFT bin centres (fs/K = 187.5 kHz), so the
+  # sub-bin interpolation is actually exercised rather than flattered.
   scenarios:
     - id: "S1"              # identification baseline
       motion: "static"
       power: "constant"
+      freq: "constant"
+      f_j_offset_hz: 3.1e6
     - id: "S2"              # primary tracking case
       motion: "drift"
       theta_drift_deg_per_s: 2.0
       phi_drift_deg_per_s: 0.0
       power: "constant"
+      freq: "constant"
+      f_j_offset_hz: -5.37e6
     - id: "S3"              # recovery-time case
       motion: "drift"
       theta_drift_deg_per_s: 2.0
@@ -246,11 +263,15 @@ antijam:
       theta_jump_deg: 10.0
       jump_time_s: 30.0
       power: "constant"
+      freq: "constant"
+      f_j_offset_hz: 8.02e6
     - id: "S4"              # robustness (power step)
       motion: "static"
       power: "step"
       power_step_db: 10.0
       step_time_s: 30.0
+      freq: "constant"
+      f_j_offset_hz: -1.23e6
     - id: "S5"              # non-stationarity stress (on/off)
       motion: "drift"
       theta_drift_deg_per_s: 2.0
@@ -258,12 +279,22 @@ antijam:
       power: "onoff"
       duty_cycle: 0.5
       toggle_period_s: 10.0
+      freq: "constant"
+      f_j_offset_hz: 6.44e6
     - id: "S6"              # null lifecycle: silent 1 min -> static jammer
       motion: "static"      # 1 min -> silent again. Shows the null forming
       power: "window"       # on turn-on and the return to the unconstrained
       on_time_s: 60.0       # peak after turn-off.
       off_time_s: 120.0
       duration_s: 180.0     # per-scenario override of sim.duration_s
+      freq: "constant"
+      f_j_offset_hz: -9.11e6
+    - id: "S7"              # [P10] carrier hop: same angle, new frequency.
+      motion: "static"      # Isolates the spectral loop — the spatial null is
+      power: "constant"     # already correct, so any SINR notch at t = 20/40/60
+      freq: "hop"           # s is the notch re-acquiring, nothing else.
+      f_j_hop_offsets_hz: [3.1e6, -7.45e6]
+      f_j_hop_period_s: 20.0
 
 sim:
   dt_s: 0.05                # closed-loop step [s]
@@ -280,6 +311,15 @@ sim:
   snapshots_per_step: 128
   seed: 1234                # base seed; Monte Carlo runs offset from it
   n_runs: 5                 # Monte Carlo runs per scenario x algorithm
+  # [P10] Waveform layer. Uncomment to give the jammer a CW carrier that
+  # adapt_freq_estimate can find, enabling the RF-notch path below. This is the
+  # snapshot-block ADC rate — the captured bandwidth — NOT related to dt_s: the
+  # K columns are a K/fs_hz = 5.3 us capture burst inside each 0.05 s control
+  # step. 24 MHz is ~1% of the 2.4 GHz centre, the customer's search window.
+  # While this key is absent the snapshot generator is byte-identical to the
+  # pre-P10 path, so every P1-P9 result stands unchanged.
+  # Requires: every scenario carries a "freq" key (all seven above do).
+  # fs_hz: 24.0e6
 
 adapt:
   # Diagonal loading for LCMV, dB relative to the sigma_n^2 = 1 noise floor.
@@ -295,6 +335,14 @@ adapt:
   # makes both accuracy AND noise worse (starves achievable null depth; see
   # docs/notes.md [P8] 2026-08-01 sweep, panel F).
   diagonal_loading_db: 10
+  # [P9, 2026-08-02] Trial: data-driven loading (see antijam_milestone_plan.md
+  # P9). Opt-in — set to try it, remove/comment to fall back to the fixed
+  # diagonal_loading_db above. loading = loading_factor * sqrt(sig_power_hat *
+  # noise_floor_hat); 0 dB (factor=1) empirically reproduces the old tuned
+  # ~10 in the calibrated weak-signal regime and lands near the empirical
+  # optimum in the sigma_s_db=30 regime that motivated this phase — no
+  # additional scaling needed as a starting point.
+  loading_factor_db: 0
   # Exponential forgetting factor for the recursive covariance estimate,
   # applied ONCE per step to the within-step batch-averaged snapshot
   # covariance (adapt_tracking_update / adapt_predict_update).
@@ -351,6 +399,27 @@ adapt:
     lead_steps: 6           # pre-form the null this many steps before turn-on
                             # (cover MUSIC-presence detection lag at turn-on)
     doa_stride: 1           # MUSIC grid subsample (1 = full far-field grid)
+  # [P10] Jammer carrier-frequency tracker (adapt_freq_init/update ->
+  # adapt_freq_estimate). Only runs when sim.fs_hz turns on the waveform layer;
+  # required when notch.mode is "adaptive", since it is what commands the notch.
+  freq:
+    nfft_factor: 4          # zero-pad factor before the peak search. 8x measured
+                            # to add nothing over 4x (343 vs 344 Hz RMSE).
+    presence_snr_db: 15.0   # peak-to-median periodogram ratio to declare a line.
+                            # Measured on the real array (J/N = 20 dB, K = 128,
+                            # nfft 512): jammer ON gives 18.7-23.3 dB, jammer OFF
+                            # gives up to 12.6 dB — a white spectrum's max/median
+                            # over 512 bins is ~9.5 dB on its own, so 10.0 sat
+                            # inside the noise distribution and false-alarmed on
+                            # 19% of OFF steps (the tracker then chased noise
+                            # peaks instead of HOLDING). 15.0 is 2.4 dB above the
+                            # measured OFF max and 3.7 dB below the ON min:
+                            # 0% false alarm, 0% missed detection.
+    smoothing_lambda: 0.7   # EMA weight on the RETAINED estimate. A single block
+                            # is already accurate to a few hundred Hz, so this
+                            # buys outlier rejection, not accuracy. A detection
+                            # more than 4 periodogram bins away is treated as a
+                            # genuine hop and replaces the estimate outright.
 
 agent:
   # [P7]: null_grid_deg widened from the old 1-D-cut value (10) — candidates
@@ -381,3 +450,38 @@ agent:
     use_uniform_init: true
     use_single_element_init: false
     amplitude_bounds: [0.0, 1.0]
+
+# ══════════════════════════════════════════════════════════════════
+# [P10] RF NOTCH FILTER
+# Temporal (spectral) rejection stacked on top of the spatial nulls. Modelled
+# as two scalars in the SINR equation (sim_notch_response): a notch is linear
+# and time-invariant and identical on every element, so it COMMUTES with the
+# beamformer — filtering samples then combining equals scaling the combined
+# powers. No filter coefficients are synthesized.
+#
+# Ships INERT (mode "off") so the pre-P10 campaign is untouched. An active mode
+# requires sim.fs_hz; "adaptive" additionally requires adapt.freq, since the
+# tracker is what commands the notch centre.
+# ══════════════════════════════════════════════════════════════════
+notch:
+  # "off"      : no notch — the spatial-null-only baseline.
+  # "adaptive" : centred on the tracker's estimate. The real system.
+  # "oracle"   : centred on the true carrier — the upper bound, for the same
+  #              three-way comparison the report already uses for the beamformer.
+  mode: "off"
+  # Rejection at the notch centre [dB]. Measured cost of a carrier-estimation
+  # error: at the estimator's ~0.6 kHz RMSE against bw_hz = 200 kHz, roughly
+  # 1 dB of these 35 dB is given up.
+  depth_db: 35.0
+  # 3-dB width [Hz]. This is the real trade knob: the wideband desired signal
+  # loses pi*bw_hz/(2*fs_hz) of its power, so at 200 kHz in a 24 MHz band the
+  # notch costs 1.3% = 0.057 dB of signal to remove 35 dB of jammer. Widening it
+  # buys tolerance to carrier error at a linear cost in signal.
+  bw_hz: 2.0e5
+  # "pre"  : monitoring tap UPSTREAM of the notch (recommended, and how real
+  #          anti-jam receivers are built). The covariance / DoA / frequency
+  #          trackers keep seeing the jammer after the notch engages.
+  # "post" : single-path receiver. The notch also erases the jammer from the
+  #          snapshots, blinding every tracker that depends on seeing it —
+  #          modelled so the failure mode can be demonstrated, not recommended.
+  adaptation_tap: "pre"

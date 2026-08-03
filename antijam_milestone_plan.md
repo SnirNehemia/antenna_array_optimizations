@@ -21,7 +21,7 @@ Extend the existing pattern-synthesis tool (Milestone 1: user-specified peaks/nu
 | Jammers | 1 simultaneous, unknown angle, slow drift (seconds timescale), power steps / on-off allowed |
 | Geometry | ~~2D azimuth cut~~ **AMENDED [P7], 2026-07-20: native 2-D (theta, phi) tracking** — see P7 below |
 | Element data | CST embedded element patterns via `load_element_patterns` + `stack_component` → `(N_el, N_theta, N_phi)` complex stack; the anti-jam engine works on a principal-plane cut → `E` matrix `(N_el × N_angles)` complex. Common phase center; no geometric phase re-added. |
-| Simulation fidelity | Pattern-level: SINR computed from pattern gains + jammer/noise powers. No waveform/IQ modeling. |
+| Simulation fidelity | Pattern-level: SINR computed from pattern gains + jammer/noise powers. ~~No waveform/IQ modeling.~~ **AMENDED [P10], 2026-08-03: an opt-in temporal layer (`sim.fs_hz`) gives the jammer a CW carrier so its frequency can be estimated. Spatial covariance is unchanged by construction; with the key absent the engine is byte-identical to pre-P10.** See P10 below. |
 | Observation modes | **Mode C (covariance):** per-element snapshots available → classical LCMV/MVDR. **Mode S (scalar):** only output SINR feedback → bandit + SPSA. |
 | RL approach | Non-stationary multi-armed bandit over a codebook of pre-synthesized weight vectors. No neural networks. |
 | Deliverables | `MATLAB/antijam_utils/` library + closed-loop simulation + KPI evaluation + automated report script |
@@ -333,6 +333,28 @@ none of those suite gates were re-run against the fix beyond the two files
 named, so treat quantitative KPI numbers elsewhere in this P8 section (and P2's
 1-D-cut-era numbers) as superseded pending a full re-run.
 
+### P9 — Data-driven diagonal loading (amendment) — Status: **in-progress** (2026-08-02: design decided in-session, `adapt_tracking_*`/`adapt_predict_*` implemented; gate re-verification and demo trial not yet run)
+
+Triggered by the mode_c_demo regression on `data/patchs_with_monopoles` (2026-08-02): raising `sigma_s_db` from 3→30 dB while keeping `jn_ratio_db=10` inverted the signal/jammer power ordering the P2/P8 tuning assumed (desired signal now 20 dB *above* the jammer). `diagonal_loading_db: 10` is fixed relative to the *assumed* `sigma_n²=1` noise floor — it has no way to know the desired signal's actual power, so it under-regularizes the MPDR self-nulling guard ([adapt_tracking_update.m:14](MATLAB/antijam_utils/adapt_tracking_update.m:14)) outside the regime it was swept against. Since the milestone's scope is already an *unknown* jammer, an unknown signal/jammer power ratio is the same category of unknown and shouldn't need a per-scenario re-tune.
+
+**In-session design decisions (2026-08-02, via user Q&A):**
+1. *Eigen-split source:* **duplicate inline**, not shared. `adapt_music_doa.m`'s `n_sig = 2*n_comp` (desired + 1 jammer, locked single-jammer scope) split is re-derived directly in `adapt_tracking_update.m`/`adapt_predict_update.m` rather than factored into a shared helper — zero risk to the already-passing P8 MUSIC gates, at the cost of the same assumption living in two places.
+2. *Thin noise subspace:* **robust estimator**, not a fallback or a DOF floor. The noise-floor estimate uses `median`, not `mean`, over the bottom `N_el - n_sig` eigenvalues (helps once there are more than 2; on `patchs_with_monopoles` total-pol, `N_el=6, n_sig=4` still leaves only 2, where median=mean — accepted, not solved, pending real data).
+3. *Config key:* **new key**, `adapt.loading_factor_db` — NOT a reinterpretation of `diagonal_loading_db` in place. The old key keeps its old meaning and stays required; the new key is optional and opt-in (see below), so no existing config or mental model silently changes meaning.
+4. *Rollout:* **opt-in alongside the fixed loading** (mirrors `weight_smoothing_mu`'s P8 rollout). `loading_factor_db` absent/empty → `state.adaptive_loading = false`, byte-identical to pre-P9 behavior; present → the tracker recomputes `loading` every step from `R_hat`'s own spectrum instead of using the fixed value. `test_antijam_tracking.m`/`test_antijam_predict.m` fixtures don't set the new key, so both gate suites are unaffected by this change.
+
+**First implementation didn't fix the regression (2026-08-02):** the initial version set `loading = loading_factor * noise_floor_hat` (noise floor alone). Re-running the demo showed **no improvement** (oracle gap 13.62 vs. 13.61 dB, unchanged). Diagnosed by inspecting `R_hat`'s eigenspectrum directly: `[44110, 1309, 1.09, 1.04, 1.01, 0.97]` — `noise_floor_hat` correctly converged to `0.98` (true noise floor is exactly 1 by construction), but **the noise floor never differs between regimes**; what varies is the *signal* eigenvalue (2 in the old regime, 44110 here), and a loading of `~10` is negligible next to either the signal or jammer eigenvalue regardless of what the noise floor is. Referencing loading to the noise floor alone reproduced the old fixed value almost exactly — no actual adaptation occurred.
+
+**Corrected formula:** `loading = loading_factor * sqrt(sig_power_hat * noise_floor_hat)`, the geometric mean of the noise floor and the desired-signal power actually measured in `R_hat`. `sig_power_hat` is the Rayleigh quotient of `R_hat` at the **known** `e_s` direction (`trace(e_s' R_hat e_s) / trace(e_s' e_s)`) — cheap, and sidesteps any signal/jammer subspace-rank question since `e_s` (unlike the jammer angle) isn't unknown; `noise_floor_hat` is the existing bottom-eigenvalue median. Both are smoothed through the same `forgetting_lambda` EMA as `R_hat` (`state.sig_power_hat`, `state.noise_floor_hat`).
+
+**Empirical validation (2026-08-02):** a brute-force fixed-loading sweep on the broken scenario (`sigma_s_db=30`, `jn_ratio_db=10`) found the best achievable oracle gap is **~8.2 dB at loading≈100–300** (vs. 13.6 dB at the old fixed 10) — this regime is fundamentally harder than the calibrated one (signal 20 dB above the jammer degrades the achievable null regardless of loading), so 8.2 dB, not ~1 dB, is the realistic target here. The geometric-mean formula with `loading_factor_db=0` (factor=1, no extra tuning) landed at **loading≈205** in this regime — inside that empirical sweet spot — while giving **loading≈9.2** when `sigma_s_db` is reverted to the original calibrated value of 3 (matching the P2-tuned `diagonal_loading_db=10` almost exactly, on the same array/jammer). One untuned formula reproduces both regimes' known-good loading order of magnitude.
+
+**Implementation:** `adapt_tracking_init.m`/`adapt_predict_init.m` accept the optional `loading_factor_db`, guard `n_sig < N_el`, and seed `state.noise_floor_hat = state.sig_power_hat = 1.0` (matching `R_hat = eye(.)` at k=0, where the Rayleigh quotient at any unit-norm-ish `e_s` is 1). `adapt_tracking_update.m`/`adapt_predict_update.m` compute both estimates each step (private `noise_floor_estimate` helper for the former; the Rayleigh quotient inline for the latter), EMA-smooth them, then set `loading` from the geometric mean. `config.yaml`'s `adapt.loading_factor_db` set to `0` (trial).
+
+**Demo re-run confirms the fix (2026-08-02):** full `run_mode_c_demo_script` re-executed with `loading_factor_db: 0` — oracle gap 13.62→**7.86 dB**, `trace_ONOFF_lcmv.png`/`mode_c_comparison_ONOFF.png` show the SINR trace now tracking the oracle's on/off shape with bounded ~5 dB ripple and directivity oscillating in a sane ±6 dBi band, vs. the pre-fix wild swings between −12 and +5 dBi with no discernible relationship to the jammer state. Both `test_antijam_tracking.m`/`test_antijam_predict.m` gate suites still pass unchanged (opt-in, key absent in fixtures). 7.86 dB (not ~1 dB) is the realistic ceiling for this specific regime per the brute-force sweep above — genuinely harder, not a remaining bug.
+
+**Gate test written and passing (2026-08-02):** `MATLAB/tests/test_antijam_adaptive_loading.m`, 5 gates on the same toy 8-element ULA fixture as `test_antijam_tracking.m` (unit-gain elements, K=16, lambda=0.90): (1) `loading_factor_db` absent/empty → `state.adaptive_loading=false`, bit-identical `loading` to the old fixed path; (2) `N_el <= 2*n_comp` errors (`TooFewElements`); (3) adaptive loading still passes the original P2 gate (<1 dB) at the tuned `sigma_s_db=0` point; (4) a `sigma_s_db` sweep `[-20..40]` dB with a **single** `loading_factor_db=0` asserting adaptive is never >0.3 dB worse than the fixed `diagonal_loading_db=10` baseline at any point; (5) a clear, conservatively-thresholded win at the high end (`sigma_s_db=30`: >0.5 dB better; `sigma_s_db=40`: >1.5 dB better). Thresholds are calibrated from the actual measured sweep (regression ≤0.013 dB everywhere; improvement +1.16 dB at 30, +3.1 dB at 40 — see the test file's header for the full numbers), not guessed. Notably, the win on this toy ULA is much smaller than the real-array demo's 13.6→7.9 dB — attributed to K=16 (vs. the demo's 128) capping how much loading tuning alone can buy back, consistent with the P8 batching-fix finding that snapshot count, not loading, is the dominant lever on the estimation-noise floor. `adapt_lcmv`/`adapt_lcmv_null`/`adapt_maxsinr` are unaffected (still take a plain scalar `loading`).
+
 **Weight-vector smoothing feature (2026-08-01/02):** even with the batching
 fix, `lcmv`/`predict` still "snap" to a fresh closed-form solution every step —
 no amount of `R_hat` smoothing produces a genuine gradual approach to the
@@ -351,6 +373,135 @@ full sweep data and the base-tuning correction (reverted `diagonal_loading_db`/
 `forgetting_lambda` to 10 dB/0.90 after re-sweeping against the demo's actual
 scenario — an earlier "14 dB/0.95" combo had been fit to a since-changed,
 much weaker 1 dB jammer scenario).
+
+### P10 — Jammer carrier-frequency estimation + RF notch (amendment) — Status: **done** (2026-08-03: implemented, 10 gates pass, real-array demo run; campaign integration deliberately left opt-in)
+
+Triggered by a customer request: identify which frequency the unknown jammer is
+on, inside a ~1% band around the array's design frequency (2.4 GHz -> ~24 MHz),
+so an **RF notch filter** can add spectral attenuation on top of the spatial
+nulls. Two independent rejection mechanisms.
+
+**The blocker was that the simulator had no time or frequency axis at all.**
+Snapshot columns were i.i.d. Gaussian draws — spectrally white by construction —
+so there was literally nothing to estimate. This phase adds the temporal layer,
+amending the Section 1 locked scope row above.
+
+**In-session design decisions (2026-08-03, user Q&A):**
+1. *Desired-signal occupancy:* **wideband**, filling the captured band. A narrow
+   notch removes ~1% of signal power (0.057 dB) while killing the jammer.
+2. *Jammer waveform:* **CW tone** first. Narrowband-noise and swept jammers are
+   follow-ups on the same substrate (frequency HOPPING is already implemented —
+   scenario `freq: "hop"`).
+3. *Deliverable:* estimate + **modeled** notch benefit. No filter-coefficient
+   synthesis: an LTI notch identical on every element COMMUTES with the linear
+   beamformer, so filtering samples then combining equals scaling the combined
+   powers. Two scalars in the SINR equation is exact, not an approximation.
+4. *Architecture:* **RF notch with a separate pre-notch monitoring tap**
+   (`notch.adaptation_tap: "pre"`). A single-path notch would erase the jammer
+   from the snapshots and blind the DoA / covariance / frequency trackers; that
+   blinding failure mode is modelled as `"post"` so it can be demonstrated.
+
+**Backward-compatibility invariant (the load-bearing constraint):** a
+random-phase CW tone has the SAME spatial second-order statistics as complex
+Gaussian noise, and every Mode C algorithm consumes only `(X*X')/K`. So
+`adapt_tracking_*`, `adapt_predict_*`, `adapt_music_doa`, `adapt_lcmv*`,
+`adapt_maxsinr` and `agent_*` are untouched — **no spatial algorithm changed in
+this phase**. Rollout mirrors P9's opt-in style: `sim.fs_hz` absent -> the
+generator is byte-identical to pre-P10 under the same seed.
+
+**New modules** (flat `antijam_utils/`, R2020a base MATLAB — `fft` only):
+`sim_jammer_waveform.m` (CW block), `sim_notch_response.m` (closed-form 2nd-order
+notch: `|H|^2 = (D^2 + d a^2)/(D^2 + a^2)`, plus the exact band-limited insertion
+loss), `adapt_freq_estimate.m` (stateless periodogram estimator),
+`adapt_freq_init/update.m` (lock / smooth / hop-reset / hold-through-OFF, and the
+notch command), `plot_freq_waterfall.m`. Modified: `sim_engine_init/step`,
+`sim_scenario` (`f_j_hz` track + `freq_hop` events), `closed_loop_run`,
+`kpi_evaluate` (new `freq_rmse_hz`, `notch_gain_db`). New gate suite
+`tests/test_antijam_freq.m` (10 gates).
+
+**Config:** `sim.fs_hz` (ships COMMENTED OUT), `antijam.f_center_hz`, per-scenario
+`freq` (`constant` + `f_j_offset_hz` | `hop` + `f_j_hop_offsets_hz` +
+`f_j_hop_period_s`, pre-populated on S1-S6 plus a new S7 hop scenario),
+`adapt.freq` (`nfft_factor`, `presence_snr_db`, `smoothing_lambda`), and a new
+top-level `notch` section (ships INERT, `mode: "off"`).
+
+**Key implementation findings:**
+1. *The Hann window was wrong here.* Tapering is the reflex, but a window
+   suppresses leakage from strong NARROWBAND components and — under the locked
+   single-jammer scope — the only narrowband component in the band IS the
+   jammer. The desired signal is white and has no sidelobes to smear, so Hann
+   only cost variance. Measured back-to-back (200 trials): rectangular beats
+   Hann 242 vs 344 Hz RMSE at `sigma_s_db=3`, and 614 vs 1247 Hz at
+   `sigma_s_db=20`. Switched to rectangular. 8x zero-padding adds nothing over
+   4x (343 vs 344 Hz). Jacobsen-type interpolators do NOT apply to a zero-padded
+   spectrum (they assume adjacent un-padded bins) — measured 22 kHz, ~90x worse.
+2. *`presence_snr_db: 10` sat inside the noise distribution.* A white
+   periodogram's own max/median over 512 bins is ~9.5 dB with nothing
+   transmitting, so 10 dB false-alarmed on **19% of jammer-OFF steps** and the
+   tracker chased noise peaks instead of HOLDING. Measured separation on the
+   real array is [12.6 dB OFF max, 18.7 dB ON min]; retuned to **15.0 dB** ->
+   0% false alarm, 0% missed. Gated by G10.
+3. *Accuracy is set by the DESIRED SIGNAL, not the noise floor.* What limits the
+   estimate is the in-band ratio `sigma_j^2|e_j|^2 / (sigma_s^2|e_s|^2 +
+   sigma_n^2)`; once `sigma_s_db` approaches `jn_ratio_db` the wideband signal
+   is the dominant competitor and accuracy roughly halves. The textbook
+   J/N-based CRB is optimistic by ~5x for that reason.
+4. *A notch's benefit is capped by the jammer-to-noise ratio AT THE BEAMFORMER
+   OUTPUT.* It removes only what the jammer still contributes. This makes the
+   two mechanisms **complementary coverage, not additive gain** — and means the
+   payoff depends entirely on how much spatial DOF the array has to spare.
+
+**Measured (real array, `patchs_with_monopoles`, total pol, 6 elements, J/N 20 dB,
+fs 24 MHz, K 128; `results/freq_notch_demo/`):** carrier RMSE **~2 kHz** = 1% of
+the 200 kHz notch width, i.e. ~1 dB of the notch's 35 dB given up to estimation
+error. SINR, spatial-null-only -> null+notch:
+- **Off-beam jammer: 23.6 -> 33.0 dB (+9.4)**. The 6-element dual-pol array is
+  DOF-limited (rank-2 desired + rank-2 jammer out of 6), so its null is shallow
+  enough to leave the notch real work. Note this is NOT what the toy 8-element
+  single-pol ULA in the gate suite shows (+0.02 dB) — that fixture has a large
+  DOF surplus and a near-perfect null. The gates bound the mechanism; the demo
+  measures the payoff.
+- **Main-beam jammer: -0.0 -> 27.9 dB (+27.9), availability 0% -> 99.9%.** The
+  headline. This is the case Section 5's `guard_deg` explicitly declares OUT OF
+  SCOPE for spatial nulling — nulling the main beam would destroy the desired
+  signal. The notch is orthogonal to angle and rescues it outright.
+- **Hopping carrier + on/off: 28.4 -> 34.0 dB (+5.5), availability 96.8% ->
+  99.6%.** The notch also covers the covariance tracker's reacquisition lag at
+  each turn-on (held through the OFF gap, so it is already correct on the first
+  step back), and re-locks within one step after each carrier hop.
+
+**Verified:** all 10 P10 gates pass, and all 9 pre-P10 suites (37 tests) pass
+unchanged — `sim`, `kpi`, `tracking`, `predict`, `adaptive_loading`,
+`lifecycle`, `spsa`, `bandit`, `codebook`.
+
+**Not done / known limitations (honest list):**
+- **Campaign not re-run with the waveform layer on.** `sim.fs_hz` ships
+  commented out, so `run_antijam` behaves exactly as before. Turning it on is a
+  one-line change (all seven scenarios already carry `freq` keys) but the KPI
+  table has not been regenerated under it. This also inherits the standing P7.4
+  caveat that the 2-D campaign was never re-tuned.
+- **`oracle_gap_db` becomes signed against a spatial-only reference** when the
+  notch is active: `oracle_sinr_db` is computed from `sim_analytic_covariance`
+  and knows nothing about the notch, so a notched run can legitimately EXCEED
+  it. Read it as "gap vs the spatial-only oracle", or compare `notch_gain_db`.
+- **Wideband/barrage jammers**: a notch wide enough to cover them eats the
+  desired signal. Only the spatial null helps there.
+- **Narrowband array response is an assumption**: element patterns are treated
+  as frequency-flat across the 1% band (true to first order). A genuine wideband
+  model needs multi-frequency CST exports.
+- **Multiple jammers on different carriers**: the estimator returns the
+  strongest peak; the single-jammer scope stands.
+- **Coherent-polarization jammer deferred**: a real polarized CW source is
+  coherent across polarization components (effective rank 1, not 2). The
+  independent-per-component phase in `sim_jammer_waveform` deliberately
+  preserves the existing "unpolarized source" convention so
+  `sim_analytic_covariance` and MUSIC's `n_sig = 2*n_comp` stay valid. This is a
+  modelling decision to revisit, not a bug.
+- **Filter transients / group delay** are not modelled (LTI steady state only).
+- **ADC dynamic range and front-end saturation relief** — often the *main*
+  real-world reason to prefer an RF notch over a digital one — are not modelled,
+  because the sim has no quantization or compression. The reported benefit is
+  SINR only, which **understates** the practical value of an RF notch.
 
 ---
 

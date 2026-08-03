@@ -33,8 +33,19 @@ function kpi = kpi_evaluate(run_log, scenario, antijam_config)
 %                                   (jammer-free optimum of the same family).
 %           oracle_gap_db         : (1 x T) oracle_sinr_db - sinr_db.
 %           oracle_gap_mean_db    : scalar mean of oracle_gap_db.
+%           freq_err_hz           : [P10] (1 x T) f_hat_hz - true carrier while
+%                                   the jammer is ON; NaN otherwise. Present
+%                                   only when the run logged f_hat_hz.
+%           freq_rmse_hz          : [P10] scalar RMSE over those steps.
+%           notch_gain_db         : [P10] (1 x T) SINR benefit delivered by the
+%                                   notch, sinr_db - sinr_no_notch_db. Present
+%                                   only when the run logged sinr_no_notch_db.
+%                                   Slightly NEGATIVE while the jammer is off —
+%                                   that is the insertion loss of a notch held
+%                                   through an OFF gap, not an error.
+%           notch_gain_on_mean_db : [P10] scalar mean over jammer-ON steps.
 %
-%   Part of: Antenna Array Pattern Optimization Tool — anti-jam milestone [P6, P7].
+%   Part of: Antenna Array Pattern Optimization Tool — anti-jam milestone [P6, P7, P10].
 
 thr  = req_field(antijam_config, 'sinr_min_db');
 sinr = run_log.sinr_db;
@@ -87,6 +98,33 @@ end
 % ── 5. Oracle gap ─────────────────────────────────────────────────
 kpi.oracle_gap_db      = run_log.oracle_sinr_db - sinr;
 kpi.oracle_gap_mean_db = mean(kpi.oracle_gap_db);
+
+% ── 6. [P10] Carrier-estimation error (jammer-on steps only) ──────
+% Scored only while the jammer transmits: through an OFF gap the tracker is
+% deliberately HOLDING its last estimate (see adapt_freq_update), so scoring it
+% against a carrier nobody is radiating would measure the wrong thing.
+if isfield(run_log, 'f_hat_hz') && isfield(scenario, 'f_j_hz')
+    on = scenario.jammer_on;
+    kpi.freq_err_hz     = NaN(1, T);
+    kpi.freq_err_hz(on) = run_log.f_hat_hz(on) - scenario.f_j_hz(on);
+    scored = ~isnan(kpi.freq_err_hz);
+    if any(scored)
+        kpi.freq_rmse_hz = sqrt(mean(kpi.freq_err_hz(scored).^2));
+    else
+        kpi.freq_rmse_hz = NaN;
+    end
+end
+
+% ── 7. [P10] Notch benefit ────────────────────────────────────────
+if isfield(run_log, 'sinr_no_notch_db')
+    kpi.notch_gain_db = sinr - run_log.sinr_no_notch_db;
+    on = scenario.jammer_on;
+    if any(on)
+        kpi.notch_gain_on_mean_db = mean(kpi.notch_gain_db(on));
+    else
+        kpi.notch_gain_on_mean_db = NaN;
+    end
+end
 end
 
 

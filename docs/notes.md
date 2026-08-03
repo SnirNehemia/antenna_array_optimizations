@@ -205,6 +205,57 @@ or `ValueError` — never silently fall back to a hardcoded default.
 > Claude Code must append an entry here at the end of every working session.
 > Format shown below. Newest entry at the top.
 
+### 2026-08-03 — [P10] Jammer carrier-frequency estimation + RF notch modeling
+
+Customer asked whether the jammer's exact frequency can be identified inside a
+~1% band around 2.4 GHz, so an RF notch can add attenuation on top of the
+spatial nulls. Scoped and implemented as a new phase — see
+`antijam_milestone_plan.md` P10 for the full design, decisions and numbers.
+
+**The blocker** was that the simulator had no time or frequency axis:
+`sim_engine_step` drew i.i.d. Gaussian snapshot columns, spectrally white by
+construction, so there was nothing to estimate. Added an **opt-in** temporal
+layer (`sim.fs_hz`) making the jammer a CW tone. The invariant that made this
+safe: a random-phase tone has the same SPATIAL second-order statistics as
+Gaussian noise, and every Mode C algorithm consumes only `(X*X')/K` — so **no
+spatial algorithm changed**, and with `fs_hz` absent the generator is
+byte-identical to before (gate G1 checks this against an inline reimplementation
+of the old formula, not a recorded fixture).
+
+**Three findings worth remembering:**
+1. **The Hann window was wrong here.** Tapering is the reflex, but a window
+   suppresses leakage from strong *narrowband* components, and under the
+   single-jammer scope the only narrowband component IS the jammer. The desired
+   signal is white — no sidelobes to smear — so Hann only cost variance.
+   Measured: rectangular beats Hann 242 vs 344 Hz RMSE at `sigma_s_db=3`, 614 vs
+   1247 Hz at 20. Switched to rectangular.
+2. **`presence_snr_db: 10` sat inside the noise distribution.** A white
+   periodogram's own max/median over 512 bins is ~9.5 dB with nothing
+   transmitting, so the threshold false-alarmed on 19% of jammer-OFF steps and
+   the tracker chased noise peaks instead of holding. Caught by *looking at the
+   waterfall figure*, not by a test. Retuned to 15.0 dB (measured gap: OFF max
+   12.6, ON min 18.7) and added gate G10 so it cannot regress.
+3. **A notch's benefit is capped by the jammer-to-noise ratio at the beamformer
+   output** — it removes only what the jammer still contributes. So the notch
+   and the null are **complementary coverage, not additive gain**, and the
+   payoff scales with how little spatial DOF the array has to spare. The toy
+   8-element single-pol ULA in the gate suite (DOF-rich, near-perfect null)
+   shows +0.02 dB; the real 6-element dual-pol array (rank-2 desired + rank-2
+   jammer out of 6) shows +9.4 dB on the same off-beam geometry. Both are
+   correct; the gates bound the mechanism, the demo measures the payoff.
+
+**Measured on the real array** (`results/freq_notch_demo/`): carrier RMSE ~2 kHz
+(1% of the 200 kHz notch). SINR null-only -> null+notch: off-beam 23.6 -> 33.0 dB;
+**main-beam jammer -0.0 -> 27.9 dB, availability 0% -> 99.9%** (the case
+`guard_deg` declares out of scope for spatial nulling — the notch is orthogonal
+to angle and rescues it); hopping carrier + on/off 28.4 -> 34.0 dB, 96.8% ->
+99.6%.
+
+**Verified**: 10 new gates in `tests/test_antijam_freq.m` pass, and all 9
+pre-P10 suites (37 tests) pass unchanged. `sim.fs_hz` and the `notch` section
+ship inert, so `run_antijam` behaves exactly as before — the campaign has NOT
+been re-run with the waveform layer on.
+
 ### 2026-08-01 — [P8] Fast trace-only PNG glimpse alongside mode_c_demo videos
 
 User flagged that video rendering is by far the slowest part of

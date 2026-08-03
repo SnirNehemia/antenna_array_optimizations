@@ -36,6 +36,12 @@ function scenario = sim_scenario(scenario_config, antijam_config, sim_config)
 %                         fix the static/initial jammer position instead of the
 %                         per-seed random draw (error if inside the guard cap).
 %                         Optional jn_ratio_db overrides antijam_config.jn_ratio_db.
+%                         [P10] Optional freq ('constant'|'hop') adds a carrier
+%                         track: 'constant' requires f_j_offset_hz; 'hop'
+%                         requires f_j_hop_offsets_hz (vector) + f_j_hop_period_s.
+%                         Omit freq entirely and no f_j_hz field is produced —
+%                         sim_engine_init then rejects a sim.fs_hz setting,
+%                         rather than inventing a carrier.
 %       antijam_config  : struct. Required: theta_s_deg, phi_s_deg, guard_deg,
 %                         jn_ratio_db.
 %       sim_config      : struct. Required: dt_s, duration_s, seed.
@@ -48,9 +54,13 @@ function scenario = sim_scenario(scenario_config, antijam_config, sim_config)
 %           phi_j_deg   : (1 x T) true jammer azimuth [deg].
 %           jammer_on   : (1 x T) logical, false during 'onoff' off-phases.
 %           jn_ratio_db : (1 x T) jammer-to-noise ratio [dB] (steps applied).
+%           f_j_hz      : (1 x T) true jammer carrier OFFSET from the array
+%                         centre frequency [Hz] — [P10], present only when
+%                         scenario_config.freq is set.
 %           events      : cell array of structs {t_s, type} for every jammer
-%                         event ('jump' | 'power_step' | 'turn_on') — consumed
-%                         by kpi_evaluate for recovery-time measurement.
+%                         event ('jump' | 'power_step' | 'turn_on' |
+%                         'turn_off' | 'freq_hop') — consumed by kpi_evaluate
+%                         for recovery-time measurement.
 %
 %   NOTE: theta_j_deg/phi_j_deg are ground truth for the simulator, oracle, and
 %   KPI code ONLY. They must never be passed to adapt_* / agent_* algorithms.
@@ -178,6 +188,43 @@ switch scenario_config.power
             scenario_config.power);
 end
 
+% ── Carrier-frequency track ([P10], opt-in) ───────────────────────
+% Absent 'freq' key -> no f_j_hz field at all, so a stale scenario cannot
+% silently acquire a made-up carrier when sim.fs_hz is switched on.
+f_j_hz = [];
+if isfield(scenario_config, 'freq') && ~isempty(scenario_config.freq)
+    switch scenario_config.freq
+        case 'constant'
+            f_off  = req_field(scenario_config, 'f_j_offset_hz', 'scenario');
+            f_j_hz = f_off * ones(1, n_steps);
+        case 'hop'
+            offsets = req_field(scenario_config, 'f_j_hop_offsets_hz', 'scenario');
+            hop_T   = req_field(scenario_config, 'f_j_hop_period_s',   'scenario');
+            offsets = offsets(:).';
+            if numel(offsets) < 2
+                error('sim_scenario:BadHopOffsets', ...
+                    'Scenario %s: freq ''hop'' needs >= 2 f_j_hop_offsets_hz (got %d).', ...
+                    scenario_config.id, numel(offsets));
+            end
+            if hop_T <= 0
+                error('sim_scenario:BadHopPeriod', ...
+                    'Scenario %s: f_j_hop_period_s must be > 0 (got %g).', ...
+                    scenario_config.id, hop_T);
+            end
+            idx    = mod(floor(t_s / hop_T), numel(offsets)) + 1;
+            f_j_hz = offsets(idx);
+            % Every carrier change is a recovery event (run start excluded).
+            hop_k = find([false, diff(idx) ~= 0]);
+            for i = 1:numel(hop_k)
+                events{end + 1} = struct('t_s', t_s(hop_k(i)), 'type', 'freq_hop'); %#ok<AGROW>
+            end
+        otherwise
+            error('sim_scenario:BadFreq', ...
+                'Unknown freq ''%s'' (expected ''constant'' or ''hop'').', ...
+                scenario_config.freq);
+    end
+end
+
 scenario = struct( ...
     'id',          scenario_config.id, ...
     't_s',         t_s, ...
@@ -186,6 +233,9 @@ scenario = struct( ...
     'jammer_on',   on, ...
     'jn_ratio_db', jn, ...
     'events',      {events});
+if ~isempty(f_j_hz)
+    scenario.f_j_hz = f_j_hz;
+end
 end
 
 
