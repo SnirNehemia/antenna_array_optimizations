@@ -31,6 +31,13 @@ function [w, state] = adapt_tracking_update(state, obs)
 %   adapt_tracking_init) optionally rate-limits the APPLIED weights toward
 %   that target instead of snapping to it directly — see smooth_weights below.
 %
+%   [P9, 2026-08-02] When state.adaptive_loading is true (see
+%   adapt_tracking_init), the loading used above is recomputed each step as
+%   loading_factor * sqrt(sig_power_hat * noise_floor_hat) instead of staying
+%   fixed — see adapt_tracking_init.m's header note for why the geometric mean
+%   of the measured signal power and noise floor, not the noise floor alone,
+%   is the right reference (noise_floor_estimate below computes the latter).
+%
 %   Inputs:
 %       state : struct from adapt_tracking_init.
 %       obs   : observation struct from sim_engine_step (Mode C).
@@ -39,7 +46,7 @@ function [w, state] = adapt_tracking_update(state, obs)
 %       w     : (N_el x 1) complex weights to apply next step.
 %       state : updated state (R_hat, w).
 %
-%   Part of: Antenna Array Pattern Optimization Tool — anti-jam milestone [P2].
+%   Part of: Antenna Array Pattern Optimization Tool — anti-jam milestone [P2, P9].
 
 if isempty(obs.snapshots)
     error('adapt_tracking_update:NoSnapshots', ...
@@ -50,9 +57,36 @@ X = obs.snapshots;
 R_batch = (X * X') / size(X, 2);
 state.R_hat = state.lambda * state.R_hat + (1 - state.lambda) * R_batch;
 
+if state.adaptive_loading
+    sigma_n_hat_raw = noise_floor_estimate(state.R_hat, state.n_sig);
+    state.noise_floor_hat = state.lambda * state.noise_floor_hat + ...
+        (1 - state.lambda) * sigma_n_hat_raw;
+    sig_power_raw = real(trace(state.e_s' * state.R_hat * state.e_s)) / ...
+        real(trace(state.e_s' * state.e_s));
+    state.sig_power_hat = state.lambda * state.sig_power_hat + ...
+        (1 - state.lambda) * sig_power_raw;
+    state.loading = state.loading_factor * ...
+        sqrt(state.sig_power_hat * state.noise_floor_hat);
+end
+
 w_target = adapt_lcmv(state.R_hat, state.e_s, state.loading);
 w = smooth_weights(state.w, w_target, state.mu);
 state.w = w;
+end
+
+
+function sigma_n_sq = noise_floor_estimate(R_hat, n_sig)
+% NOISE_FLOOR_ESTIMATE  Median of R_hat's noise-subspace eigenvalues.
+%   Eigendecomposes the (forced-Hermitian) covariance, sorts descending, and
+%   takes the median (not the mean — robust to a thin noise subspace, e.g. a
+%   6-element array leaves only N_el - n_sig ~ 2 eigenvalues to summarize) of
+%   the bottom N_el - n_sig eigenvalues. Same split as adapt_music_doa.m's
+%   signal/noise subspace (duplicated, not shared — see adapt_tracking_init.m
+%   header note).
+n_el = size(R_hat, 1);
+lam  = eig((R_hat + R_hat') / 2);
+lam  = sort(real(lam), 'descend');
+sigma_n_sq = median(lam((n_sig + 1):n_el));
 end
 
 

@@ -58,6 +58,21 @@ X = obs.snapshots;
 R_batch = (X * X') / size(X, 2);
 state.R_hat = state.lambda * state.R_hat + (1 - state.lambda) * R_batch;
 
+% [P9] Data-driven loading (opt-in — see adapt_tracking_init.m/
+% adapt_tracking_update.m for the full geometric-mean rationale; duplicated
+% here, not shared).
+if state.adaptive_loading
+    sigma_n_hat_raw = noise_floor_estimate(state.R_hat, state.n_sig);
+    state.noise_floor_hat = state.lambda * state.noise_floor_hat + ...
+        (1 - state.lambda) * sigma_n_hat_raw;
+    sig_power_raw = real(trace(state.e_s' * state.R_hat * state.e_s)) / ...
+        real(trace(state.e_s' * state.e_s));
+    state.sig_power_hat = state.lambda * state.sig_power_hat + ...
+        (1 - state.lambda) * sig_power_raw;
+    state.loading = state.loading_factor * ...
+        sqrt(state.sig_power_hat * state.noise_floor_hat);
+end
+
 % ── 2. MUSIC: explicit jammer angle + presence from this R_hat ─────
 doa = adapt_music_doa(state.R_hat, state.E1, state.E2, ...
     state.theta_deg, state.phi_deg, state.doa_cfg);
@@ -163,6 +178,17 @@ if bin > 2 && bin < half + 1
 end
 period = n / (bin - 1 + delta);                    % bin frequency -> period [steps]
 trusted = n >= min_periods * period;               % enough cycles observed
+end
+
+
+function sigma_n_sq = noise_floor_estimate(R_hat, n_sig)
+% NOISE_FLOOR_ESTIMATE  Median of R_hat's noise-subspace eigenvalues.
+%   See adapt_tracking_update.m's copy of this helper for the full rationale
+%   (duplicated, not shared, per the P9 design decision).
+n_el = size(R_hat, 1);
+lam  = eig((R_hat + R_hat') / 2);
+lam  = sort(real(lam), 'descend');
+sigma_n_sq = median(lam((n_sig + 1):n_el));
 end
 
 

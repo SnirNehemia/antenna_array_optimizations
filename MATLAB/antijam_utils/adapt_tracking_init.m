@@ -35,7 +35,40 @@ function state = adapt_tracking_init(adapt_config, e_s, n_elements)
 %   feature is opt-in), not the "no silent defaults" case, which applies to
 %   forgetting_lambda/diagonal_loading_db above.
 %
-%   Part of: Antenna Array Pattern Optimization Tool — anti-jam milestone [P2].
+%   [P9, 2026-08-02] Optional loading_factor_db (OPT-IN, not in REQUIRED):
+%   diagonal_loading_db fixes the loading as an ASSUMED sigma_n^2 = 1 dB
+%   offset; that assumption breaks whenever sigma_s_db/jn_ratio_db land far
+%   from the regime it was swept against (see docs/notes.md [P9] entry — the
+%   patchs_with_monopoles/sigma_s_db=30 regression, where the desired signal
+%   sits 20 dB ABOVE the jammer instead of well below it). A first attempt at
+%   scaling loading off the estimated NOISE floor alone did not fix the
+%   regression (verified empirically: noise floor is fixed at sigma_n^2=1 by
+%   construction regardless of regime, so that gave the same numeric loading
+%   as the old fixed value). The corrected quantity is the GEOMETRIC MEAN of
+%   the noise floor and the desired-signal power actually measured in R_hat:
+%       loading = loading_factor * sqrt(sig_power_hat * noise_floor_hat)
+%   sig_power_hat is the Rayleigh quotient of R_hat at the KNOWN e_s direction
+%   (trace(e_s' R_hat e_s) / trace(e_s' e_s)) — cheap, and sidesteps any
+%   signal/jammer subspace-rank assumption since e_s (unlike the jammer angle)
+%   is not unknown. noise_floor_hat is the median of the bottom
+%   N_el - 2*n_comp "noise" eigenvalues of R_hat (n_comp = size(e_s,2); the
+%   top 2*n_comp span the desired signal + jammer, matching adapt_music_doa.m's
+%   model-order-2 convention — duplicated here, not shared, so this module has
+%   no dependency on the P8 MUSIC file). Both estimates are smoothed with the
+%   same forgetting_lambda EMA as R_hat itself (state.sig_power_hat,
+%   state.noise_floor_hat) so per-step eigenvalue/Rayleigh-quotient jitter
+%   doesn't reintroduce jitter into the loading. Empirically verified
+%   (mode_c_demo, 2026-08-02): reproduces the P2-tuned ~10 linear in the
+%   original weak-signal regime (sigma_s_db=3) with loading_factor_db=0, and
+%   lands at ~205 in the broken sigma_s_db=30 regime — within the empirical
+%   sweet spot found by a brute-force fixed-loading sweep on that scenario
+%   (best ~100-300, oracle gap ~8.2 dB vs 13.6 dB at the old fixed 10). Absent
+%   loading_factor_db -> adaptive loading OFF (state.adaptive_loading = false),
+%   the original fixed-diagonal_loading_db behavior — opt-in, like
+%   weight_smoothing_mu above; diagonal_loading_db stays REQUIRED regardless
+%   since it is still the value used whenever loading_factor_db is absent.
+%
+%   Part of: Antenna Array Pattern Optimization Tool — anti-jam milestone [P2, P9].
 
 REQUIRED = {'forgetting_lambda', 'diagonal_loading_db'};
 for i = 1:numel(REQUIRED)
@@ -55,5 +88,26 @@ else
     state.mu = 1.0;                                    % opt-in feature: off by default
 end
 state.e_s     = e_s;
+
+% [P9] Data-driven loading (opt-in — see header note above).
+if isfield(adapt_config, 'loading_factor_db') && ~isempty(adapt_config.loading_factor_db)
+    n_comp = size(e_s, 2);
+    n_sig  = 2 * n_comp;                   % desired signal + 1 jammer (locked scope)
+    if n_sig >= n_elements
+        error('adapt_tracking_init:TooFewElements', ...
+            'Adaptive loading needs N_el > 2*n_comp (= %d); got N_el = %d.', ...
+            n_sig, n_elements);
+    end
+    state.adaptive_loading = true;
+    state.n_sig            = n_sig;
+    state.loading_factor   = 10^(adapt_config.loading_factor_db / 10);
+    state.noise_floor_hat  = 1.0;           % matches R_hat = eye(.) at k=0
+    state.sig_power_hat    = 1.0;           % Rayleigh quotient of eye(.) at e_s
+    state.loading          = state.loading_factor * ...
+        sqrt(state.sig_power_hat * state.noise_floor_hat);
+else
+    state.adaptive_loading = false;
+end
+
 state.w       = adapt_lcmv(state.R_hat, e_s, state.loading);
 end

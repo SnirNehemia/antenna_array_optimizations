@@ -90,7 +90,7 @@ scn_cfg = struct( ...
     'power',           'onoff', ...      % periodic on/off
     'duty_cycle',      0.5, ...           % 50% on
     'toggle_period_s', 20.0, ...         % 5 s ON / 5 s OFF
-    'jn_ratio_db',     10.0, ...         % JAMMER power vs the noise floor [dB].
+    'jn_ratio_db',     15.0, ...         % JAMMER power vs the noise floor [dB].
     ...                                   %   Desired-signal power is
     ...                                   %   antijam.sigma_s_db (config.yaml), so
     ...                                   %   jammer-to-signal J/S = jn_ratio_db -
