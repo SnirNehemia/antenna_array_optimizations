@@ -205,6 +205,66 @@ or `ValueError` — never silently fall back to a hardcoded default.
 > Claude Code must append an entry here at the end of every working session.
 > Format shown below. Newest entry at the top.
 
+### 2026-08-03 — [P6, P9] Signal-vs-jammer amplitude sweep + 2-D performance heatmaps
+
+Snir asked for a performance research sweep over signal and jammer amplitudes,
+with 2-D heatmaps of availability / dead time / peak gain to the target. Added
+`MATLAB/scripts/run_amplitude_sweep_script.m` (campaign driver + sweep config)
+and `MATLAB/antijam_utils/plot_amplitude_heatmaps.m` (generic panelled heatmap
+renderer). **No `sim_`/`adapt_`/`agent_` module was touched** — the script only
+composes `sim_scenario` / `closed_loop_run` / `compute_directivity_trace`, so
+nothing gated by P1–P10 is affected.
+
+**Why this plane and not J/S alone:** `antijam.sigma_s_db` and scenario
+`jn_ratio_db` are both referenced to the engine's fixed `sigma_n^2 = 1` floor,
+so J/S falls out as 45-degree contours (overlaid on every panel). Sweeping the
+2-D plane separates the *signal-limited* failure (bottom edge, jammer
+irrelevant) from the *jammer-limited* failure (bottom-right), which collapsing
+to a single J/S axis hides.
+
+**Headline result — the P9 data-driven loading is strongly regime-dependent on
+`patchs_with_monopoles`/total-pol, in both directions.** 7x7 grid (0:5:30 dB on
+both axes), 3 scenarios, oracle + lcmv, adaptive vs fixed loading, 441 runs in
+188 s (`results/amplitude_sweep/2026-08-03_140246/`):
+- **Where P9 was designed to help, it clearly does.** ONOFF scenario,
+  `sigma_s_db` 25-30: adaptive beats fixed by **+3.5 to +7.5 dB** oracle gap.
+  This is the regime that motivated P9 and it reproduces at full grid density.
+- **It is mildly worse through the mid-range.** `sigma_s_db` 5-15 with a strong
+  jammer: **-2 to -7.8 dB** (STATIC) / -1 to -2.7 dB (ONOFF). Note
+  `config.yaml`'s current `sigma_s_db: 20` sits almost exactly on the crossover
+  (+-0.5 dB either way).
+- **It fails outright at `sigma_s_db <= 5` with a jammer present.** STATIC
+  availability collapses 92-98% (fixed) -> **0%** (adaptive) for `jn >= 10`; on
+  ONOFF it pins to exactly **50.0%**, i.e. the duty cycle — the link is dead
+  for precisely the jammer-ON half. The geometric-mean formula
+  `loading = factor * sqrt(sig_power_hat * noise_floor_hat)` drives loading
+  toward the noise floor when `sig_power_hat` is small, under-regularizing the
+  MPDR self-nulling guard exactly where it is needed most.
+
+The P9 gate test (`test_antijam_adaptive_loading.m` gate 4) asserts adaptive is
+never >0.3 dB worse across a `sigma_s_db` sweep — but on a **toy 8-element ULA
+with K=16**, which the plan already flags as behaving very differently from the
+real 6-element dual-pol array (DOF surplus, near-perfect nulls). The gate is not
+wrong; it just does not cover this array. **Not fixed here** — reporting the
+measurement, not changing P9's tuning or gates.
+
+**Cost finding:** `kpi_evaluate` costs ~4.6 s/run on this grid, ~95% of it the
+null-pointing KPI scanning 181x360 for local minima at every one of 1201 steps.
+The sweep computes its metrics inline instead (definitions mirrored verbatim
+from `kpi_evaluate` / `plot_mode_c_comparison`, `full_kpi` toggle to route
+through the authoritative path), which is what makes 441 runs take 188 s rather
+than ~40 min.
+
+**Two R2020a/graphics gotchas hit while building the renderer:** (1) `clabel`
+returns no text handles when given a contour handle with automatic placement, so
+contour labels cannot be restyled after the fact — labels are now placed by hand
+in the axis margin, which also stops them landing on top of the per-cell value
+text; (2) this machine's MATLAB lost hardware graphics acceleration mid-batch
+and *both* `exportgraphics` and `print` then failed on even a trivial
+`plot(1:10)` — figures now force the `painters` renderer and `exportgraphics`
+falls back to `print`. A session restart is the actual cure; the sweep writes
+`.mat`/`.csv` before plotting so a graphics failure never costs the simulation.
+
 ### 2026-08-03 — [P10] Jammer carrier-frequency estimation + RF notch modeling
 
 Customer asked whether the jammer's exact frequency can be identified inside a
