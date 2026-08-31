@@ -333,13 +333,41 @@ none of those suite gates were re-run against the fix beyond the two files
 named, so treat quantitative KPI numbers elsewhere in this P8 section (and P2's
 1-D-cut-era numbers) as superseded pending a full re-run.
 
-### P9 — Data-driven diagonal loading (amendment) — Status: **in-progress** (2026-08-02: design decided in-session, `adapt_tracking_*`/`adapt_predict_*` implemented; gate re-verification and demo trial not yet run. 2026-08-31 P11 campaign: VALIDATED on beam integrity — adaptive loading passes 1.3-2.9x more operational cells than fixed in all five scenarios and eliminates beam failure entirely in three; one open defect, a collapse confined to `sigma_s` <= 4 dB, with a proposed fix below awaiting Snir's call.)
+### P9 — Data-driven diagonal loading (amendment) — Status: **in-progress** (2026-08-02: design decided in-session, `adapt_tracking_*`/`adapt_predict_*` implemented. 2026-08-31: the P11 campaign exposed a real defect in the ESTIMATOR — it measured the jammer, not the signal — now fixed by switching Bartlett -> Capon; 33/33 anti-jam gates pass; validation re-sweep running.)
 
-**[2026-08-31, from the P11 campaign — supersedes the 2026-08-03 single-seed reading.]** At 5 seeds on a 16x16 grid across 5 scenarios, adaptive loading is broadly BETTER than fixed once desired-signal cancellation is measured (`dir_loss_db_ss` vs the 5.13 dBi quiescent beam): worst-case directivity loss -1.4 to -3.6 dB for adaptive vs **-12.4 to -14.1 dB for fixed**, and adaptive drives beam-failure cells to zero in ONOFF / DRIFT / WINDOW. The earlier "make `fixed` the default" recommendation came from a metric set that could not see fixed loading's dominant failure mode and must not be acted on.
+**[2026-08-31 — the estimator was wrong, not the tuning.]** The P11 campaign
+measured the adaptive mode collapsing to **0% availability** for
+`sigma_s_db` <= 4 dB at high J/S. The first hypothesis (loading falling too
+LOW, fix = floor it at `diagonal_loading_db`) was implemented and **verified to
+be a no-op** — availability stayed at 0.0%. Instrumenting `state.loading` and
+`state.sig_power_hat` directly showed the opposite: at `sigma_s_db = 0`, where
+the true desired power is 1, the estimate read **374 at J/N = 10 and 3359 at
+J/N = 20**. It rose 9x with JAMMER power while the desired signal never moved.
+The loading was therefore too HIGH (~17.7 dB) against a jammer eigenvalue of
+only ~27.8 dB — the exact over-loading the P2 note warns starves the null.
 
-The one real defect is at the signal-limited edge: for `sigma_s_db` <= 4 the adaptive estimator collapses (availability -47% to -99% vs fixed in the worst cells; WINDOW recovery 486 steps vs fixed's 12.8 at `sigma_s` = 0), because `loading = loading_factor * sqrt(sig_power_hat * noise_floor_hat)` and `sig_power_hat` is not separable from the noise floor there. **Proposed (NOT implemented, needs a decision + re-sweep): floor the adaptive value at the fixed `diagonal_loading_db`, `loading = max(adaptive, fixed)`** — this keeps every win above `sigma_s` ~ 6 dB and removes the collapse below it.
+Root cause: `sig_power_hat = trace(e_s' R_hat e_s)/trace(e_s' e_s)` is a
+**Bartlett** (conventional-beamformer) estimator. It applies the quiescent beam
+and reads whatever that beam collects, jammer sidelobes included; it was never
+a desired-signal estimate once a jammer was present.
 
-Triggered by the mode_c_demo regression on `data/patchs_with_monopoles` (2026-08-02): raising `sigma_s_db` from 3→30 dB while keeping `jn_ratio_db=10` inverted the signal/jammer power ordering the P2/P8 tuning assumed (desired signal now 20 dB *above* the jammer). `diagonal_loading_db: 10` is fixed relative to the *assumed* `sigma_n²=1` noise floor — it has no way to know the desired signal's actual power, so it under-regularizes the MPDR self-nulling guard ([adapt_tracking_update.m:14](MATLAB/antijam_utils/adapt_tracking_update.m:14)) outside the regime it was swept against. Since the milestone's scope is already an *unknown* jammer, an unknown signal/jammer power ratio is the same category of unknown and shouldn't need a per-scenario re-tune.
+**Fix (approved in-session):** replace it with the **Capon (MVDR)** estimate
+`p = trace(inv(e_s' inv(R_hat) e_s)) / n_comp`, which nulls every source off
+`e_s` before reading the power. New local `capon_power_estimate` duplicated into
+`adapt_tracking_update.m` and `adapt_predict_update.m` (per decision #1 below),
+with an ill-conditioning fallback to the previous estimate. Measured at
+`sigma_s_db = 0`, J/N = 10/20/30: Bartlett +42.5/+52.0/+61.9 dB, **Capon
+1.09/1.13/1.14** — invariant to the jammer. Availability at the failing cells
+goes **0.0% -> 92.6-98.6%**.
+
+The loading is additionally **floored** at the fixed `diagonal_loading_db`.
+Post-Capon this is load-bearing (it was not, pre-Capon): at low `sigma_s` the
+data-driven value lands below the tuned 10 dB so the floor binds and adaptive
+matches fixed exactly; at `sigma_s` = 30 the Capon value rises to ~13.5 dB and
+the adaptive path takes over (oracle gap 12.40 vs 13.54 dB STATIC). Net effect:
+`loading = max(fixed, factor*sqrt(capon*noise))` makes the adaptive mode a
+**strict refinement** of the hand-tuned fixed one rather than a replacement
+that can silently do worse.
 
 **In-session design decisions (2026-08-02, via user Q&A):**
 1. *Eigen-split source:* **duplicate inline**, not shared. `adapt_music_doa.m`'s `n_sig = 2*n_comp` (desired + 1 jammer, locked single-jammer scope) split is re-derived directly in `adapt_tracking_update.m`/`adapt_predict_update.m` rather than factored into a shared helper — zero risk to the already-passing P8 MUSIC gates, at the cost of the same assumption living in two places.
@@ -507,7 +535,29 @@ unchanged — `sim`, `kpi`, `tracking`, `predict`, `adaptive_loading`,
   because the sim has no quantization or compression. The reported benefit is
   SINR only, which **understates** the practical value of an RF notch.
 
-### P11 — Sweep instrumentation: scenario figures, J/S collapse, cancellation metrics (amendment) — Status: **done** (2026-08-31: library + driver implemented; 19,200-run campaign complete, 0 failed cell-seeds, 47 figures in `results/amplitude_sweep/2026-08-30_231708/`; findings in `docs/notes.md`. Follow-up loading-floor fix is P9's, not this phase's.)
+### P11 — Sweep instrumentation: scenario figures, J/S collapse, cancellation metrics (amendment) — Status: **done** (2026-08-31: library + driver implemented; 19,200-run campaign complete, 0 failed cell-seeds, 47 figures in `results/amplitude_sweep/2026-08-30_231708/`; findings in `docs/notes.md`.)
+
+**[2026-08-31 correction, after review with Snir.]** Two claims in this phase's
+first write-up were overstated and are withdrawn:
+1. *"The operational-status panel catches a failure invisible in every other
+   metric."* False. Across all 256 cells, `oracle_gap_ss_db` (a pure SINR
+   metric) and `-dir_loss_db_ss` correlate at **r = 0.94-0.996** with means
+   within ~1 dB — the oracle-gap panel had been reporting the same thing in dB
+   of SINR since 2026-08-03. The directivity metric adds interpretation, not
+   detection, and every cell it flags "beam fail" has 100% availability and a
+   working link. The panel is a **diagnostic**; the label overstated it.
+2. *"MPDR self-nulling on the desired signal, full stop."* Also false — real
+   cancellation would collapse `p_sig = sigma_s^2 |w' e_s|^2` and hence SINR,
+   which does not happen. The actual mechanism is white-noise-gain growth
+   (`||w||^2` rising, and `p_noise = sigma_n^2 ||w||^2`).
+
+The argument that WOULD make directivity loss operationally real is robustness
+to **steering-vector mismatch** — and the simulator cannot test it: `p_sig`
+uses `sim_state.e_s`, the identical vector handed to `adapt_lcmv`, so mismatch
+is exactly zero by construction. **Follow-up (not done): add a pointing- /
+calibration-error knob to `sim_engine_init`**, which would convert the
+directivity argument into an SINR argument and settle the fixed-vs-adaptive
+loading question in the currency that actually matters.
 
 Triggered by reading `results/amplitude_sweep/2026-08-03_140246/` with Snir. The
 sweep's *numbers* were sound; its *instrumentation* had three concrete gaps, each

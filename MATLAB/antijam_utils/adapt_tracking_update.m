@@ -38,6 +38,13 @@ function [w, state] = adapt_tracking_update(state, obs)
 %   of the measured signal power and noise floor, not the noise floor alone,
 %   is the right reference (noise_floor_estimate below computes the latter).
 %
+%   [P11, 2026-08-31] sig_power_hat is now the CAPON estimate
+%   (capon_power_estimate below), not the Bartlett quotient P9 shipped with —
+%   that one read the jammer rather than the signal and over-loaded the
+%   beamformer into a null-starved collapse. The result is additionally
+%   floored at the fixed diagonal_loading_db (state.loading_floor). See
+%   capon_power_estimate and adapt_tracking_init's header for the evidence.
+%
 %   Inputs:
 %       state : struct from adapt_tracking_init.
 %       obs   : observation struct from sim_engine_step (Mode C).
@@ -61,12 +68,18 @@ if state.adaptive_loading
     sigma_n_hat_raw = noise_floor_estimate(state.R_hat, state.n_sig);
     state.noise_floor_hat = state.lambda * state.noise_floor_hat + ...
         (1 - state.lambda) * sigma_n_hat_raw;
-    sig_power_raw = real(trace(state.e_s' * state.R_hat * state.e_s)) / ...
-        real(trace(state.e_s' * state.e_s));
+    % [P11, 2026-08-31] Capon (MVDR) estimate of the desired-signal power, NOT
+    % the Bartlett/conventional one this used to be. See the estimator note in
+    % adapt_tracking_init's header for the measurement that forced the change.
+    sig_power_raw = capon_power_estimate(state.R_hat, state.e_s, ...
+        state.sig_power_hat);
     state.sig_power_hat = state.lambda * state.sig_power_hat + ...
         (1 - state.lambda) * sig_power_raw;
-    state.loading = state.loading_factor * ...
-        sqrt(state.sig_power_hat * state.noise_floor_hat);
+    % [P11] Floored at the fixed diagonal_loading_db (state.loading_floor) —
+    % see adapt_tracking_init's header: unfloored, this collapses at the
+    % signal-limited edge where sig_power_hat stops separating from the noise.
+    state.loading = max(state.loading_floor, state.loading_factor * ...
+        sqrt(state.sig_power_hat * state.noise_floor_hat));
 end
 
 w_target = adapt_lcmv(state.R_hat, state.e_s, state.loading);
@@ -108,4 +121,53 @@ ph = ph / max(abs(ph), eps);
 w_target_aligned = w_target * conj(ph) / abs(ph);
 w = (1 - mu) * w_prev + mu * w_target_aligned;
 w = w / norm(w);
+end
+
+
+function p = capon_power_estimate(R_hat, e_s, p_prev)
+% CAPON_POWER_ESTIMATE  Interference-nulling estimate of the desired-signal power.
+%
+%   p = trace(inv(e_s' * inv(R_hat) * e_s)) / n_comp
+%
+%   This is the Capon (MVDR) spectral estimator evaluated at the steering
+%   direction: it is the output power of the minimum-variance distortionless
+%   beamformer pointed at e_s, so any source NOT at e_s is nulled before the
+%   power is read.
+%
+%   [P11, 2026-08-31] It replaces the Bartlett (conventional-beamformer)
+%   estimator trace(e_s' * R_hat * e_s) / trace(e_s' * e_s) that P9 originally
+%   used. Bartlett applies the QUIESCENT beam and reads whatever that beam
+%   collects, which includes the jammer through the sidelobes — so it does not
+%   estimate the desired signal at all once the jammer is strong. Measured on
+%   the real array (patchs_with_monopoles, total-pol, sigma_s_db = 0, i.e. a
+%   true desired power of 1) the Bartlett estimate read +42.5 / +52.0 / +61.9
+%   dB as jn_ratio_db went 10 / 20 / 30 — it tracked the JAMMER, one-for-one.
+%   The loading computed from it therefore climbed to ~17.7 dB at J/N = 20,
+%   against a jammer eigenvalue of only ~27.8 dB (J/N + 10*log10(N_el)), which
+%   is exactly the over-loading that config.yaml's P2 note warns starves the
+%   null — and the P11 campaign measured the consequence as a total collapse
+%   (0% availability) for sigma_s_db <= 4 at high J/S. The Capon estimate at
+%   the same three points reads 1.09 / 1.13 / 1.14: invariant to the jammer,
+%   which is the whole requirement.
+%
+%   p_prev is used only if R_hat is too ill-conditioned to invert reliably
+%   (it should not be — R_hat is seeded at eye(.) and stays positive definite
+%   under the convex forgetting update — but an overnight campaign should
+%   degrade rather than abort).
+n_comp = size(e_s, 2);
+R_sym  = (R_hat + R_hat') / 2;
+if ~isfinite(rcond(R_sym)) || rcond(R_sym) < 1e-12
+    p = p_prev;
+    return
+end
+M = e_s' * (R_sym \ e_s);
+M = (M + M') / 2;
+if ~isfinite(rcond(M)) || rcond(M) < 1e-12
+    p = p_prev;
+    return
+end
+p = real(trace(M \ eye(n_comp))) / n_comp;
+if ~isfinite(p) || p <= 0
+    p = p_prev;
+end
 end

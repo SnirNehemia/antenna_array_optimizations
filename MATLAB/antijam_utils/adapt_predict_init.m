@@ -37,6 +37,8 @@ function state = adapt_predict_init(adapt_config, aj_config, e_s, E1, E2, theta_
 %                        See adapt_tracking_init.m for the full rationale —
 %                        applies uniformly to whichever of the three w_target
 %                        branches adapt_predict_update selects each step.
+%           loading_floor : [P11] the fixed diagonal_loading_db value, which
+%                        the data-driven loading may never go below.
 %           adaptive_loading, n_sig, loading_factor, noise_floor_hat :
 %                        [P9] optional data-driven loading, opt-in via
 %                        adapt_config.loading_factor_db — see
@@ -105,8 +107,11 @@ if isfield(adapt_config, 'loading_factor_db') && ~isempty(adapt_config.loading_f
     state.loading_factor   = 10^(adapt_config.loading_factor_db / 10);
     state.noise_floor_hat  = 1.0;           % matches R_hat = eye(.) at k=0
     state.sig_power_hat    = 1.0;           % Rayleigh quotient of eye(.) at e_s
-    state.loading          = state.loading_factor * ...
-        sqrt(state.sig_power_hat * state.noise_floor_hat);
+    % [P11] Floor the data-driven value at the fixed diagonal_loading_db —
+    % see adapt_tracking_init's header for the campaign evidence.
+    state.loading_floor    = state.loading;
+    state.loading          = max(state.loading_floor, state.loading_factor * ...
+        sqrt(state.sig_power_hat * state.noise_floor_hat));
 else
     state.adaptive_loading = false;
 end

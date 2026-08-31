@@ -47,10 +47,37 @@ function state = adapt_tracking_init(adapt_config, e_s, n_elements)
 %   as the old fixed value). The corrected quantity is the GEOMETRIC MEAN of
 %   the noise floor and the desired-signal power actually measured in R_hat:
 %       loading = loading_factor * sqrt(sig_power_hat * noise_floor_hat)
-%   sig_power_hat is the Rayleigh quotient of R_hat at the KNOWN e_s direction
-%   (trace(e_s' R_hat e_s) / trace(e_s' e_s)) — cheap, and sidesteps any
-%   signal/jammer subspace-rank assumption since e_s (unlike the jammer angle)
-%   is not unknown. noise_floor_hat is the median of the bottom
+%
+%   [P11, 2026-08-31] TWO CHANGES, from the 19,200-run P11 campaign
+%   (results/amplitude_sweep/2026-08-30_231708), which measured the adaptive
+%   mode collapsing to 0% availability for sigma_s_db <= 4 dB at high J/S
+%   (WINDOW recovery 486 steps vs fixed's 12.8 at sigma_s_db = 0):
+%
+%   (1) sig_power_hat is now a CAPON (MVDR) estimate, not the Bartlett /
+%       conventional-beamformer one P9 shipped with. See the full measurement
+%       in capon_power_estimate (adapt_tracking_update.m). Short version: the
+%       Bartlett quotient trace(e_s' R_hat e_s)/trace(e_s' e_s) applies the
+%       QUIESCENT beam and reads whatever it collects, jammer sidelobes
+%       included, so it does not estimate the desired signal once the jammer
+%       is strong — at sigma_s_db = 0 it read +42.5 / +52.0 / +61.9 dB as
+%       jn_ratio_db went 10 / 20 / 30, i.e. it tracked the jammer one-for-one.
+%       The loading built from it climbed to ~17.7 dB against a jammer
+%       eigenvalue of ~27.8 dB, which is the over-loading the P2 note above
+%       warns starves the null. Capon nulls everything off e_s before reading
+%       the power and is invariant to the jammer (1.09 / 1.13 / 1.14 at the
+%       same three points). This is what actually fixes the collapse:
+%       availability at those cells goes 0.0% -> 92.6-98.6%.
+%
+%   (2) The result is additionally FLOORED at the fixed diagonal_loading_db:
+%       loading = max(fixed, factor * sqrt(sig * noise)). NOTE this was
+%       implemented first, on the mistaken theory that the collapse came from
+%       loading falling too LOW; it does not — the measurement above showed
+%       loading was too HIGH, and the floor was verified to be a no-op in
+%       every failing cell. It is kept because it makes the adaptive mode a
+%       strict refinement of the hand-tuned fixed one rather than a
+%       replacement that can silently do worse, but it is NOT the fix.
+%
+%   noise_floor_hat is the median of the bottom
 %   N_el - 2*n_comp "noise" eigenvalues of R_hat (n_comp = size(e_s,2); the
 %   top 2*n_comp span the desired signal + jammer, matching adapt_music_doa.m's
 %   model-order-2 convention — duplicated here, not shared, so this module has
@@ -103,8 +130,11 @@ if isfield(adapt_config, 'loading_factor_db') && ~isempty(adapt_config.loading_f
     state.loading_factor   = 10^(adapt_config.loading_factor_db / 10);
     state.noise_floor_hat  = 1.0;           % matches R_hat = eye(.) at k=0
     state.sig_power_hat    = 1.0;           % Rayleigh quotient of eye(.) at e_s
-    state.loading          = state.loading_factor * ...
-        sqrt(state.sig_power_hat * state.noise_floor_hat);
+    % [P11] state.loading was set from diagonal_loading_db above; keep it as
+    % the FLOOR the data-driven value may never go below (header note).
+    state.loading_floor    = state.loading;
+    state.loading          = max(state.loading_floor, state.loading_factor * ...
+        sqrt(state.sig_power_hat * state.noise_floor_hat));
 else
     state.adaptive_loading = false;
 end

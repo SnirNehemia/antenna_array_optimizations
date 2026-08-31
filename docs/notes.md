@@ -205,6 +205,83 @@ or `ValueError` — never silently fall back to a hardcoded default.
 > Claude Code must append an entry here at the end of every working session.
 > Format shown below. Newest entry at the top.
 
+### 2026-08-31 — [P9, P11] Adaptive loading: the estimator was reading the jammer
+
+Snir pushed back on the P11 write-up: isn't SINR the metric that matters? If
+directivity loss is large but SINR stays above threshold the link works, and if
+it doesn't, it doesn't. **He was right, and the P11 conclusion was overstated.**
+
+**Correction 1 — directivity loss is largely redundant with a SINR metric I
+already had.** Correlation between `oracle_gap_ss_db` (pure SINR) and
+`-dir_loss_db_ss` across all 256 cells, fixed loading: r = 0.943 (STATIC),
+0.996 (ONOFF), 0.985 (FASTONOFF), 0.976 (DRIFT), 0.995 (WINDOW), with means
+within ~1 dB of each other. The claim that the operational panel "catches a
+failure invisible in every other metric" was wrong — the oracle-gap panel had
+been showing it in dB of SINR since 2026-08-03. Directivity loss adds
+INTERPRETATION (why the SINR is short), not DETECTION. Every cell painted
+"beam fail" has 100% availability and ~28 dB SINR: a working link. Calling
+that panel "operational status" was miscalibrated language.
+
+**Correction 2 — the mechanism was mis-stated.** "MPDR self-nulling on the
+desired signal, full stop" cannot be right: `p_sig = sigma_s^2 |w' e_s|^2`
+([sim_engine_step.m:109](MATLAB/antijam_utils/sim_engine_step.m:109)), so
+actual cancellation would collapse SINR, and it doesn't. What grows is
+`||w||^2` and total radiated power (`p_noise = sigma_n^2 ||w||^2`) — white-noise
+gain degradation.
+
+**Correction 3 — the simulator cannot test the one argument that would rescue
+the directivity metric.** The textbook reason to care is robustness to
+steering-vector mismatch, but `p_sig` uses `sim_state.e_s`, the IDENTICAL
+vector handed to `adapt_lcmv`. There is exactly zero mismatch, so the failure
+that would make directivity loss operationally real is structurally absent.
+**Scored on SINR alone the two loading modes are close** (fixed wins
+availability everywhere and mean oracle gap in STATIC/DRIFT; adaptive wins it
+in ONOFF/WINDOW; FASTONOFF ties), so the P11 reversal of the P9 verdict was not
+justified by that data. Adding a pointing-error knob to `sim_engine_*` would
+settle it in SINR terms — noted as a follow-up, not done.
+
+**The real defect, found by instrumenting instead of theorising.** The proposed
+"loading floor" fix was implemented, verified, and found to be a **no-op** —
+availability at the failing cells stayed at 0.0%. Measuring `state.loading` and
+`state.sig_power_hat` directly showed why: at `sigma_s_db = 0` (true desired
+power 1) the estimate read **374 at J/N = 10 and 3359 at J/N = 20** — it rose
+9x with JAMMER power, one-for-one, while the desired signal never moved. The
+loading was therefore too HIGH (17.7 dB), not too low, against a jammer
+eigenvalue of only ~27.8 dB (J/N + 10log10(N_el)) — precisely the over-loading
+`config.yaml`'s own P2 note warns starves the null. A floor can only raise the
+loading, so it could never bind.
+
+Root cause: `sig_power_hat = trace(e_s' R_hat e_s)/trace(e_s' e_s)` is a
+**Bartlett** (conventional-beamformer) estimator. It applies the QUIESCENT beam
+and reads whatever that beam collects, jammer sidelobes included. It was never
+a desired-signal estimate once a jammer was present.
+
+**Fix (approved in-session per Hard Rule #1): replace Bartlett with CAPON.**
+`p = trace(inv(e_s' inv(R_hat) e_s)) / n_comp` — the MVDR output power at e_s,
+which nulls every source off e_s before reading. New local
+`capon_power_estimate` duplicated into `adapt_tracking_update.m` and
+`adapt_predict_update.m` (P9 decision #1: duplicate inline, don't share), with
+an ill-conditioning fallback to the previous estimate so an overnight campaign
+degrades rather than aborts. Measured at `sigma_s_db = 0`, J/N = 10/20/30:
+Bartlett +42.5/+52.0/+61.9 dB, **Capon 1.09/1.13/1.14** — invariant to the
+jammer, which is the entire requirement.
+
+Result on the previously-failing cells (STATIC availability): **0.0% -> 92.6%**
+(J/N 10), **0.0% -> 98.6%** (J/N 20), **0.0% -> 98.3%** (J/N 30); sigma_s = 4 /
+J/N = 20 goes 30.6% -> 98.9%. All 33 anti-jam gate tests still pass, including
+the five P9 gates.
+
+**The floor turned out to be load-bearing after all, for the opposite reason to
+the one I gave.** Post-Capon, at low sigma_s the data-driven value lands BELOW
+the tuned fixed 10 dB, so the floor binds and adaptive lands exactly on fixed;
+at sigma_s = 30 the Capon value rises to ~13.5 dB and the adaptive path takes
+over (oracle gap 12.40 vs fixed 13.54 dB STATIC, 10.87 vs 12.19 dB WINDOW).
+`loading = max(fixed, factor*sqrt(capon*noise))` makes the adaptive mode a
+strict refinement of the hand-tuned fixed one. Kept and documented as such.
+
+Re-sweep launched with the same 5-scenario / 5-seed / 16x16 configuration
+(`results/amplitude_sweep/_logs/resweep_capon_2026-08-31.log`).
+
 ### 2026-08-30 — [P11] Sweep instrumentation overhaul + 5-scenario / 5-seed campaign
 
 Snir reviewed `results/amplitude_sweep/2026-08-03_140246/` and asked for the
