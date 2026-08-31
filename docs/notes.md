@@ -279,8 +279,64 @@ over (oracle gap 12.40 vs fixed 13.54 dB STATIC, 10.87 vs 12.19 dB WINDOW).
 `loading = max(fixed, factor*sqrt(capon*noise))` makes the adaptive mode a
 strict refinement of the hand-tuned fixed one. Kept and documented as such.
 
-Re-sweep launched with the same 5-scenario / 5-seed / 16x16 configuration
-(`results/amplitude_sweep/_logs/resweep_capon_2026-08-31.log`).
+**RE-SWEEP RESULTS** (`results/amplitude_sweep/2026-08-31_205119/`, 19,200
+runs in 8,898 s — 1.4% FASTER than the pre-Capon run, so the extra matrix solve
+per step costs nothing measurable — 0 failed cell-seeds).
+
+Adaptive loading, per scenario, 256 cells each. "old" = Bartlett (the buggy
+estimator), "new" = Capon + floor, "fixed" = the P2 hand-tuned baseline:
+
+| scenario | cells <90% avail: old -> new (fixed) | mean gap dB: old -> new (fixed) | gap dB @ sigma_s>=24: old -> new (fixed) |
+| --- | --- | --- | --- |
+| STATIC | 32 -> **3** (3) | 7.86 -> **4.39** (4.52) | 11.73 -> **10.69** (11.20) |
+| ONOFF | 32 -> **5** (5) | 3.84 -> 4.19 (4.40) | **5.61** -> 9.87 (10.71) |
+| DRIFT | 31 -> **15** (15) | 7.00 -> **5.55** (5.99) | 11.58 -> 11.73 (13.28) |
+| FASTONOFF | 61 -> **38** (38) | 5.70 -> **5.34** (5.58) | **7.63** -> 10.45 (11.39) |
+| WINDOW | 30 -> **2** (2) | 2.86 -> 3.59 (3.78) | **4.55** -> 9.66 (10.46) |
+| **TOTAL** | **186 -> 63** | | |
+
+**What can be claimed: Capon + floor is strictly better than FIXED loading in
+all five scenarios** — lower mean oracle gap in every one, identical
+availability, and the 63 remaining sub-90% cells are precisely fixed loading's
+own. That is the "strict refinement" property P9 should have had from the
+start, and it now has it. Broken cells across the campaign: 186 -> 63.
+
+**What can NOT be claimed: that it beats the old estimator.** In the three
+INTERMITTENT scenarios the Bartlett version was better at high sigma_s by
+**4.3 dB (ONOFF), 2.8 dB (FASTONOFF), 5.1 dB (WINDOW)**; the two continuous
+scenarios (STATIC, DRIFT) are a wash. The pattern is too consistent to be
+noise — the excess loading genuinely helped when the jammer switches on and
+off. So this is a TRADE, not a win: 123 fewer broken cells against 3-5 dB of
+high-sigma_s quality in intermittent scenarios. Worth taking (a link that does
+not work beats one running 4 dB below optimum), but it should be recorded as a
+trade.
+
+**P9 is now a narrow high-SNR refinement.** Every difference panel in
+`sweep_*_lcmv_loading.png` is white across the lower two-thirds of the plane —
+adaptive is numerically identical to fixed wherever the floor binds — with a
+red band only above sigma_s ~ 24 dB. The difference color scales collapsed from
++-7 dB / +-98% (pre-fix) to **+-1.5 dB / +-0.3% / +-2.3 dB**. That is safe and
+defensible, but far less than P9's original claim that one untuned formula
+covers both power regimes.
+
+**Third retraction from the 2026-08-30 write-up.** "Adaptive eliminates beam
+failure entirely in three of five scenarios" was itself an ARTIFACT OF THE BUG:
+heavy loading suppresses the white-noise-gain growth the directivity metric
+measures. With the estimator corrected, adaptive's directivity advantage over
+fixed shrinks from ~10 dB to ~2 dB. Both of that night's headline claims for
+adaptive loading traced back to the same defect.
+
+**Open follow-up (NOT run — needs Snir's call).** The high-sigma_s regression
+tracks loading MAGNITUDE: Capon yields ~13.5 dB of loading at sigma_s = 30
+where Bartlett yielded ~23 dB. Setting `adapt.loading_factor_db: 10` (currently
+0) should reproduce Bartlett's high-sigma_s loading without its jammer
+contamination, while at low sigma_s landing on the 10 dB floor and so
+preserving the collapse fix. One config key, one sweep to confirm.
+
+**Also open (from the SINR discussion above):** add a steering-vector mismatch
+knob to `sim_engine_init`. Without it the sim cannot test the one property that
+would make directivity loss operationally meaningful, and the
+fixed-vs-adaptive question stays unresolved in SINR terms.
 
 ### 2026-08-30 — [P11] Sweep instrumentation overhaul + 5-scenario / 5-seed campaign
 

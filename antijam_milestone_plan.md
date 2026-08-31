@@ -333,7 +333,7 @@ none of those suite gates were re-run against the fix beyond the two files
 named, so treat quantitative KPI numbers elsewhere in this P8 section (and P2's
 1-D-cut-era numbers) as superseded pending a full re-run.
 
-### P9 — Data-driven diagonal loading (amendment) — Status: **in-progress** (2026-08-02: design decided in-session, `adapt_tracking_*`/`adapt_predict_*` implemented. 2026-08-31: the P11 campaign exposed a real defect in the ESTIMATOR — it measured the jammer, not the signal — now fixed by switching Bartlett -> Capon; 33/33 anti-jam gates pass; validation re-sweep running.)
+### P9 — Data-driven diagonal loading (amendment) — Status: **in-progress** (2026-08-02: design decided in-session, `adapt_tracking_*`/`adapt_predict_*` implemented. 2026-08-31: estimator defect found and fixed, Bartlett -> Capon; 33/33 gates pass; validation re-sweep done — `results/amplitude_sweep/2026-08-31_205119/`. Adaptive is now a strict refinement of fixed in all 5 scenarios (broken cells 186 -> 63) but the mode is reduced to a narrow high-SNR win; a `loading_factor_db` re-tune is the open item before this can go to **done**.)
 
 **[2026-08-31 — the estimator was wrong, not the tuning.]** The P11 campaign
 measured the adaptive mode collapsing to **0% availability** for
@@ -368,6 +368,25 @@ the adaptive path takes over (oracle gap 12.40 vs 13.54 dB STATIC). Net effect:
 `loading = max(fixed, factor*sqrt(capon*noise))` makes the adaptive mode a
 **strict refinement** of the hand-tuned fixed one rather than a replacement
 that can silently do worse.
+
+**Validation re-sweep (2026-08-31, 19,200 runs, `results/amplitude_sweep/2026-08-31_205119/`).**
+Adaptive now beats fixed on mean oracle gap in all five scenarios with
+identical availability; campaign-wide sub-90%-availability cells fall
+**186 -> 63**, and the 63 that remain are fixed loading's own. But it does NOT
+beat the buggy Bartlett version everywhere: in the three INTERMITTENT scenarios
+Bartlett was better at `sigma_s` >= 24 by 4.3 dB (ONOFF), 2.8 dB (FASTONOFF)
+and 5.1 dB (WINDOW), while the two continuous scenarios are a wash. Record this
+as a trade, not a win. Post-fix the adaptive mode is also NARROW — every
+difference panel is identically zero over the lower two-thirds of the plane
+(the floor binds), leaving a win only above `sigma_s` ~ 24 dB, with the
+difference scales collapsing from +-7 dB / +-98% to +-1.5 dB / +-0.3%.
+
+**Open item blocking `done`:** the high-`sigma_s` regression tracks loading
+MAGNITUDE (Capon gives ~13.5 dB at `sigma_s` = 30 where Bartlett gave ~23 dB),
+so **`adapt.loading_factor_db: 10`** (currently 0) is the obvious re-tune — it
+should restore the intermittent-scenario performance without the jammer
+contamination, and at low `sigma_s` it lands on the floor anyway so the
+collapse fix survives. One key, one sweep. Not run.
 
 **In-session design decisions (2026-08-02, via user Q&A):**
 1. *Eigen-split source:* **duplicate inline**, not shared. `adapt_music_doa.m`'s `n_sig = 2*n_comp` (desired + 1 jammer, locked single-jammer scope) split is re-derived directly in `adapt_tracking_update.m`/`adapt_predict_update.m` rather than factored into a shared helper — zero risk to the already-passing P8 MUSIC gates, at the cost of the same assumption living in two places.
