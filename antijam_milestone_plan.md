@@ -333,7 +333,11 @@ none of those suite gates were re-run against the fix beyond the two files
 named, so treat quantitative KPI numbers elsewhere in this P8 section (and P2's
 1-D-cut-era numbers) as superseded pending a full re-run.
 
-### P9 — Data-driven diagonal loading (amendment) — Status: **in-progress** (2026-08-02: design decided in-session, `adapt_tracking_*`/`adapt_predict_*` implemented; gate re-verification and demo trial not yet run)
+### P9 — Data-driven diagonal loading (amendment) — Status: **in-progress** (2026-08-02: design decided in-session, `adapt_tracking_*`/`adapt_predict_*` implemented; gate re-verification and demo trial not yet run. 2026-08-31 P11 campaign: VALIDATED on beam integrity — adaptive loading passes 1.3-2.9x more operational cells than fixed in all five scenarios and eliminates beam failure entirely in three; one open defect, a collapse confined to `sigma_s` <= 4 dB, with a proposed fix below awaiting Snir's call.)
+
+**[2026-08-31, from the P11 campaign — supersedes the 2026-08-03 single-seed reading.]** At 5 seeds on a 16x16 grid across 5 scenarios, adaptive loading is broadly BETTER than fixed once desired-signal cancellation is measured (`dir_loss_db_ss` vs the 5.13 dBi quiescent beam): worst-case directivity loss -1.4 to -3.6 dB for adaptive vs **-12.4 to -14.1 dB for fixed**, and adaptive drives beam-failure cells to zero in ONOFF / DRIFT / WINDOW. The earlier "make `fixed` the default" recommendation came from a metric set that could not see fixed loading's dominant failure mode and must not be acted on.
+
+The one real defect is at the signal-limited edge: for `sigma_s_db` <= 4 the adaptive estimator collapses (availability -47% to -99% vs fixed in the worst cells; WINDOW recovery 486 steps vs fixed's 12.8 at `sigma_s` = 0), because `loading = loading_factor * sqrt(sig_power_hat * noise_floor_hat)` and `sig_power_hat` is not separable from the noise floor there. **Proposed (NOT implemented, needs a decision + re-sweep): floor the adaptive value at the fixed `diagonal_loading_db`, `loading = max(adaptive, fixed)`** — this keeps every win above `sigma_s` ~ 6 dB and removes the collapse below it.
 
 Triggered by the mode_c_demo regression on `data/patchs_with_monopoles` (2026-08-02): raising `sigma_s_db` from 3→30 dB while keeping `jn_ratio_db=10` inverted the signal/jammer power ordering the P2/P8 tuning assumed (desired signal now 20 dB *above* the jammer). `diagonal_loading_db: 10` is fixed relative to the *assumed* `sigma_n²=1` noise floor — it has no way to know the desired signal's actual power, so it under-regularizes the MPDR self-nulling guard ([adapt_tracking_update.m:14](MATLAB/antijam_utils/adapt_tracking_update.m:14)) outside the regime it was swept against. Since the milestone's scope is already an *unknown* jammer, an unknown signal/jammer power ratio is the same category of unknown and shouldn't need a per-scenario re-tune.
 
@@ -502,6 +506,67 @@ unchanged — `sim`, `kpi`, `tracking`, `predict`, `adaptive_loading`,
   real-world reason to prefer an RF notch over a digital one — are not modelled,
   because the sim has no quantization or compression. The reported benefit is
   SINR only, which **understates** the practical value of an RF notch.
+
+### P11 — Sweep instrumentation: scenario figures, J/S collapse, cancellation metrics (amendment) — Status: **done** (2026-08-31: library + driver implemented; 19,200-run campaign complete, 0 failed cell-seeds, 47 figures in `results/amplitude_sweep/2026-08-30_231708/`; findings in `docs/notes.md`. Follow-up loading-floor fix is P9's, not this phase's.)
+
+Triggered by reading `results/amplitude_sweep/2026-08-03_140246/` with Snir. The
+sweep's *numbers* were sound; its *instrumentation* had three concrete gaps, each
+of which had already caused a misreading.
+
+**Gap 1 — the scenarios were never plotted.** The results folder contained
+heatmaps only. Nothing in it stated what "ONOFF" or "DRIFT" meant, where the
+jammer was, or when it transmitted; the reader had to take `sweep_params.txt`
+on faith. Fixed by `plot_scenario_overview.m`, which renders `sim_scenario`
+ground truth (theta_j, phi_j, J/N with OFF phases masked and shaded, angular
+separation vs `guard_deg`, typed event ticks) *before* the sweep runs, so an
+aborted campaign still documents itself. Note this is ground truth for the
+simulator/oracle/KPI code only — the plan's algorithm-isolation constraint is
+untouched, since nothing here is fed to any `adapt_`/`agent_` function.
+
+**Gap 2 — colour scales auto-stretched degenerate metrics into false alarms.**
+The oracle dead-time panel held 0.0-0.1 s out of a 60 s run, auto-scaled to
+[0, 0.05], and rendered as saturated yellow across the entire plane: a
+near-perfect result drawn as total failure. `plot_amplitude_heatmaps` gains an
+optional `clim_floor` (a minimum span the auto range must cover) plus a
+`categorical` style and tick thinning.
+
+**Gap 3 — desired-signal cancellation had no metric.** At `sigma_s_db` >= 25 in
+ONOFF, the fixed-loading beamformer's directivity toward the target reached
+**-7.8 dBi** while its SINR still read 30+ dB. That is textbook MPDR
+self-nulling (snapshots contain the desired signal), it is the failure mode P9's
+loading is supposed to guard against, and **every metric in the sweep reported
+it as success**. Two additions:
+- `dir_loss_db_ss` = steady-state directivity minus the QUIESCENT beam's
+  (LCMV at R = I; 5.13 dBi on `patchs_with_monopoles`/total-pol).
+- a 4-level `operational_status` mask (availability >= 90% AND directivity loss
+  <= 3 dB) whose code 2 — "beam fail", SINR passes and the beam is destroyed —
+  exists specifically to make this corner un-missable.
+
+**Also added:** `plot_js_curves.m` (every cell replotted against J/S alone, to
+test empirically whether a metric needs the 2-D plane rather than asserting it)
+and `plot_cell_traces.m` (full time histories for four regime-representative
+cells per scenario, since six scalars per run hide every transient).
+
+**Two scenarios added, both derived from the findings rather than for coverage:**
+`FASTONOFF` (5 s toggle vs 20 s — discriminates "transient-driven" from
+"steady-state property of the on-phase", and makes recovery time informative at
+~20 events/run) and `WINDOW` (60 s silent -> 60 s jamming -> 60 s silent; the
+only scenario emitting `turn_off`, hence the only one that can show whether the
+beam RECOVERS). The `WINDOW` smoke trace already sharpened the diagnosis: at
+`sigma_s` = 30 dB the fixed-loading beam sits ~10 dB below quiescent
+directivity **even while the jammer is off**, so the damage is not
+jammer-driven — the ONOFF-only framing had obscured that.
+
+**No `sim_`/`adapt_`/`agent_` module was modified.** This phase is composition
+and rendering only, plus `matlab_utils/` reused unmodified, so every P1-P10 gate
+stands unchanged.
+
+**Exit criteria:** the overnight campaign completes; the P9 adaptive-vs-fixed
+loading verdict is re-read at 5 seeds (the 2026-08-03 single-seed result — a
+narrow high-`sigma_s`/low-J/N win against a broad regression down to -7.8 dB,
+including a collapse of the `sigma_s = 0` availability row from 92-98% to 0% —
+is not yet trustworthy enough to change a default on); and P9's Status is
+updated from that reading.
 
 ---
 

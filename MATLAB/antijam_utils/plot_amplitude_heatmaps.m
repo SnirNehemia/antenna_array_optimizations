@@ -25,9 +25,23 @@ function plot_amplitude_heatmaps(sigma_s_db, jn_ratio_db, panels, fig_title, out
 %                     style      : 'sequential' (parula) | 'diverging' (blue-
 %                                  white-red, color scale forced symmetric about
 %                                  zero so the sign of a difference map reads
-%                                  correctly).
+%                                  correctly) | 'categorical' (small integer
+%                                  codes 0..n-1, one flat color per code, ticked
+%                                  by name on the colorbar via cat_labels).
 %                     clim       : optional [lo hi] color limits; [] or absent
 %                                  = auto from the map's own finite range.
+%                     clim_floor : optional [lo hi] MINIMUM span the auto range
+%                                  must cover, i.e. the final range is
+%                                  [min(lo_auto, lo), max(hi_auto, hi)]. This is
+%                                  what stops a physically-uninteresting metric
+%                                  from being auto-stretched into a screaming
+%                                  full-scale map: the oracle's dead time is
+%                                  0.0-0.1 s out of a 60 s run, but auto-scaling
+%                                  to [0, 0.05] painted it saturated yellow and
+%                                  read as total failure. Ignored when clim is
+%                                  given explicitly.
+%                     cat_labels : cell array of names for 'categorical' style,
+%                                  one per code 0..numel-1.
 %       fig_title   : char, figure super-title.
 %       out_path    : PNG destination path.
 %
@@ -75,6 +89,8 @@ end
 function draw_panel(ax, sigma_s_db, jn_ratio_db, p)
 % One heatmap panel: image + colorbar + J/S contours + cell labels.
 map = p.map;
+p.x_grid = jn_ratio_db;      % stashed for finish_panel (shared by both styles)
+p.y_grid = sigma_s_db;
 imagesc(ax, jn_ratio_db, sigma_s_db, map);
 set(ax, 'YDir', 'normal', 'Color', [0.85 0.85 0.85], ...
     'XColor', 'k', 'YColor', 'k', 'Layer', 'top');
@@ -87,6 +103,16 @@ elseif isempty(finite)
     lo = 0; hi = 1;                       % all-NaN panel: any valid range
 else
     lo = min(finite); hi = max(finite);
+    % Widen to the caller's declared minimum span, so a metric that never left
+    % its floor is drawn AS a floor rather than auto-stretched to full scale.
+    if isfield(p, 'clim_floor') && ~isempty(p.clim_floor)
+        lo = min(lo, p.clim_floor(1));
+        hi = max(hi, p.clim_floor(2));
+    end
+end
+if strcmp(p.style, 'categorical')
+    draw_categorical(ax, p);
+    return
 end
 if strcmp(p.style, 'diverging')
     % Force symmetry about zero so "which side of zero" is the visual message.
@@ -104,17 +130,49 @@ cb = colorbar(ax);
 ylabel(cb, p.cbar_label, 'Color', 'k');
 set(cb, 'Color', 'k');
 
-overlay_js_contours(ax, sigma_s_db, jn_ratio_db);
 if numel(map) <= 100
     label_cells(ax, sigma_s_db, jn_ratio_db, map, lo, hi);
 end
+finish_panel(ax, p);
+end
 
+
+function finish_panel(ax, p)
+% J/S contours, grid-aligned ticks, labels — shared by both panel styles.
+overlay_js_contours(ax, p.y_grid, p.x_grid);
 % Ticks exactly on the sampled grid — every cell is a simulated point, not an
-% interpolation, and the axes should not suggest otherwise.
-set(ax, 'XTick', jn_ratio_db, 'YTick', sigma_s_db, 'TickDir', 'out');
+% interpolation, and the axes should not suggest otherwise. Thinned when the
+% grid is fine enough that every-cell ticks would collide.
+set(ax, 'XTick', thin_ticks(p.x_grid), 'YTick', thin_ticks(p.y_grid), ...
+    'TickDir', 'out');
 xlabel(ax, 'jammer-to-noise ratio  jn\_ratio\_db  [dB]');
 ylabel(ax, 'desired-signal power  sigma\_s\_db  [dB]');
 title(ax, p.title, 'Color', 'k', 'Interpreter', 'none');
+end
+
+
+function t = thin_ticks(v)
+% Every grid value while they fit; otherwise every k-th, keeping both ends.
+max_ticks = 9;
+if numel(v) <= max_ticks
+    t = v;
+    return
+end
+k = ceil(numel(v) / max_ticks);
+t = unique([v(1:k:end), v(end)]);
+end
+
+
+function draw_categorical(ax, p)
+% Finish a 'categorical' panel: flat color per integer code, named colorbar
+% ticks, no cell-value text (the color IS the value, and the names carry it).
+n_cat = numel(p.cat_labels);
+caxis(ax, [-0.5, n_cat - 0.5]);           % [R2020a] clim() does not exist yet
+colormap(ax, categorical_colormap(n_cat));
+cb = colorbar(ax, 'Ticks', 0:(n_cat - 1), 'TickLabels', p.cat_labels);
+ylabel(cb, p.cbar_label, 'Color', 'k');
+set(cb, 'Color', 'k', 'TickLength', 0);
+finish_panel(ax, p);
 end
 
 
@@ -193,6 +251,19 @@ rest = n - half;
 t = linspace(0, 1, half)';                   % blue  -> white
 s = linspace(1, 0, rest)';                   % white -> red
 cmap = [t, t, ones(half, 1); ones(rest, 1), s, s];
+end
+
+
+function cmap = categorical_colormap(n)
+% Flat, well-separated colors for small-integer code maps. Fixed order so a
+% given code keeps its color across figures: red (fail), amber, blue, green
+% (pass); beyond four it falls back to a hue sweep.
+base = [0.84 0.19 0.15; 0.95 0.68 0.18; 0.20 0.44 0.75; 0.24 0.62 0.32];
+if n <= size(base, 1)
+    cmap = base(1:n, :);
+else
+    cmap = hsv2rgb([linspace(0, 0.85, n)', 0.55 * ones(n, 1), 0.80 * ones(n, 1)]);
+end
 end
 
 

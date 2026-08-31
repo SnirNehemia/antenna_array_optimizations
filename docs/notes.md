@@ -205,6 +205,145 @@ or `ValueError` — never silently fall back to a hardcoded default.
 > Claude Code must append an entry here at the end of every working session.
 > Format shown below. Newest entry at the top.
 
+### 2026-08-30 — [P11] Sweep instrumentation overhaul + 5-scenario / 5-seed campaign
+
+Snir reviewed `results/amplitude_sweep/2026-08-03_140246/` and asked for the
+figure set to be fixed and extended, for the jammer scenarios themselves to be
+plotted (they never had been — the folder held heatmaps only, so "ONOFF" was a
+label rather than a picture), and for a finer overnight re-run.
+
+**Three new library functions** (no `sim_`/`adapt_`/`agent_` module touched;
+this is all composition + rendering, so nothing gated by P1–P10 is affected):
+
+- `plot_scenario_overview.m` — ground-truth jammer timeline: theta_j(t),
+  phi_j(t) (NaN-broken at the 0/360 wrap), J/N with OFF phases masked and
+  shaded, and angular separation from the target against the `guard_deg` floor.
+  Events ticked and typed. Consumes only `sim_scenario` output, so it is drawn
+  BEFORE the sweep starts and survives an aborted run. **This is the answer to
+  "did I plot the jammer features?" — no, and now yes.**
+- `plot_js_curves.m` — every cell replotted at x = J/S, colored by its
+  `sigma_s` row, line-styled by series. Settles empirically whether a metric
+  needs the 2-D plane: rows that collapse onto one curve are J/S-governed.
+  First result (smoke grid): availability and dead time very nearly collapse;
+  **oracle gap and directivity loss fan out hard**, so the 2-D plane is
+  load-bearing for exactly the two metrics that measure adaptation quality.
+- `plot_cell_traces.m` — full time histories (SINR / directivity vs the
+  quiescent reference / instantaneous oracle gap) for four deliberately chosen
+  cells per scenario: signal-limited, jammer-limited, on the availability
+  cliff (picked from the DATA, argmin |availability − 50%|), and the high-SNR
+  corner. The sweep collapses each run to scalars; this is the escape hatch.
+
+**`plot_amplitude_heatmaps.m` changes:** new optional `clim_floor` (minimum
+color span) and a `categorical` style. `clim_floor` fixes a real
+misreading in the 2026-08-03 figures — the oracle's dead-time panel held
+0.0–0.1 s out of a 60 s run, auto-scaled to [0, 0.05], and rendered as
+saturated yellow across the whole plane, i.e. near-perfect behaviour drawn as
+total failure. Same for oracle recovery time (0/1 steps). Ticks now thin
+themselves once the grid exceeds 9 values per axis.
+
+**Two new metrics, both prompted by the 2026-08-03 reading:**
+- `dir_loss_db_ss` — steady-state directivity toward the target minus the
+  QUIESCENT beam's (LCMV at R = I, computed once: **5.13 dBi** on
+  `patchs_with_monopoles`/total-pol). The 2026-08-03 sweep showed ONOFF
+  directivity going to −7.8 dBi at `sigma_s_db` ≥ 25 while SINR read 30+ dB —
+  MPDR desired-signal cancellation — and no metric in the set reported it.
+- `operational_status` — a 4-level categorical mask (availability ≥ 90% AND
+  directivity loss ≤ 3 dB) whose code 2, "beam fail", is precisely the
+  SINR-passes-beam-destroyed corner. On the smoke grid it lights up the entire
+  `sigma_s ≥ 20` band of ONOFF/fixed-loading, invisible in every other panel.
+
+**Two new scenarios**, both chosen from the 2026-08-03 findings rather than for
+coverage's sake:
+- `FASTONOFF` — ONOFF geometry, toggle period 5 s instead of 20 s. The
+  cancellation appeared in ONOFF and NOT in STATIC/DRIFT, which points at the
+  covariance transient around a toggle rather than at the power level. 4x the
+  event rate discriminates the two, and makes recovery time informative
+  (~20 events/run vs ~5).
+- `WINDOW` — 60 s silent → 60 s jamming → 60 s silent, 180 s total. The only
+  scenario emitting a `turn_off` event, so the only one that can show whether
+  the beam RECOVERS after the threat stops. **Its smoke trace already answered
+  a question:** at `sigma_s` = 30 dB the fixed-loading beam sits ~10 dB below
+  the quiescent directivity even while the jammer is OFF, so the damage is not
+  jammer-driven at all — it is self-nulling from the desired signal in the
+  snapshots, which the ONOFF-only framing had obscured.
+
+**Overnight campaign launched** (`results/amplitude_sweep/<ts>/`, log in
+`results/amplitude_sweep/_logs/night_run_2026-08-30.log`): grid refined to
+0:2:30 dB on both axes (16x16 = 256 cells, up from 7x7 — the availability
+cliff was 1–2 cells wide, i.e. the most interesting feature was the most
+under-sampled), 5 scenarios, **5 seeds** (was 1; availability and dead time are
+the noisiest metrics and the P9 loading verdict rests on them), oracle + lcmv x
+{adaptive, fixed}. 19,200 closed-loop runs, ~2.5 h estimated.
+
+**Robustness for an unattended run:** the CSV is opened up front and streamed
+row-by-row, the `.mat` is checkpointed after every scenario, each cell-seed is
+individually try/caught (a failure leaves NaN and warns loudly, and the count
+lands in `sweep_params.txt`), and every figure call is wrapped so a graphics
+hiccup at hour three cannot take the rest down.
+
+**RESULTS (campaign finished 2026-08-31, 19,200 runs in 8,982 s, 0 failed
+cell-seeds — `results/amplitude_sweep/2026-08-30_231708/`, 47 figures).** Three
+findings, two of which overturn what the 2026-08-03 single-seed sweep appeared
+to say.
+
+**1. The desired-signal cancellation is purely sigma_s-driven. It is not a
+toggle transient, and the hypothesis FASTONOFF was built to test is dead.**
+Cells with directivity loss worse than -6 dB, fixed loading: STATIC 64,
+ONOFF 64, FASTONOFF 64, DRIFT 64, WINDOW 64 — identical in all five, and in
+every case exactly the four rows sigma_s in {24, 26, 28, 30} times all 16 J/N
+columns. Mean loss at sigma_s = 30 is -12.0 to -13.0 dB in every scenario.
+STATIC is the WORST case (203 cells past -3 dB), not ONOFF. The ONOFF-only
+appearance on 2026-08-03 was an artifact of looking for *negative dBi* rather
+than *loss vs quiescent*: ONOFF simply happened to be the scenario whose
+absolute directivity crossed zero. The `js_*.png` curves make the mechanism
+unambiguous — fixed-loading directivity loss is nearly FLAT in J/S and
+stratified purely by sigma_s, i.e. it does not depend on jammer power at all,
+including at J/N = 0 where there is no jammer to null. That is MPDR
+self-nulling on the desired signal in the snapshots, full stop.
+
+**2. The P9 verdict INVERTS once beam integrity is scored.** Operational-status
+cells (of 256), pass / beam-fail:
+| scenario | fixed | adaptive |
+| --- | --- | --- |
+| STATIC | 50 / 203 | 143 / 81 |
+| ONOFF | 151 / 100 | 224 / **0** |
+| FASTONOFF | 68 / 150 | 179 / 16 |
+| DRIFT | 145 / 96 | 225 / **0** |
+| WINDOW | 158 / 96 | 226 / **0** |
+
+Adaptive passes 1.3-2.9x more cells in every scenario and eliminates beam
+failure entirely in three of five. Worst directivity loss: fixed -12.4 to
+-14.1 dB, adaptive -1.4 to -3.6 dB. **The 2026-08-03 recommendation ("make
+`fixed` the default") was wrong, and it was wrong because the metric set could
+not see the failure mode that dominates fixed loading's map.** P9 does what it
+was designed to do. Do NOT change a default on the old reading.
+
+**3. Adaptive's real cost is narrow, specific, and probably fixable.** The
+availability loss is confined to sigma_s <= 4 dB (mean availability gain
+-10.8% STATIC / -5.0% ONOFF / -3.8% DRIFT, but the worst cells are all
+sigma_s = 2-4: -98.8% STATIC, -46% ONOFF, -53% DRIFT). WINDOW recovery time
+makes it concrete: at sigma_s = 0 adaptive needs **486 steps** to re-cross
+threshold vs fixed's 12.8, while at sigma_s >= 10 they are equal or adaptive
+wins (0.6 vs 1.6 steps at sigma_s = 30, oracle 0.2). The estimator scales as
+`loading_factor * sqrt(sig_power_hat * noise_floor_hat)`, and sigma_s <= 4 dB
+is exactly where `sig_power_hat` stops being separable from the noise floor.
+**Proposed follow-up: floor the data-driven loading at the fixed
+`diagonal_loading_db` value** (i.e. `loading = max(adaptive, fixed)`), which
+would keep every win above and remove the signal-limited collapse. Not
+implemented — needs Snir's call, and a re-sweep to verify.
+
+**Also corrected:** the script header's own justification for sweeping the 2-D
+plane ("J/S falls out as 45-degree lines, which separates signal-limited from
+jammer-limited failure") does not survive its own curve figures. The contours
+are geometrically true but do not organize the physics — essentially nothing
+collapses onto a J/S curve, and the real structure is HORIZONTAL. The 2-D
+sweep is still the right choice, for the opposite reason: sigma_s is the
+dominant variable. Header comment updated in place.
+
+**Cosmetic, not fixed:** STATIC and DRIFT define no jammer events, so their
+`js_*.png` recovery panel renders as a correctly-empty axis rather than being
+omitted (2 of 5 figures carry one blank panel).
+
 ### 2026-08-03 — [P6, P9] Signal-vs-jammer amplitude sweep + 2-D performance heatmaps
 
 Snir asked for a performance research sweep over signal and jammer amplitudes,
