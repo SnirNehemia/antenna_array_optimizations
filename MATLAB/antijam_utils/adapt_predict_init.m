@@ -1,8 +1,8 @@
-function state = adapt_predict_init(adapt_config, aj_config, e_s, E1, E2, theta_deg, phi_deg, n_elements)
+function state = adapt_predict_init(adapt_config, aj_config, e_s, E1, E2, theta_deg, phi_deg, n_elements, sim_config)
 % ADAPT_PREDICT_INIT  State for the Mode C predictive (anticipatory) nuller.
 %
 %   state = ADAPT_PREDICT_INIT(adapt_config, aj_config, e_s, E1, E2, ...
-%                              theta_deg, phi_deg, n_elements)
+%                              theta_deg, phi_deg, n_elements, sim_config)
 %
 %   Initializes the predictive Mode C algorithm: a recursive covariance
 %   estimate (same forgetting buffer as adapt_tracking), a ring buffer of the
@@ -26,6 +26,8 @@ function state = adapt_predict_init(adapt_config, aj_config, e_s, E1, E2, theta_
 %       theta_deg    : (1 x N_theta) elevation grid [deg].
 %       phi_deg      : (1 x N_phi) azimuth grid [deg].
 %       n_elements   : N_el.
+%       sim_config   : sim config section. Read only for dt_s, and only when
+%                      the optional adapt.predict.cv block is present ([P12b]).
 %
 %   Outputs:
 %       state : struct with fields
@@ -129,6 +131,29 @@ state.doa_cfg = struct('theta_s_deg', aj_config.theta_s_deg, ...
     'phi_s_deg', aj_config.phi_s_deg, 'guard_deg', aj_config.guard_deg, ...
     'presence_gap_db', p.presence_gap_db, 'doa_stride', p.doa_stride, ...
     'return_pspec', false);
+
+% [P12b] Constant-velocity DoA predictor. OPT-IN: with the adapt.predict.cv
+% block absent this is inert and every pre-P12b result stands unchanged. With
+% it present, adapt_predict_update steers the null at the CV-predicted angle
+% while the jammer is drifting — see adapt_cv_init.m for the measurement that
+% motivates it and for the mirror-fold problem it has to solve.
+if isfield(p, 'cv') && ~isempty(p.cv)
+    if nargin < 9 || isempty(sim_config)
+        error('adapt_predict_init:MissingSimConfig', ...
+            ['adapt.predict.cv is configured, so adapt_predict_init needs the ' ...
+             'sim config (9th argument) for its dt_s. Callers that do not use ' ...
+             'the CV predictor may omit it.']);
+    end
+    if ~isfield(sim_config, 'dt_s') || isempty(sim_config.dt_s)
+        error('adapt_predict_init:MissingKey', ...
+            'adapt.predict.cv needs sim.dt_s to build its motion model.');
+    end
+    state.cv_enabled = true;
+    state.cv = adapt_cv_init(p.cv, sim_config.dt_s, E1, E2, theta_deg, phi_deg);
+else
+    state.cv_enabled = false;
+    state.cv = [];
+end
 
 % Presence history + on/off period-detection state. The periodogram analyses
 % the most recent buffer_len samples of this growing 0/1 record.

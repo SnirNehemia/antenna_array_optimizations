@@ -119,8 +119,30 @@ addpath(fullfile(script_dir, '..', 'antijam_utils'));
 % availability cliff there was 1-2 cells wide, i.e. the most interesting
 % feature on the plane was also the most under-sampled one. Cost is linear in
 % the number of cells and one cell-seed-run is ~0.5 s.
-sigma_s_db_grid  = 0:2:30;
-jn_ratio_db_grid = 0:2:30;
+% [P12] Pruned from 0:2:30 (16x16 = 256 cells) to 0:5:30 (7x7 = 49). The
+% 2026-08-30 campaign established that the plane's structure is essentially
+% HORIZONTAL — sigma_s dominates, and the script's own plot_js_curves figures
+% refuted the J/S-collapse hypothesis its header used to assert — so a 16x16
+% grid was re-measuring a known trend at 5x the cost. The freed budget goes to
+% run_acceptance_grid_script, which varies the array and the jammer angle: two
+% axes this sweep holds fixed and never tested at all.
+%
+% Set profile = 'fine' to restore the 16x16 / 5-scenario / 5-seed form. P11's
+% reason for refining the grid was real (the availability cliff is 1-2 cells
+% wide at 5 dB steps), it is just not what most runs need.
+profile = 'coarse';          % 'coarse' | 'fine'
+
+switch profile
+    case 'coarse'
+        sigma_s_db_grid  = 0:5:30;
+        jn_ratio_db_grid = 0:5:30;
+    case 'fine'
+        sigma_s_db_grid  = 0:2:30;
+        jn_ratio_db_grid = 0:2:30;
+    otherwise
+        error('run_amplitude_sweep:BadProfile', ...
+            'profile must be ''coarse'' or ''fine''; got ''%s''.', profile);
+end
 
 % Algorithms. 'oracle' is mandatory (it defines the oracle-gap reference) and
 % is unaffected by the loading mode — it builds R analytically and calls
@@ -161,19 +183,22 @@ loading_modes = {'adaptive', 'fixed'};
 % sigma_s, wrecked its own main lobe doing so) climbs back to the quiescent
 % beam once the threat stops, or stays deformed. Steady-state scalars cannot
 % answer that; this scenario plus its trace figures can.
+% [P12] Trimmed to STATIC / DRIFT / WINDOW. FASTONOFF existed to test one
+% hypothesis — that desired-signal cancellation was driven by the covariance
+% transient around a power toggle — and the 2026-08-30 campaign killed it: the
+% effect is purely sigma_s-driven and STATIC is in fact the worst case. ONOFF's
+% multi-cycle averaging is better bought with seeds; what a multi-cycle run can
+% uniquely answer (does the tracker accumulate state across cycles?) needs the
+% recovery reported PER CYCLE, which is a profile-B case in
+% run_acceptance_grid_script, not an averaged cell here. WINDOW remains as the
+% clean single turn-on / turn-off lifecycle measurement.
 sweep_scenarios = { ...
     struct('id', 'STATIC', 'motion', 'static', 'power', 'constant', ...
            'theta_j_deg', 90.0, 'phi_j_deg', 200.0, 'duration_s', 60.0), ...
-    struct('id', 'ONOFF',  'motion', 'static', 'power', 'onoff', ...
-           'theta_j_deg', 90.0, 'phi_j_deg', 200.0, ...
-           'duty_cycle', 0.5, 'toggle_period_s', 20.0, 'duration_s', 100.0), ...
     struct('id', 'DRIFT',  'motion', 'drift',  'power', 'constant', ...
            'theta_j_deg', 90.0, 'phi_j_deg', 200.0, ...
            'theta_drift_deg_per_s', 2.0, 'phi_drift_deg_per_s', 0.0, ...
            'duration_s', 60.0), ...
-    struct('id', 'FASTONOFF', 'motion', 'static', 'power', 'onoff', ...
-           'theta_j_deg', 90.0, 'phi_j_deg', 200.0, ...
-           'duty_cycle', 0.5, 'toggle_period_s', 5.0, 'duration_s', 100.0), ...
     struct('id', 'WINDOW', 'motion', 'static', 'power', 'window', ...
            'theta_j_deg', 90.0, 'phi_j_deg', 200.0, ...
            'on_time_s', 60.0, 'off_time_s', 120.0, 'duration_s', 180.0)};
@@ -182,10 +207,14 @@ sweep_scenarios = { ...
 % (1 - ss_start_frac) of the timeline, so initial convergence is excluded.
 ss_start_frac = 0.5;
 
-% Monte Carlo seeds per cell. Availability and dead time are the noisiest
-% metrics in the set and they are the ones the P9 loading verdict rests on, so
-% a single seed is not enough to call it. Cost is linear.
-n_seeds = 5;
+% Monte Carlo seeds per cell. [P12] Reduced from 5 to 3, and this time the
+% number is measured rather than guessed: the acceptance grid's per-seed
+% standard deviations (now emitted here too, as the <metric>_std columns) put
+% the median seed-to-seed spread of the headline score at 0.13-0.18 percentage
+% points, with a p90 of 1.4-4.2 pp. Against score differences of interest that
+% run 20% vs 98%, three seeds is comfortably enough. Re-read the _std columns
+% after any change that moves the noise floor.
+n_seeds = 3;
 
 % Operational pass/fail mask thresholds (the 'operational status' panel).
 % 90% is the availability floor the milestone gates against elsewhere; 3 dB of
@@ -193,6 +222,11 @@ n_seeds = 5;
 % pointed at the target even if the SINR arithmetic still works out.
 avail_floor_pct   = 90.0;
 dir_loss_max_db   = 3.0;
+
+% [P12] Oracle-tracking tolerance for the headline track_score_pct metric: the
+% run is "keeping up" while it is within this many dB of the perfect-knowledge
+% LCMV. See kpi_sweep_metrics.
+track_tol_db = 3.0;
 
 % kpi_evaluate's null-pointing-error KPI scans the full (theta, phi) grid for
 % local minima at EVERY step — measured at ~4.5 s per run, which is ~95% of
@@ -305,6 +339,8 @@ sweep.n_seeds          = n_seeds;
 sweep.ss_start_frac    = ss_start_frac;
 sweep.avail_floor_pct  = avail_floor_pct;
 sweep.dir_loss_max_db  = dir_loss_max_db;
+sweep.track_tol_db     = track_tol_db;
+sweep.profile          = profile;
 
 % CSV is opened now and written row-by-row rather than at the end: this run is
 % hours long, and a crash in hour three should not cost the first two.
@@ -313,10 +349,10 @@ csv_fid  = fopen(csv_path, 'w');
 if csv_fid < 0
     error('run_amplitude_sweep:CsvOpen', 'Cannot open %s for writing.', csv_path);
 end
-fprintf(csv_fid, ['scenario,algorithm,loading_mode,sigma_s_db,jn_ratio_db,js_db,' ...
-              'availability_pct,dead_time_s,sinr_mean_db,sinr_ss_db,' ...
-              'oracle_gap_mean_db,oracle_gap_ss_db,dir_s_dbi_mean,dir_s_dbi_ss,' ...
-              'dir_loss_db_ss,recovery_mean_steps\n']);
+% [P12] Header and rows are now generated from metric_names() rather than
+% hand-listed, so adding a metric cannot silently desynchronise them; each
+% metric contributes a mean column and a <metric>_std column.
+fprintf(csv_fid, '%s\n', csv_header());
 
 dir_ref_dbi = NaN;      % quiescent-beam directivity toward the target; filled
                         % on the first oracle run (needs the engine's e_s/grid)
@@ -360,15 +396,15 @@ for is = 1:n_scn
                     i_run = i_run + 1;
 
                     if ~isfinite(dir_ref_dbi)
-                        dir_ref_dbi = quiescent_directivity_dbi(o_log, n_el, ...
+                        dir_ref_dbi = kpi_quiescent_directivity(o_log, n_el, ...
                             stack1, stack2, theta_deg, phi_deg);
                         fprintf('Quiescent-beam directivity toward the target: %.2f dBi (loss reference)\n', ...
                             dir_ref_dbi);
                     end
 
-                    seed_acc = accumulate(seed_acc, 'oracle', sweep_metrics( ...
+                    seed_acc = accumulate(seed_acc, 'oracle', kpi_sweep_metrics( ...
                         o_log, scn, aj, stack1, stack2, theta_deg, phi_deg, ...
-                        ss_start_frac, full_kpi, dir_ref_dbi));
+                        ss_start_frac, full_kpi, dir_ref_dbi, track_tol_db));
 
                     for ia = 1:numel(algorithms)
                         for il = 1:numel(loading_modes)
@@ -380,9 +416,9 @@ for is = 1:n_scn
                             i_run = i_run + 1;
                             seed_acc = accumulate(seed_acc, ...
                                 [algorithms{ia} '__' loading_modes{il}], ...
-                                sweep_metrics(log, scn, aj, stack1, stack2, ...
+                                kpi_sweep_metrics(log, scn, aj, stack1, stack2, ...
                                     theta_deg, phi_deg, ss_start_frac, full_kpi, ...
-                                    dir_ref_dbi));
+                                    dir_ref_dbi, track_tol_db));
                         end
                     end
                 catch err
@@ -397,27 +433,31 @@ for is = 1:n_scn
 
             % Seed-average and file into the metric maps.
             if isfield(seed_acc, 'oracle')
-                m_or = mean_over_seeds(seed_acc.oracle);
+                m_or  = mean_over_seeds(seed_acc.oracle);
+                sd_or = std_over_seeds(seed_acc.oracle);
             else
-                m_or = nan_metrics();     % every seed of this cell failed
+                m_or  = nan_metrics();    % every seed of this cell failed
+                sd_or = nan_std();
             end
             cell_store.oracle = store_cell(cell_store.oracle, iy, ix, m_or);
             fprintf(csv_fid, '%s\n', csv_row(scn_cfg.id, 'oracle', '-', ...
-                sigma_s_db_grid(iy), jn_ratio_db_grid(ix), m_or));
+                sigma_s_db_grid(iy), jn_ratio_db_grid(ix), m_or, sd_or));
             for ia = 1:numel(algorithms)
                 for il = 1:numel(loading_modes)
                     key = [algorithms{ia} '__' loading_modes{il}];
                     if isfield(seed_acc, key)
-                        m = mean_over_seeds(seed_acc.(key));
+                        m  = mean_over_seeds(seed_acc.(key));
+                        sd = std_over_seeds(seed_acc.(key));
                     else
-                        m = nan_metrics();
+                        m  = nan_metrics();
+                        sd = nan_std();
                     end
                     cell_store.alg.(algorithms{ia}).(loading_modes{il}) = ...
                         store_cell(cell_store.alg.(algorithms{ia}).(loading_modes{il}), ...
                             iy, ix, m);
                     fprintf(csv_fid, '%s\n', csv_row(scn_cfg.id, algorithms{ia}, ...
                         loading_modes{il}, sigma_s_db_grid(iy), ...
-                        jn_ratio_db_grid(ix), m));
+                        jn_ratio_db_grid(ix), m, sd));
                 end
             end
 
@@ -623,84 +663,6 @@ fprintf(['\nREPLOT without re-simulating:\n' ...
 
 % ────────────────────────── HELPERS ───────────────────────────────
 
-function m = sweep_metrics(log, scn, aj, stack1, stack2, theta_deg, phi_deg, ...
-                           ss_start_frac, full_kpi, dir_ref_dbi)
-% Scalar performance metrics for one closed-loop run.
-%
-% Definitions mirror the authoritative ones verbatim:
-%   availability / dead time  -> plot_mode_c_comparison
-%   oracle gap / recovery     -> kpi_evaluate
-%   directivity toward target -> compute_directivity_trace (library function)
-% They are recomputed here rather than taken from kpi_evaluate because that
-% function's null-pointing KPI scans the whole far-field grid for local minima
-% at every step (~95% of a cell's cost) and this sweep does not map it. Set
-% full_kpi = true in the SWEEP CONFIG to route through kpi_evaluate instead.
-thr  = aj.sinr_min_db;
-sinr = log.sinr_db;
-t    = scn.t_s;
-dt   = t(2) - t(1);
-ss   = t >= ss_start_frac * t(end);            % steady-state mask
-
-if full_kpi
-    k = kpi_evaluate(log, scn, aj);
-    m.availability_pct    = 100 * k.availability;
-    m.oracle_gap_mean_db  = k.oracle_gap_mean_db;
-    m.recovery_mean_steps = mean(k.recovery_steps, 'omitnan');
-    m.null_err_median_deg = median(k.null_pointing_err_deg( ...
-        ~isnan(k.null_pointing_err_deg)));
-else
-    m.availability_pct    = 100 * mean(sinr >= thr);
-    m.oracle_gap_mean_db  = mean(log.oracle_sinr_db - sinr);
-    m.recovery_mean_steps = recovery_mean(sinr, scn, thr);
-end
-m.dead_time_s      = dt * sum(sinr < thr);
-% NOTE: means are taken in dB (a geometric mean in linear power), matching
-% kpi_evaluate's oracle_gap_mean_db convention.
-m.sinr_mean_db     = mean(sinr);
-m.sinr_ss_db       = mean(sinr(ss));
-m.oracle_gap_ss_db = mean(log.oracle_sinr_db(ss) - sinr(ss));
-
-dir_s = compute_directivity_trace(log, stack1, stack2, theta_deg, phi_deg);
-m.dir_s_dbi_mean = mean(dir_s);
-m.dir_s_dbi_ss   = mean(dir_s(ss));
-% Directivity LOSS against the quiescent beam. Negative = the adapted beam
-% points less energy at the target than doing nothing would have. Large
-% negative values with a healthy SINR are desired-signal cancellation, which no
-% other metric in this set reports.
-m.dir_loss_db_ss = m.dir_s_dbi_ss - dir_ref_dbi;
-end
-
-
-function d = quiescent_directivity_dbi(o_log, n_el, stack1, stack2, theta_deg, phi_deg)
-% Directivity toward the target of the QUIESCENT beam — the LCMV/MVDR solution
-% for R = I, i.e. the beam the algorithm starts from before any covariance is
-% accumulated (closed_loop_run builds exactly this as the oracle's step-1
-% weight). It is a property of the array and the steering direction only, so it
-% is computed once and reused as the loss reference for the whole sweep.
-w_q = adapt_lcmv(eye(n_el), o_log.grid.e_s, 0);
-ref_log = struct('W', w_q, 'grid', o_log.grid);
-d = compute_directivity_trace(ref_log, stack1, stack2, theta_deg, phi_deg);
-end
-
-
-function r = recovery_mean(sinr, scn, thr)
-% Mean steps from each scenario event until SINR re-crosses the threshold
-% (kpi_evaluate section 2). NaN when the scenario defines no events.
-n_ev = numel(scn.events);
-if n_ev == 0
-    r = NaN;
-    return
-end
-rec = NaN(1, n_ev);
-for i = 1:n_ev
-    k0 = find(scn.t_s >= scn.events{i}.t_s, 1);
-    v  = find(sinr(k0:end) >= thr, 1) - 1;
-    if ~isempty(v), rec(i) = v; end
-end
-r = mean(rec, 'omitnan');
-end
-
-
 function maps = empty_maps(n_sigma, n_jn)
 % Allocate one NaN (n_sigma x n_jn) map per metric name.
 names = metric_names();
@@ -712,9 +674,9 @@ end
 
 
 function names = metric_names()
-names = {'availability_pct', 'dead_time_s', 'sinr_mean_db', 'sinr_ss_db', ...
-         'oracle_gap_mean_db', 'oracle_gap_ss_db', 'dir_s_dbi_mean', ...
-         'dir_s_dbi_ss', 'dir_loss_db_ss', 'recovery_mean_steps'};
+% [P12] Delegated to the shared list so this sweep and the acceptance grid
+% cannot drift apart on what a metric set contains.
+names = kpi_sweep_metric_names();
 end
 
 
@@ -751,6 +713,41 @@ end
 end
 
 
+function sd = std_over_seeds(v)
+% Per-seed standard deviation beside every mean.
+%
+% [P12] This is the missing half of the seed question. Before it, seeds were
+% averaged inline and nothing else was kept, so "is this difference between two
+% loading modes real or is it seed noise?" and "how many seeds do we actually
+% need?" were both unanswerable from a completed sweep's own output — the only
+% way to find out was to run it again. Writing sd beside mu makes both
+% answerable from the CSV alone.
+names = metric_names();
+sd = struct();
+for i = 1:numel(names)
+    x = v.(names{i});
+    x = x(isfinite(x));
+    if numel(x) < 2
+        % std of a single sample is NaN in MATLAB; report 0 so a one-seed run
+        % does not read as a failed measurement.
+        sd.(names{i}) = 0;
+    else
+        sd.(names{i}) = std(x);
+    end
+end
+end
+
+
+function sd = nan_std()
+% All-NaN companion to nan_metrics, for a cell whose every seed failed.
+names = metric_names();
+sd = struct();
+for i = 1:numel(names)
+    sd.(names{i}) = NaN;
+end
+end
+
+
 function maps = store_cell(maps, iy, ix, m)
 % File one seed-averaged metric struct into the (iy, ix) cell of every map.
 names = metric_names();
@@ -760,12 +757,27 @@ end
 end
 
 
-function row = csv_row(scn_id, alg, loading_mode, sigma_s_db, jn_ratio_db, m)
-row = sprintf('%s,%s,%s,%g,%g,%g,%.2f,%.3f,%.2f,%.2f,%.3f,%.3f,%.2f,%.2f,%.2f,%.2f', ...
-    scn_id, alg, loading_mode, sigma_s_db, jn_ratio_db, jn_ratio_db - sigma_s_db, ...
-    m.availability_pct, m.dead_time_s, m.sinr_mean_db, m.sinr_ss_db, ...
-    m.oracle_gap_mean_db, m.oracle_gap_ss_db, m.dir_s_dbi_mean, m.dir_s_dbi_ss, ...
-    m.dir_loss_db_ss, m.recovery_mean_steps);
+function h = csv_header()
+names = metric_names();
+cols  = {'scenario', 'algorithm', 'loading_mode', 'sigma_s_db', 'jn_ratio_db', 'js_db'};
+for i = 1:numel(names)
+    cols{end + 1} = names{i};                                         %#ok<AGROW>
+    cols{end + 1} = [names{i} '_std'];                                %#ok<AGROW>
+end
+h = strjoin(cols, ',');
+end
+
+
+function row = csv_row(scn_id, alg, loading_mode, sigma_s_db, jn_ratio_db, m, sd)
+names = metric_names();
+vals  = cell(1, 2 * numel(names));
+for i = 1:numel(names)
+    vals{2 * i - 1} = sprintf('%.4g', m.(names{i}));
+    vals{2 * i}     = sprintf('%.4g', sd.(names{i}));
+end
+row = sprintf('%s,%s,%s,%g,%g,%g,%s', ...
+    scn_id, alg, loading_mode, sigma_s_db, jn_ratio_db, ...
+    jn_ratio_db - sigma_s_db, strjoin(vals, ','));
 end
 
 
@@ -794,6 +806,8 @@ function panels = metric_panels(maps, avail_floor_pct, dir_loss_max_db)
 % while reporting near-perfect behaviour. Same for recovery time, which is
 % 0 or 1 steps for the oracle.
 panels = [ ...
+    mk_panel(maps.track_score_pct, 'oracle-tracking score (headline)', ...
+        '% of run within 3 dB of oracle', 'sequential', [0 100]), ...
     mk_panel(maps.availability_pct, 'SINR availability', '%', 'sequential', [0 100]), ...
     mk_panel(maps.dead_time_s, 'dead time (below threshold)', 's', 'sequential', ...
         [], [0 1]), ...

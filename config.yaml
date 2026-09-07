@@ -399,6 +399,53 @@ adapt:
     lead_steps: 6           # pre-form the null this many steps before turn-on
                             # (cover MUSIC-presence detection lag at turn-on)
     doa_stride: 1           # MUSIC grid subsample (1 = full far-field grid)
+    # [P12b] Constant-velocity DoA predictor. OPT-IN, and currently OFF:
+    # uncomment the `cv` block below to turn it on. While it is commented
+    # out, adapt_predict_update is byte-identical to its pre-P12b
+    # behaviour, so every P1-P11 gate stands. Present -> while the jammer is
+    # both detected AND moving faster than min_speed_deg_s, the null is aimed
+    # at the CV-extrapolated angle instead of being formed reactively from
+    # R_hat.
+    #
+    # WHY: measured 2026-09-07, the reactive tracker is reproduced by a
+    # truth-steered null delayed 10 steps -- exactly 1/(1-forgetting_lambda).
+    # Steering at the true CURRENT angle instead takes the oracle-tracking
+    # score from 44.8% to 94.8% on a 2 deg/s drift. The deficit is angle lag;
+    # this closes it. (Re-tuning lambda does not: the P12 sweep found no value
+    # at which the failing cells pass.)
+    # cv:
+    #   lead_steps: 14        # extrapolate this far ahead [steps]. DERIVED, not
+    #                         # fitted: 10 + 4. The 10 is the covariance horizon
+    #                         # 1/(1-forgetting_lambda) -- MUSIC is computed from
+    #                         # the SAME lagged R_hat, and its angle was measured
+    #                         # to match truth delayed 10.0 steps. The 4 is the
+    #                         # one-step application delay plus the
+    #                         # weight_smoothing_mu = 0.25 first-order lag.
+    #                         # DESIGN RULE: re-tune this if lambda moves.
+    #                         # Swept over drift 1/2/4 deg/s -- 14 has the best
+    #                         # mean. The optimum is genuinely rate-dependent
+    #                         # (10 at 1 deg/s, 16-18 at 4), so a single fixed
+    #                         # value is a compromise, not an optimum everywhere.
+    #   q_accel_deg_s2: 0.5   # process noise: angular-acceleration std. The
+    #                         # milestone's jammer drifts at a constant rate, so
+    #                         # this is small and mostly sets how fast the
+    #                         # velocity estimate is allowed to change.
+    #   r_meas_deg: 1.0       # MUSIC angle noise std. Dominated by grid
+    #                         # quantization: the 1 deg arrays measure ~1.0 deg
+    #                         # RMSE, the 5 deg array is necessarily worse.
+    #   gate_deg: 10.0        # innovation gate; beyond this the measurement is
+    #                         # an outlier and is discarded rather than fused.
+    #   min_track_steps: 20   # accepted updates before the prediction may steer
+    #                         # the null (1 s at dt_s = 0.05) -- long enough for
+    #                         # the velocity state to settle.
+    #   min_speed_deg_s: 0.5  # THE STATIC GUARD. Below this the jammer is
+    #                         # effectively still, the reactive path is already
+    #                         # at the oracle, and this branch stays out of the
+    #                         # way. Measured consequence: STATIC and WINDOW runs
+    #                         # are BIT-IDENTICAL with cv on vs off.
+    #   max_misses: 20        # consecutive gated-out/absent steps before the
+    #                         # track is dropped, so a stale velocity cannot
+    #                         # steer the null indefinitely.
   # [P10] Jammer carrier-frequency tracker (adapt_freq_init/update ->
   # adapt_freq_estimate). Only runs when sim.fs_hz turns on the waveform layer;
   # required when notch.mode is "adaptive", since it is what commands the notch.

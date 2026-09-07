@@ -637,6 +637,374 @@ including a collapse of the `sigma_s = 0` availability row from 92-98% to 0% —
 is not yet trustworthy enough to change a default on); and P9's Status is
 updated from that reading.
 
+### Phase P12 — Test coverage: arrays, jammer angles, and a tiered suite
+
+**Status:** in-progress (opened 2026-09-01; tiers A/B/C built and run 2026-09-01, seed count resolved, drift blind spot open)
+
+**Motivation.** P11 bought enormous resolution on one axis and none on the
+others. Its 19,200 runs resolve a 16x16 (`sigma_s`, J/N) plane, but every one of
+them uses the same array (`patchs_with_monopoles`, 6 elements) and the same
+jammer position (theta = 90, phi = 200, fixed 60 deg from the target). Array
+geometry and jammer angle — the two axes most likely to hide a failure — have
+never been varied at all. P11 also found the amplitude plane's structure is
+essentially horizontal (`sigma_s`-dominant, nothing collapses onto a J/S curve),
+so most of that resolution is re-measuring a known trend.
+
+The second problem is metric arbitration. The campaign reports 9 metrics per
+cell with no single ranking number, which is why the P9 verdict could be reached
+in P11 and then partly withdrawn a day later: "which loading mode is better"
+depended on which panel you read.
+
+**Headline metric — oracle-tracking score.** One number per
+(array, jammer position, scenario, algorithm) cell:
+
+```
+track_score_pct = 100 * mean( (oracle_sinr_db - sinr_db) <= track_tol_db )   % track_tol_db = 3
+```
+
+The fraction of the run spent within 3 dB of the perfect-knowledge LCMV.
+Normalized against the best achievable, so cells at different amplitudes,
+angles and arrays are directly comparable — which raw availability is not, since
+it saturates at 100% across every easy cell and cannot rank algorithms there.
+It folds convergence speed, steady-state gap and recovery into one number, and
+the oracle scores exactly 100 by construction, giving every grid a free sanity
+anchor. Beam integrity rides along: P11 measured `dir_loss_db_ss` at r = 0.943
+(STATIC) to 0.996 (ONOFF) against `oracle_gap_ss_db`. Pass threshold: >= 90.
+Every existing metric stays in the CSV as a diagnostic — they explain *why* a
+cell scored low, they just stop competing to be the verdict.
+
+**Difficulty coordinate (plotted, not scored).** `coh = |e_s' e_j| / (|e_s| |e_j|)`
+at the jammer's nearest grid point. 45 deg of separation means something
+different on a 6-element array than on a 4x4; a coherence of 0.3 means the same
+thing on both. Grating-lobe blind spots appear as a coherence spike at an angle
+where separation says the problem should be easy.
+
+**Tiers.** Tier A gates Tier B: there is no point reading edge cases while a
+nominal cell fails.
+
+| Tier | Question | Runs | Wall clock |
+|---|---|---|---|
+| 0 Gates | Did anything break? | 33 existing | seconds |
+| A Acceptance grid | Does it work in the easy cases, on every array, at every reasonable angle? | ~270 | ~2-3 min |
+| B Stress axes | Where does it break? | ~400 | ~4 min |
+| C Amplitude sweep | How does it degrade with signal and jammer power? | ~2,200 (pruned) | ~30 min |
+
+- **Tier A** — nominal amplitude (`sigma_s_db` = 10, `jn_ratio_db` = 20).
+  3 arrays (`patchs_with_monopoles` 6 el / `total`; `spacing0.6` 16 el 4x4 /
+  `Copol`; `ManyDipoles` 20 el) x 5 jammer positions x 3 scenarios (STATIC,
+  DRIFT, WINDOW) x 3 seeds x {oracle, lcmv}. Jammer positions are specified as
+  **angular separation from that array's target**, not absolute angles, so the
+  set means the same thing on every array: {20, 45, 90, 135} deg plus one at 45
+  deg displaced into the orthogonal cut. Polarization and target direction are
+  declared explicitly per array case — no inherited default (CLAUDE.md rule 4).
+- **Tier B** — one axis perturbed at a time so a failure is attributable:
+  near-guard (`guard_deg` + 5), near-endfire (theta ~5 and ~175), a grating-lobe
+  hunt on `spacing0.6` (5 deg steps over a 60 deg arc, scored against measured
+  `coh`), low signal (`sigma_s_db` = 0), fast drift (10 and 20 deg/s), and
+  cycle stability (ONOFF, 3 cycles, recovery reported per cycle index).
+- **Tier C** — the P11 sweep pruned to `0:5:30` on both axes (49 cells),
+  3 scenarios, 3 seeds. The 16x16 / 5-scenario / 5-seed form stays reachable as
+  an opt-in `profile = 'fine'`: P11's reason for refining the grid was real, it
+  just is not the default.
+
+**Seed and cycle policy (both questions were open, neither was measured).**
+
+- *Cycles.* Repeated on/off cycles were serving two conflated purposes:
+  averaging recovery over several turn-on events, and checking the tracker does
+  not accumulate state across cycles. The first is better bought with seeds. The
+  second genuinely needs >= 3 cycles but only in one dedicated scenario, and it
+  must be reported **per cycle index** — averaging is precisely what would hide a
+  cycle-over-cycle drift. So WINDOW (one clean turn-on, one clean turn-off)
+  becomes the recovery measurement used everywhere; ONOFF keeps 3 cycles and
+  gains a per-cycle readout; FASTONOFF (20 cycles) leaves the default profile,
+  since P11 already killed the hypothesis it existed to test.
+- *Seeds.* The spread has never been measurable: `mean_over_seeds` averages
+  inline and neither the CSV nor the `.mat` retains per-seed values. P12 emits a
+  `<metric>_std` column beside every mean and sets the seed count from the
+  measured spread, rather than from the guess that produced 5.
+
+**Known bug this phase forces out.** `dir_ref_dbi` is cached from the first
+oracle run of a campaign. It is a property of the array, so the moment a second
+array enters the campaign the reference silently becomes wrong. Extracted as
+`kpi_quiescent_directivity` and called once per array.
+
+**No `sim_`/`adapt_`/`agent_` module is modified.** This phase is test
+infrastructure only; every P1-P11 gate stands unchanged.
+
+**Blind spots explicitly NOT covered (deferred by decision, recorded so they are
+not silently omitted):**
+- *Steering-vector / calibration mismatch* — the largest untested failure mode,
+  and structurally untestable today: `sim_engine_step` computes `p_sig` from the
+  identical `e_s` handed to `adapt_lcmv`. `data/spacing0.6_disturbed3` is a
+  file-for-file counterpart to `data/spacing0.6` and is a ready-made physical
+  mismatch pair whenever this is picked up; the change is an optional
+  assumed-patterns path in `sim_engine_init` plus one line in `closed_loop_run`.
+- *Multiple simultaneous jammers* — outside the declared milestone scope.
+- *Polarization mismatch* — the `n_comp = 2` machinery exists but is never
+  exercised against a jammer whose polarization differs from the assumption.
+- *Target direction* — fixed per array; a natural Tier B extension once the
+  jammer-angle axis is trusted.
+
+**Results (2026-09-01 first run).**
+
+- *Seed count: resolved.* Median seed-to-seed std of `track_score_pct` is
+  0.13-0.18 pp on the acceptance grid and 0.72 pp on the pruned sweep (p90
+  1.4-4.2, max 8.6). Against score differences of interest running 20% vs 98%,
+  **3 seeds** is ample; both drivers set there. 5 was more than needed.
+- *Cycles: resolved.* ONOFF3 (three cycles) scores 96.3 / 96.6 / 98.0% on the
+  three arrays — no cycle-over-cycle accumulation. Multi-cycle averaging is
+  retired everywhere else in favour of WINDOW plus seeds.
+- *Cost.* Pruned sweep: 1,323 runs in 707 s, against 19,200 in 8,982 s.
+  Acceptance grid A: 270 runs in 225 s. Profile B: 276 runs in 232 s.
+- *Refactor is faithful.* All 33 gates pass, and a STATIC / sigma_s 10 /
+  J/N 20 cell re-run through the extracted metric code reproduces
+  `results/amplitude_sweep/2026-08-31_205119` to every printed digit.
+
+**Open finding — angular tracking speed.** Every static case passes
+(STATIC/WINDOW 95.8-100% on all three arrays, all five positions); every
+profile-A failure is a DRIFT case. `patchs_with_monopoles / sep20_th / DRIFT`
+scores 20% at 98.8% availability — the old headline metric called it a pass.
+
+Re-baselined 2026-09-06 with `ManyDipoles` on `'Theta'`: **13 of 15 DRIFT cells
+fail** (was 11). That array's row drops from 78.3/95.2/85.8/96.4/99.8 to
+41.5/69.3/57.4/77.1/95.0, i.e. it fails four of five positions like the other
+two. The earlier reading — that the 20-element array was largely immune and
+that DoF or grid quantization explained it — is **withdrawn**: most of that
+advantage was the phantom second component. Drift is a systemic weakness of the
+`lcmv` covariance tracker that no array here escapes.
+
+**Caveat that cannot be designed away:** the `ManyDipoles` row is now a
+single-polarization problem (n_comp = 1) against the other two rows'
+dual-polarization (n_comp = 2). Different signal models, different SINR
+normalisation, so absolute scores are NOT comparable across rows; comparisons
+within a row (algorithm vs algorithm, position vs position) remain valid.
+
+**Closed hypotheses.** No grating lobe on `spacing0.6` at 0.6 lambda (coherence
+falls 0.88 -> 0.31 over 10:5:70 deg with only a 0.365 bump at 65 deg; scores
+98.4-99.0% throughout). Low signal (sigma_s = 0 dB) is a non-event in tracking
+terms (98.8-99.8%).
+
+**New config finding.** `guard_deg` = 5 is too small for ManyDipoles:
+`near_guard` (10 deg) scores 0.1% at steering coherence 0.9948. config.yaml
+derives the 5 deg guard from the ManyDipoles cut's 15 deg HPBW; that looks
+optimistic by about 2x.
+
+**Exit criteria:** Tier A passes on all three arrays at all five positions
+(currently NOT met — the DRIFT column fails on two of three arrays); the seed
+count is set from measured `_std` and recorded here (done); Tier B's
+`difficulty_scatter` is reviewed and every point below the trend is either
+explained or opened as a follow-up (done — all are the drift finding, the
+ManyDipoles guard finding, or near-guard cases).
+
+**`predict` evaluated (2026-09-01, DRIFT column, 135 runs / 859 s): it is NOT
+the drift fix, and it cannot be.** On `patchs_with_monopoles` and `spacing0.6`
+it is bit-identical to `lcmv` (`max|W_predict - W_lcmv|` = 0.000e+00 over a
+whole run): `adapt_predict_update.m:127-137` takes the `adapt_lcmv_null(R_hat,
+e_s, [], loading)` branch whenever the jammer is detected present, which IS the
+`lcmv` update, and a constant-power drifting jammer is present at every step.
+`predict` only deviates around an on/off transition, and additionally needs
+`min_periods` = 3 observed cycles before it trusts a period. The drift gap was
+never in its scope.
+
+**The `ManyDipoles` regression was a polarization-config bug, RESOLVED
+2026-09-06 — and the earlier front/back-ambiguity diagnosis is RETRACTED.**
+That claim rested on a measurement artifact: `angular_separation_deg` clamped
+with `min(max(x,-1),1)`, and MATLAB's min/max ignore NaN, so NaN inputs returned
+exactly 180 deg. Measured properly, `ManyDipoles` has the LOWEST antipodal
+coherence of the three arrays (0.013 vs 0.318) and MUSIC's pseudospectrum peaks
+exactly on the truth (DoA error median 3.3 deg when presence fires).
+
+Real cause: `ManyDipoles` is an ideal-dipole export with no E_phi (-107 dB of
+numerical residue), and the grid ran it as `polarization: 'total'` for
+cross-array comparability. That makes `n_comp` = 2 while each source is
+physically rank-1, so `adapt_music_doa`'s hardcoded `n_sig = 2*n_comp` reads
+presence off a pure-noise eigenvalue (gap 0.72 dB against a 6 dB threshold
+where a genuinely dual-pol array gives 19.75 dB). Presence then failed on 84.7%
+of steps and `adapt_predict_update` fell back to `R = eye`. Switching that array
+to `'Theta'` restores presence to 82-100% and removes the regression.
+
+Landed: `select_polarization_stacks` hard-errors on `'total'` with a component
+more than 60 dB down (the arrays in `data/` split into two groups with a 91 dB
+gap, so the threshold is unambiguous); the grid runs `ManyDipoles` as `'Theta'`;
+`angular_separation_deg` is NaN-safe. Full 23-file test suite passes.
+
+Deferred, and still worth doing: a rank-AWARE presence statistic (desired-signal
+rank from `e_s`'s singular values, or project `e_s` out of `R_hat` and test the
+residual) for a weak-but-real second component — no array in `data/` occupies
+that grey zone, and it would change the P8 "model order hardcoded to 2"
+contract. Also deferred: dropout hysteresis so one missed detection cannot
+discard a converged covariance. **P8's DoA front-end remains untested on real
+element patterns** (`test_antijam_predict` uses a toy analytic ULA); a P8 gate
+on a real array is still open.
+
+**Forgetting-factor sweep done (2026-09-06, DRIFT column, 225 runs / 61 s;
+`results/lambda_sweep/2026-09-06_233956/`). Lambda is a real lever and NOT the
+fix.** Mean oracle-tracking score over the 15 cells: 45.7 (lambda 0.95), 55.2
+(0.90, current), 68.0 (0.80), 71.2 (0.70) — but the pass count is **2 of 15 at
+every value**. No failing cell crosses 90%, and at 0.70 one passing cell drops
+below it. Two regimes cross near lambda ~ 0.83: high-coherence theta-cut cells
+are lag-limited and improve as lambda falls; the already-passing low-coherence
+cells are variance-limited and get worse. **A single fixed forgetting factor
+cannot serve both** — structural, not a tuning miss. `ManyDipoles` is nearly
+lambda-insensitive, so its drift failure has a different mechanism (plausibly
+its 5 deg grid turning smooth drift into 5 deg steps).
+
+**This blind spot IS P8's unimplemented half.** P8's own Status says
+"Drift/CV-Kalman follow-up not started" and "Not validated yet: the drift /
+CV-Kalman predictor (S2/S3)". The on/off branch was deliberately sequenced
+first; the acceptance grid is simply the first thing that measured the cost of
+the missing half, and it is large — 13 of 15 DRIFT cells fail on a covariance
+tracker with no motion model. **A constant-velocity DoA predictor is the fix;
+retuning lambda is not.** This is now the top P8 work item.
+
+**Candidate default change, NOT applied:** lambda = 0.80 dominates 0.90 on this
+evidence (same pass count, +12.8 mean points, keeps both passing cells) and is
+safer on the OFF-gap decay constraint that drove the 0.98 -> 0.90 re-sweep. Not
+applied because only DRIFT was measured and 0.90 was calibrated on
+static/steady-state behaviour. Before changing it, run profile A's
+STATIC/WINDOW columns and the amplitude sweep at 0.80 vs 0.90. The gate suites
+are self-contained (hardcoded `acfg` = 0.90) so they would NOT catch a
+regression from a config.yaml change, and `test_antijam_tracking` reports
+0.85-0.98 all pass — 0.80 is outside that tested band.
+
+---
+
+### Phase P12b — Mode C evaluation campaign + CV-Kalman drift predictor
+
+**Status:** in-progress (opened 2026-09-07; diagnosis, CV predictor and the profile-A campaign COMPLETE — see Results; the two `fixedload` arms and all Tier B / amplitude re-runs remain)
+
+**Motivation.** P12 left the DRIFT column failing on all three arrays (13 of 15
+cells) and named a constant-velocity DoA predictor as the fix, but neither the
+diagnosis nor the fix had been carried out. P12b does both, and evaluates the
+whole Mode C stack (`lcmv` + `predict`, adaptive vs fixed loading) on one
+metric rather than the DRIFT-only slice P12 measured.
+
+**Diagnosis — the drift gap is angle LAG, and it is exactly one λ-horizon.**
+Measured on `patchs_with_monopoles` / sep45_th / DRIFT 2°/s, by steering a hard
+null from scenario TRUTH (a diagnostic, never an algorithm):
+
+| variant | track% | mean gap dB |
+|---|---|---|
+| oracle | 100.0 | 0.00 |
+| `lcmv` (shipped) | 44.8 | 4.00 |
+| null @ true CURRENT angle | 94.8 | 0.88 |
+| null @ truth delayed 10 steps | 49.8 | 3.88 |
+
+`lcmv` is reproduced by a truth-steered null delayed 10–11 steps, and 10 =
+1/(1−λ) at λ = 0.90. Perfect current-angle knowledge lifts 44.8 → 94.8%. So an
+angle predictor is the matching fix, and the ~95% ceiling (grid quantization +
+finite null depth + `weight_smoothing_mu`) is the realistic target, not 100%.
+
+**The lag budget is derived, not fitted.** The raw MUSIC angle itself best
+matches truth delayed **exactly 10 steps** (mean |err| 0.27° at τ=10, rising
+either side) — MUSIC is computed from the same exponentially-forgotten `R̂`, so
+it inherits the covariance horizon. Adding the 1-step application delay and the
+`weight_smoothing_mu = 0.25` first-order lag gives **lead_steps = 10 + 4 = 14**.
+Design rule: `lead_steps` should track 1/(1−λ), so it must be re-tuned if λ moves.
+
+**New modules.** `adapt_cv_init` / `adapt_cv_update` (constant-velocity Kalman
+on [θ, θ̇, φ, φ̇] in degrees), wired into `adapt_predict_update` as an **opt-in**
+`adapt.predict.cv` block. With the block absent the path is byte-identical to
+pre-P12b, so every P1–P11 gate stands. `config.yaml` ships it commented out.
+
+**The mirror fold — a new finding that forced a design change.**
+`data/ManyDipoles` is **exactly degenerate under (θ,φ) → (180−θ,φ)**: steering
+coherence 1.0000, whole-stack relative difference 2.8e-6. This is NOT the
+antipodal pair (180−θ, φ+180) whose low coherence the 2026-09-06 note used to
+retract the front/back diagnosis — that retraction measured the wrong pair. The
+degeneracy is the textbook up/down ambiguity of a planar array in the z=0 plane
+with a common phase centre and no geometric phase re-added; the other two arrays
+have ground planes that break it (mirror coherence 0.85→0.08 and 0.87→0.53).
+It is **benign for nulling** (identical steering vectors ⇒ a null at the mirror
+IS the null at truth) but **fatal for tracking** (the MUSIC peak hops branches
+and a naive CV filter differences the hops into a phantom velocity). So
+`adapt_cv_init` measures the array's own mirror coherence once and, when
+degenerate, folds each measurement to the branch nearer its prediction.
+Consequence for reporting: **any DoA-error KPI on ManyDipoles is meaningless
+unless computed modulo the fold** — its raw DRIFT DoA RMSE is 68°, median 60°.
+
+**Regression safety is structural, not incidental.** The `min_speed_deg_s` gate
+keeps the CV branch out of non-drifting runs, and STATIC / WINDOW are measured
+**bit-identical** with cv on vs off (max |ΔSINR| < 1e-12).
+
+**Measured effect (single-cell, pre-campaign):** DRIFT 2°/s 44.8 → 90.3%;
+drift + 10° jump 36.6 → 86.7%. Never worse than `lcmv` at any drift rate tested
+(1/2/4/8 °/s).
+
+**Second lever found, NOT applied.** `weight_smoothing_mu` is itself a drift
+cost: `lcmv` alone goes 44.8 → 55.4 → 59.1% as mu goes 0.25 → 0.5 → 1.0, and
+CV+mu=1.0 reaches 93.0%. mu was tuned for other scenarios, so changing a global
+default is out of scope here; recorded as a follow-up.
+
+**New gates.** `tests/test_antijam_cv.m` — 6 gates: required-key contract,
+constant-velocity recovery + lead correctness, the static guard, the outlier
+gate and track drop, the mirror fold, and the azimuth wrap. All pass.
+
+**Test infrastructure.** `run_acceptance_grid_script` gains a `GRID_OVERRIDE`
+hook (whitelisted, hard-errors on an unknown field) so a campaign can vary
+arms without editing it; `run_mode_c_campaign_script` drives it once per arm
+over {adaptload, fixedload, cv_adaptload, cv_fixedload}. No `sim_`/`agent_`
+module is modified; `adapt_predict_*` and `closed_loop_run` change only to
+carry the opt-in CV path.
+
+**RESULTS (2026-09-07).** Two arms complete at 45 cases each, 0 failed
+case-seeds (`results/acceptance_grid/*_profileA_adaptload` and `*_profileA_cv_adaptload`).
+Mean oracle-tracking score over the 15 cells, and cells at or above the 90 pass mark:
+
+| scenario | lcmv | predict | predict + CV | passing (lcmv → CV) |
+|---|---|---|---|---|
+| STATIC | 98.3 | 98.3 | 98.3 | 15/15 → 15/15 |
+| DRIFT | 55.2 | 55.0 | **90.3** | **2/15 → 11/15** |
+| WINDOW | 99.2 | 99.2 | 99.2 | 15/15 → 15/15 |
+
+- **`predict` ≡ `lcmv` at full scale** (55.0 vs 55.2), confirming the P12 degeneracy
+  finding across the whole grid.
+- **STATIC and WINDOW move by +0.0 / −0.0 pp**, as the speed gate guarantees.
+- **Secondary metrics (DRIFT):** oracle gap 3.19 → 0.70 dB, steady-state SINR
+  22.22 → 24.71 dB, beam integrity −1.03 → −1.15 dB. **Availability moves
+  98.18 → 98.23% — +0.05 pp for a 35-point tracking gain**, which is the clearest
+  evidence yet that availability cannot serve as the headline number.
+- **Seed spread:** median 0.07 pp, p90 2.63, max 7.05 — 3 seeds confirmed ample.
+- **The 4 remaining DRIFT failures are grid-limited (F7):** three are on the 5°-grid
+  array; the fourth (`spacing0.6/sep45_th`, 84.4%) has perfect DoA (median 1.00°,
+  presence 100%) and a lead sweep still climbing at L=24, against a truth-steered
+  ceiling of 98.3%. Sub-grid MUSIC interpolation is the indicated fix.
+
+**P9 SETTLED.** All four arms complete (180 cases, 1,620 closed-loop runs, 0 failed
+case-seeds). Adaptive minus fixed diagonal loading is **+0.00 pp on all 90 cells** of the
+no-CV comparison AND **+0.00 pp on all 90 cells** of the with-CV comparison — identically
+zero, every cell, both times. The CV gain is also identical under both loading modes
+(DRIFT +35.1 pp, 2 → 11 passing either way), so the fix is independent of the loading
+question. Whole-grid pass count 64/90 → 73/90. At profile A's operating point
+`loading_factor_db: 0` is a no-op, matching config.yaml's own note that it reproduces
+the tuned ~10 dB in this regime. The choice can be made on simplicity. It should still
+be re-read at the high-`sigma_s` corner P9 was built for, which profile A does not visit.
+
+**TIER B STRESS AXES (2026-09-07, `results/acceptance_grid/*_profileB_cv_stressB`).**
+46 cases, 414 runs, 0 failed case-seeds — the first run of these axes with the predictor
+enabled. **The predictor is never worse on any of the 46 cells** (zero regress by more than
+0.5 pp); mean 87.3 → 91.3, passing 34 → 35.
+
+- *Fast drift bounds the envelope.* At 10°/s: 1.9 → 62.7 (patchs), 44.8 → 87.6
+  (spacing0.6), 89.2 → 90.5 (ManyDipoles). At 20°/s: 0.8 → 38.9, 32.3 → 74.4,
+  80.1 → 81.2. The reactive tracker essentially stops working at 5–10× nominal;
+  the predictor recovers most of it but **does not reach the pass mark**. Honest
+  statement: qualified at 2°/s, degraded but functional near 10°/s, not qualified at 20°/s.
+- *Static / endfire / low-signal / grating-lobe all move 0.0 pp*, as the speed gate
+  requires. The grating-lobe hunt over 10–70° scores 89–99 with no coverage hole,
+  re-confirming that closed hypothesis under the new algorithm.
+- *`near_guard` on ManyDipoles is 0.1% for BOTH algorithms* — the jammer sits 10° out at
+  steering coherence 0.9948, effectively inside the main beam. This confirms P12's finding
+  that `guard_deg = 5` is ~2× too optimistic for that array. The predictor correctly does
+  not mask it. **`guard_deg` should be re-derived per array.**
+
+**Deliverables:** `results/antijam/p12b_modec_campaign/` (report, deck, PPTX, findings).
+
+**Exit criteria:** the four-arm profile-A campaign completes; the DRIFT column
+is re-read with CV on; the P9 adaptive-vs-fixed loading verdict is settled on
+the oracle-tracking score; a `lead_steps` default is recorded with its
+derivation; and the full gate suite still passes.
+
 ---
 
 ## 5. KPIs and standard scenario suite
@@ -647,6 +1015,7 @@ updated from that reading.
 3. **Null-pointing error** — |achieved null angle − θ_j(t)|, tracked over time.
 4. **Peak-gain penalty** — main-beam gain loss vs jammer-free Milestone-1 optimum (dB).
 5. **Oracle gap** — SINR shortfall vs perfect-knowledge LCMV (dB), per instant and averaged.
+6. **Oracle-tracking score** *(headline from P12)* — `100 * mean((oracle_sinr_db - sinr_db) <= 3)`; the fraction of the run spent within 3 dB of the perfect-knowledge LCMV. Normalized against the best achievable, so it is comparable across arrays, angles and amplitudes; the oracle scores 100 by construction.
 
 ### Standard scenario suite (defined in config; seeds fixed)
 | ID | θ_j behavior | Power | Notes |

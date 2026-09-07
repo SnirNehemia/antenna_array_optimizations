@@ -124,7 +124,32 @@ end
 % worse than 'lcmv' during ON, and avoids mis-steering on a transient MUSIC
 % estimate. The explicit hard null is used ONLY to pre-form the null during a
 % predicted-imminent OFF window, where R_hat carries no jammer energy.
-if doa.present
+% [P12b] Advance the constant-velocity DoA track first, so its prediction is
+% available to the branch below. It is fed the MUSIC estimate for this step and
+% coasts on the motion model when presence did not fire.
+cv_pred = struct('valid', false, 'theta_deg', NaN, 'phi_deg', NaN, ...
+    'speed_deg_s', NaN, 'theta_now_deg', NaN, 'phi_now_deg', NaN, ...
+    'accepted', false);
+if state.cv_enabled
+    [cv_pred, state.cv] = adapt_cv_update(state.cv, doa.theta_j_deg, ...
+        doa.phi_j_deg, doa.present);
+end
+
+if doa.present && cv_pred.valid
+    % [P12b] Jammer visible AND genuinely moving: aim a HARD null at the
+    % CV-predicted angle, keeping the measured R_hat. The reactive branch
+    % below is a null aimed one covariance horizon (1/(1-lambda) steps) into
+    % the past, which at 2 deg/s is ~1 deg of lag and costs ~4 dB; the
+    % prediction removes exactly that lag. cv_pred.valid is false whenever the
+    % estimated angular speed is below adapt.predict.cv.min_speed_deg_s, so a
+    % static or on/off jammer never reaches this branch and those runs are
+    % unchanged.
+    [it_p, ip_p] = nearest_index_2d(state.theta_deg, state.phi_deg, ...
+        cv_pred.theta_deg, cv_pred.phi_deg);
+    idx_p  = (ip_p - 1) * numel(state.theta_deg) + it_p;
+    e_null = steer_col(state, idx_p);
+    w_target = adapt_lcmv_null(state.R_hat, state.e_s, e_null, state.loading);
+elseif doa.present
     % Jammer visible: reactive MPDR null from the measured covariance.
     w_target = adapt_lcmv_null(state.R_hat, state.e_s, [], state.loading);
 elseif predicted_on && ~isnan(state.last_doa.idx)
@@ -142,7 +167,9 @@ state.w = w;
 % ── 7. Record per-step diagnostics ─────────────────────────────────
 state.last = struct('theta_j_deg', doa.theta_j_deg, 'phi_j_deg', doa.phi_j_deg, ...
     'present', doa.present, 'predicted_on', predicted_on, ...
-    'period_est', state.period_est);
+    'period_est', state.period_est, ...
+    'cv_valid', cv_pred.valid, 'cv_theta_deg', cv_pred.theta_deg, ...
+    'cv_phi_deg', cv_pred.phi_deg, 'cv_speed_deg_s', cv_pred.speed_deg_s);
 end
 
 

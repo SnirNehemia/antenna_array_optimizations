@@ -23,6 +23,12 @@ if ~isfield(config, 'polarization') || isempty(config.polarization)
     error('select_polarization_stacks:MissingKey', ...
         'Missing required config key: ''polarization''.');
 end
+% Relative power below which a second component is residue rather than a field.
+% The measured arrays split into two groups with a 91 dB gap between them
+% (-2.4 .. -15.6 dB for genuinely dual-polarized, -107 / -211 dB for ideal
+% dipoles), so any threshold in that gap works; -60 dB sits well inside it.
+DEGENERATE_COMPONENT_DB = -60.0;
+
 pol   = config.polarization;
 names = sort(fieldnames(patterns(1).components));
 if strcmpi(pol, 'total')
@@ -33,6 +39,30 @@ if strcmpi(pol, 'total')
     end
     stack1 = stack_component(patterns, names{1});
     stack2 = stack_component(patterns, names{2});
+    % [P12] Reject a DEGENERATE second component. An ideal-dipole export carries
+    % no E_phi, so CST writes numerical residue there — 'data/ManyDipoles' is
+    % -107 dB and 'data/Dipole' -211 dB relative to their real component, while
+    % every genuinely dual-polarized array here sits between -2.4 and -15.6 dB.
+    % Accepting it looks harmless and is not: n_comp becomes 2 while each source
+    % is physically rank-1, and adapt_music_doa's hardcoded n_sig = 2*n_comp
+    % then reads jammer presence off an eigenvalue that is pure noise. That
+    % silently disabled presence detection on 85% of steps and made the
+    % predictive nuller fall back to the quiescent beam. No silent default
+    % (CLAUDE.md rule 4) — name the component and the fix.
+    p1 = sum(abs(stack1(:)).^2);
+    p2 = sum(abs(stack2(:)).^2);
+    ratio_db = 10 * log10(min(p1, p2) / max(p1, p2));
+    if ratio_db < DEGENERATE_COMPONENT_DB
+        if p1 < p2, weak = names{1}; strong = names{2};
+        else,       weak = names{2}; strong = names{1};
+        end
+        error('select_polarization_stacks:DegenerateComponent', ...
+            ['polarization ''total'' needs two real field components, but ' ...
+             '''%s'' carries %.1f dB less power than ''%s'' — it is numerical ' ...
+             'residue, not a field, so this array is single-polarization. ' ...
+             'Set polarization to ''%s''.'], ...
+            weak, -ratio_db, strong, strong);
+    end
     label  = sprintf('total (%s + %s)', names{1}, names{2});
 else
     hit = names(strcmpi(names, pol));

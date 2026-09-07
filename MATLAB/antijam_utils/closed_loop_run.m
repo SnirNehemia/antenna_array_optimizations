@@ -1,4 +1,4 @@
-function log = closed_loop_run(alg, stack1, stack2, theta_deg, phi_deg, scn, aj, sim_cfg, config, codebook)
+function log = closed_loop_run(alg, stack1, stack2, theta_deg, phi_deg, scn, aj, sim_cfg, config, codebook, assumed)
 % CLOSED_LOOP_RUN  One closed-loop run of an algorithm against a scenario.
 %
 %   log = CLOSED_LOOP_RUN(alg, stack1, stack2, theta_deg, phi_deg, scn, aj, ...
@@ -22,6 +22,24 @@ function log = closed_loop_run(alg, stack1, stack2, theta_deg, phi_deg, scn, aj,
 %       sim_cfg        : sim config section (seed set per run).
 %       config         : full parsed config (adapt / agent sections).
 %       codebook       : struct from agent_codebook_build ([] unless alg = bandit).
+%       assumed        : [P12b, OPTIONAL] struct with fields stack1/stack2 —
+%                        the element patterns the ALGORITHM believes it has,
+%                        while the engine keeps propagating the true ones
+%                        above. Omit or pass [] and the algorithm is handed the
+%                        same stacks as the engine, which is the pre-P12b
+%                        behaviour byte for byte.
+%
+%                        WHY: with assumed == true, sim_engine_step computes the
+%                        desired-signal power from the IDENTICAL e_s handed to
+%                        the beamformer, so no steering-vector error can ever
+%                        appear. That made calibration mismatch — the largest
+%                        untested failure mode in the milestone — structurally
+%                        unmeasurable. data/spacing0.6 and
+%                        data/spacing0.6_disturbed3 are a file-for-file pair
+%                        and are the intended mismatch experiment. This matters
+%                        most for the CV path, which places a HARD null at an
+%                        ASSUMED steering column, where the reactive path
+%                        derives its null from measured data instead.
 %
 %   [P10]: when the waveform layer is on (sim.fs_hz) a carrier-frequency
 %   tracker (adapt_freq_init/update) runs ALONGSIDE the Mode C beamformer and
@@ -50,6 +68,36 @@ st   = sim_engine_init(stack1, stack2, theta_deg, phi_deg, scn, aj, sim_cfg, mod
 n_el = size(stack1, 1);
 T    = numel(scn.t_s);
 
+% [P12b] Steering-vector mismatch. The engine above always propagates the TRUE
+% patterns; only what the ALGORITHM is given changes here. No sim_ module is
+% modified — the assumed steering column is built with the same nearest-grid
+% rule sim_engine_init uses, against the assumed stacks.
+a_stack1 = stack1;
+a_stack2 = stack2;
+e_s_alg  = st.e_s;
+if nargin >= 11 && ~isempty(assumed)
+    if ~isfield(assumed, 'stack1') || isempty(assumed.stack1)
+        error('closed_loop_run:BadAssumed', ...
+            'assumed must carry a non-empty stack1 (the patterns the algorithm believes).');
+    end
+    if ~isequal(size(assumed.stack1), size(stack1))
+        error('closed_loop_run:AssumedShape', ...
+            ['assumed.stack1 is %s but the true stack is %s — the assumed patterns ' ...
+             'must be sampled on the same array and grid.'], ...
+            mat2str(size(assumed.stack1)), mat2str(size(stack1)));
+    end
+    a_stack1 = assumed.stack1;
+    a_stack2 = [];
+    if isfield(assumed, 'stack2'), a_stack2 = assumed.stack2; end
+    [it_a, ip_a] = nearest_index_2d(theta_deg, phi_deg, aj.theta_s_deg, aj.phi_s_deg);
+    e_s_alg = a_stack1(:, it_a, ip_a);
+    e_s_alg = e_s_alg(:);
+    if ~isempty(a_stack2)
+        c2 = a_stack2(:, it_a, ip_a);
+        e_s_alg = [e_s_alg, c2(:)];
+    end
+end
+
 % [P10] Carrier tracking needs snapshots (Mode C) AND a spectral line to find.
 track_freq = strcmp(mode, 'C') && st.use_waveform && ...
     isfield(config.adapt, 'freq') && ~isempty(config.adapt.freq);
@@ -68,19 +116,19 @@ f_notch = NaN;   % nothing commanded until the tracker locks
 
 switch alg
     case 'oracle'
-        w = adapt_lcmv(eye(n_el), st.e_s, 0);           % quiescent start
+        w = adapt_lcmv(eye(n_el), st.e_s, 0);           % quiescent start (oracle: true e_s by definition)
     case 'lcmv'
-        trk = adapt_tracking_init(config.adapt, st.e_s, n_el);
+        trk = adapt_tracking_init(config.adapt, e_s_alg, n_el);
         w = trk.w;
     case 'predict'
         % P8 MUSIC + on/off-prediction Mode C nuller.
-        pr = adapt_predict_init(config.adapt, aj, st.e_s, stack1, stack2, ...
-            theta_deg, phi_deg, n_el);
+        pr = adapt_predict_init(config.adapt, aj, e_s_alg, a_stack1, a_stack2, ...
+            theta_deg, phi_deg, n_el, sim_cfg);
         w = pr.w;
     case 'spsa'
         % Warm start from the quiescent MVDR beam — the uniform start sits
         % ~10-20 dB deeper on the real array and dominates the probe budget.
-        w_q = adapt_lcmv(eye(n_el), st.e_s, 0);
+        w_q = adapt_lcmv(eye(n_el), e_s_alg, 0);
         sp = adapt_spsa_init(config.adapt.spsa, w_q, sim_cfg.seed + 5000);
         w = sp.w;
     case 'bandit'

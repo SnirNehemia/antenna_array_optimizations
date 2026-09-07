@@ -1,0 +1,803 @@
+<title>Mode C Anti-Jam Evaluation</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Serif:ital,wght@0,400;0,600;1,400&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
+<style>
+:root{
+  color-scheme: light;
+  --ground:#f7f8fa; --surface:#ffffff; --sunken:#eef1f5;
+  --ink:#10151c; --ink2:#3d4756; --ink3:#6b7688;
+  --rule:#dfe3ea; --rule2:#c9d0da;
+  --accent:#1c5cab; --accent-soft:#e8f0fb;
+  --s1:#2a78d6; --s2:#eb6834; --s3:#1baf7a; --ref:#8a8f98;
+  --pass:#008300; --fail:#c0392f;
+  --pass-bg:#e6f2e6; --fail-bg:#fbeceb;
+  --sans:"IBM Plex Sans",ui-sans-serif,system-ui,sans-serif;
+  --serif:"IBM Plex Serif",Georgia,serif;
+  --mono:"IBM Plex Mono",ui-monospace,"SFMono-Regular",Consolas,monospace;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    color-scheme: dark;
+    --ground:#0f1319; --surface:#161b23; --sunken:#1c222b;
+    --ink:#eef2f7; --ink2:#b9c2d0; --ink3:#8a94a4;
+    --rule:#262d38; --rule2:#333c49;
+    --accent:#6da7ec; --accent-soft:#16243a;
+    --s1:#3987e5; --s2:#d95926; --s3:#199e70; --ref:#7d848f;
+    --pass:#3fa63f; --fail:#e07068;
+    --pass-bg:#13251a; --fail-bg:#2a1715;
+  }
+}
+:root[data-theme="dark"]{
+  color-scheme: dark;
+  --ground:#0f1319; --surface:#161b23; --sunken:#1c222b;
+  --ink:#eef2f7; --ink2:#b9c2d0; --ink3:#8a94a4;
+  --rule:#262d38; --rule2:#333c49;
+  --accent:#6da7ec; --accent-soft:#16243a;
+  --s1:#3987e5; --s2:#d95926; --s3:#199e70; --ref:#7d848f;
+  --pass:#3fa63f; --fail:#e07068;
+  --pass-bg:#13251a; --fail-bg:#2a1715;
+}
+
+*{box-sizing:border-box;}
+body{background:var(--ground);color:var(--ink);font-family:var(--serif);
+  font-size:16.5px;line-height:1.62;margin:0;
+  -webkit-font-smoothing:antialiased;}
+.wrap{max-width:1080px;margin:0 auto;padding:0 28px 96px;}
+.col{max-width:660px;}
+h1,h2,h3,h4,.eyebrow,.lede{font-family:var(--sans);text-wrap:balance;}
+h1{font-size:2.5rem;line-height:1.1;font-weight:600;letter-spacing:-.02em;margin:0 0 .35em;}
+h2{font-size:1.5rem;font-weight:600;letter-spacing:-.01em;margin:0 0 .5em;}
+h3{font-size:1.08rem;font-weight:600;margin:2.2em 0 .5em;}
+h4{font-size:.95rem;font-weight:600;margin:1.6em 0 .4em;}
+p{margin:0 0 1.05em;}
+a{color:var(--accent);}
+.eyebrow{font-size:.72rem;font-weight:600;letter-spacing:.13em;text-transform:uppercase;
+  color:var(--ink3);margin:0 0 .9em;}
+.lede{font-size:1.16rem;line-height:1.55;color:var(--ink2);font-weight:400;}
+code,.mono{font-family:var(--mono);font-size:.87em;}
+code{background:var(--sunken);padding:.1em .34em;border-radius:3px;}
+.num{font-variant-numeric:tabular-nums;}
+
+/* header */
+header{padding:72px 0 30px;border-bottom:1px solid var(--rule);margin-bottom:44px;}
+.meta{display:flex;flex-wrap:wrap;gap:8px 26px;font-family:var(--sans);font-size:.8rem;
+  color:var(--ink3);margin-top:26px;}
+.meta b{color:var(--ink2);font-weight:500;}
+
+/* section rhythm */
+section{padding:44px 0;border-top:1px solid var(--rule);}
+section:first-of-type{border-top:none;padding-top:0;}
+
+/* verdict */
+.verdicts{display:grid;gap:16px;margin:26px 0 8px;}
+.verdict{display:grid;grid-template-columns:auto 1fr;gap:18px;align-items:start;
+  background:var(--surface);border:1px solid var(--rule);border-left:3px solid var(--accent);
+  border-radius:4px;padding:20px 22px;}
+.verdict .n{font-family:var(--mono);font-size:.78rem;font-weight:600;color:var(--accent);
+  padding-top:.28em;}
+.verdict h4{margin:0 0 .3em;font-size:1rem;}
+.verdict p{margin:0;font-size:.95rem;color:var(--ink2);}
+
+/* tables */
+.tw{overflow-x:auto;margin:22px 0;}
+table{border-collapse:collapse;width:100%;font-family:var(--sans);font-size:.87rem;
+  font-variant-numeric:tabular-nums;}
+caption{caption-side:bottom;text-align:left;color:var(--ink3);font-size:.8rem;
+  padding-top:10px;font-family:var(--sans);}
+th,td{padding:8px 12px;text-align:right;border-bottom:1px solid var(--rule);
+  white-space:nowrap;}
+th:first-child,td:first-child{text-align:left;}
+thead th{font-weight:600;color:var(--ink3);font-size:.76rem;letter-spacing:.05em;
+  text-transform:uppercase;border-bottom:1px solid var(--rule2);}
+tbody tr:hover{background:var(--sunken);}
+td.lbl{font-family:var(--mono);font-size:.8rem;color:var(--ink2);}
+.pass{color:var(--pass);font-weight:600;}
+.fail{color:var(--fail);font-weight:600;}
+.big{font-weight:600;color:var(--ink);}
+
+/* heat cells for the scorecard */
+.heat{display:inline-block;min-width:52px;padding:3px 8px;border-radius:3px;
+  font-weight:600;font-variant-numeric:tabular-nums;}
+
+/* charts */
+figure{margin:30px 0;}
+.chart{width:100%;height:auto;display:block;background:var(--surface);
+  border:1px solid var(--rule);border-radius:4px;padding:10px;}
+figcaption{font-family:var(--sans);font-size:.82rem;color:var(--ink3);margin-top:10px;
+  max-width:660px;}
+.tick{font-family:var(--sans);font-size:11px;fill:var(--ink3);}
+.axl{font-family:var(--sans);font-size:12px;fill:var(--ink3);}
+.lgd{font-family:var(--sans);font-size:12.5px;fill:var(--ink2);}
+.lgdv{font-family:var(--sans);font-size:11px;fill:var(--ink3);}
+.ann{font-family:var(--sans);font-size:11.5px;fill:var(--ink3);}
+
+/* finding blocks */
+.finding{border-top:1px solid var(--rule);padding:26px 0 4px;}
+.fid{font-family:var(--mono);font-size:.78rem;font-weight:600;color:var(--accent);
+  letter-spacing:.04em;}
+.finding h3{margin:.25em 0 .5em;}
+.tag{display:inline-block;font-family:var(--sans);font-size:.7rem;font-weight:600;
+  letter-spacing:.06em;text-transform:uppercase;padding:2px 8px;border-radius:99px;
+  border:1px solid var(--rule2);color:var(--ink3);margin-left:8px;vertical-align:2px;}
+.tag.new{color:var(--s2);border-color:var(--s2);}
+.tag.corr{color:var(--fail);border-color:var(--fail);}
+
+/* callout */
+.note{background:var(--sunken);border:1px solid var(--rule);border-radius:4px;
+  padding:16px 20px;margin:22px 0;font-size:.94rem;color:var(--ink2);}
+.note b{color:var(--ink);}
+
+/* recommendations */
+ol.recs{list-style:none;counter-reset:r;padding:0;margin:24px 0 0;}
+ol.recs>li{counter-increment:r;display:grid;grid-template-columns:auto 1fr;gap:18px;
+  padding:20px 0;border-top:1px solid var(--rule);}
+ol.recs>li::before{content:"R" counter(r);font-family:var(--mono);font-size:.78rem;
+  font-weight:600;color:var(--accent);padding-top:.3em;}
+ol.recs h4{margin:0 0 .35em;font-size:1rem;}
+ol.recs p{margin:0;font-size:.94rem;color:var(--ink2);}
+.effort{font-family:var(--sans);font-size:.74rem;color:var(--ink3);
+  text-transform:uppercase;letter-spacing:.07em;margin-top:.5em;}
+
+ul.tight{padding-left:1.15em;margin:0 0 1.05em;}
+ul.tight li{margin-bottom:.4em;}
+.eq{font-family:var(--mono);font-size:.88rem;background:var(--sunken);
+  border-left:2px solid var(--rule2);padding:10px 14px;margin:14px 0;
+  overflow-x:auto;white-space:nowrap;}
+hr{border:none;border-top:1px solid var(--rule);margin:36px 0;}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px;}
+@media (prefers-reduced-motion:no-preference){tbody tr{transition:background .12s;}}
+@media (max-width:640px){
+  h1{font-size:1.95rem;} body{font-size:16px;}
+  .wrap{padding:0 18px 64px;} header{padding-top:44px;}
+}
+</style>
+
+<div class="wrap">
+
+<header>
+  <p class="eyebrow">Anti-jam milestone · Phase P12b · 2026-09-07</p>
+  <h1>Mode C anti-jam: what works, what doesn't, and what ships</h1>
+  <p class="lede">A test campaign on the covariance-domain anti-jam stack. It diagnoses the
+  drift failure P12 left open, fixes it with a constant-velocity DoA predictor, and finds that
+  the constraint on fielding this is array calibration — not the algorithm.</p>
+  <div class="meta">
+    <span><b>Branch</b> antijam-p10-freq-notch</span>
+    <span><b>Runs</b> 2,034 closed-loop, 0 failed case-seeds</span>
+    <span><b>Arrays</b> 3</span>
+    <span><b>Gates</b> 53/53 anti-jam</span>
+    <span><b>MATLAB</b> R2026a, R2020a-compatible</span>
+  </div>
+</header>
+
+<section>
+  <h2>Verdict</h2>
+  <div class="verdicts">
+    <div class="verdict">
+      <span class="n">01</span>
+      <div>
+        <h4>The drift failure is real, diagnosed, and fixed</h4>
+        <p>The shipped tracker passes <b>2 of 15</b> drifting-jammer cells. The cause is angle
+        lag of exactly one covariance horizon. A constant-velocity DoA predictor takes it to
+        <b>11 of 15</b> (mean score 55.2 → 90.3), while leaving static and on/off cases
+        bit-identical.</p>
+      </div>
+    </div>
+    <div class="verdict">
+      <span class="n">02</span>
+      <div>
+        <h4>Calibration, not drift, is the binding constraint on delivery</h4>
+        <p>Made measurable for the first time this phase. The stack needs per-element phase
+        calibration better than <b>~1° RMS</b>; by 3° every algorithm is at the floor. This is a
+        larger risk than the gap just closed, and nothing in the design measures or corrects it.</p>
+      </div>
+    </div>
+    <div class="verdict">
+      <span class="n">03</span>
+      <div>
+        <h4>The old headline metric would have hidden all of this</h4>
+        <p>The 35-point tracking gain shows up as <b>+0.05 pp of availability</b> (98.18 → 98.23).
+        Availability saturates on easy cells and cannot rank algorithms. Every number here is the
+        oracle-tracking score instead.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="col">
+    <h2>What is being tested</h2>
+    <p><b>Mode C</b> is the observation regime where the receiver gives per-element
+    snapshots, so the algorithm can form a spatial covariance matrix. That is the richer of the
+    two regimes in this milestone — Mode S sees only a scalar SINR reading — and it is where
+    the classical adaptive-array literature applies directly. Scope is one jammer, unknown
+    direction, drifting slowly, in 2-D <span class="mono">(θ, φ)</span>.</p>
+
+    <h3>The four algorithms, and why these</h3>
+    <p>Each earns its place by answering a different question, so the set brackets the
+    problem rather than sampling it.</p>
+  </div>
+
+  <div class="tw">
+  <table>
+    <caption>Mode C algorithms under test. <span class="mono">oracle</span> is not a competitor —
+    it defines the reference every score is measured against.</caption>
+    <thead><tr><th>Algorithm</th><th style="text-align:left">What it knows</th>
+      <th style="text-align:left">Why it is in the suite</th></tr></thead>
+    <tbody>
+      <tr><td class="lbl">oracle</td><td style="text-align:left">The true jammer angle and covariance</td>
+        <td style="text-align:left">Perfect-knowledge upper bound. Scores 100 by construction, so every grid carries its own sanity anchor.</td></tr>
+      <tr><td class="lbl">lcmv</td><td style="text-align:left">Only the measured covariance <span class="mono">R̂</span></td>
+        <td style="text-align:left">The shipped reactive baseline. Classical MVDR/LCMV — the standard against which any adaptive nuller must justify itself.</td></tr>
+      <tr><td class="lbl">predict</td><td style="text-align:left"><span class="mono">R̂</span> plus a MUSIC angle estimate</td>
+        <td style="text-align:left">Adds an explicit jammer direction, so the null can be placed <em>before</em> energy returns. Built for on/off jammers.</td></tr>
+      <tr><td class="lbl">predict + CV</td><td style="text-align:left">…plus a motion model</td>
+        <td style="text-align:left"><b>New this phase.</b> Tracks the jammer's angular velocity and aims where it will be, not where it was.</td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <div class="col">
+    <h4>How the reactive nuller works</h4>
+    <p>An adaptive array multiplies each element by a complex weight and sums. Choosing the
+    weights <span class="mono">w</span> to minimise total output power subject to holding unit
+    gain on the target direction gives the classical solution:</p>
+    <div class="eq">w = R⁻¹e(θ_s) / ( e(θ_s)ᴴ R⁻¹ e(θ_s) )</div>
+    <p>Any strong source that is <em>not</em> the target gets suppressed automatically, because
+    suppressing it is what minimises output power. The array never needs to know where the
+    jammer is. <span class="mono">R̂</span> is estimated from snapshots with exponential
+    forgetting, <span class="mono">R̂(t) = λR̂(t−1) + (1−λ)xxᴴ</span>, and that forgetting is
+    the whole story of what follows.</p>
+
+    <h4>How the predictive nuller works</h4>
+    <p><span class="mono">predict</span> runs MUSIC on the same <span class="mono">R̂</span>:
+    it splits the covariance into signal and noise subspaces and scans the far-field grid for
+    directions orthogonal to the noise subspace. That yields an explicit
+    <span class="mono">(θ, φ)</span> for the jammer plus a presence flag, which lets it place a
+    <em>hard</em> null at a chosen angle rather than waiting for energy to appear in
+    <span class="mono">R̂</span>.</p>
+
+    <div class="note">
+      <b>A finding that reframes the baseline:</b> under a constant-power drifting jammer,
+      <span class="mono">predict</span> is <em>identical</em> to <span class="mono">lcmv</span>
+      — 55.0 versus 55.2 across the grid. Its predictive branch only engages around an on/off
+      transition, and a constantly-present jammer never triggers it. The drift gap was never in
+      its scope, which is exactly why the CV predictor was needed.
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="col">
+    <h2>Method</h2>
+    <h4>The metric</h4>
+    <p>One number per cell — the fraction of the run spent within 3 dB of the perfect-knowledge
+    beamformer:</p>
+    <div class="eq">track_score = 100 · mean( (SINR_oracle − SINR) ≤ 3 dB )</div>
+    <p>It is normalised against what is <em>achievable</em>, which is what makes cells at
+    different angles, arrays and power levels comparable. It folds convergence speed,
+    steady-state gap and recovery into one figure, and the oracle scores exactly 100. Pass mark
+    is 90.</p>
+
+    <h4>The grid</h4>
+    <p>3 arrays × 5 jammer positions × 3 scenarios × 3 seeds, each run against
+    <span class="mono">oracle</span> plus the algorithms under test. Jammer positions are
+    specified as <em>angular separation from that array's target</em>, not absolute angles, so
+    the same five positions mean the same thing on every array. Every algorithm sees the same
+    scenario, the same seed and the same oracle run, so a difference between rows is a
+    difference between algorithms.</p>
+  </div>
+
+  <div class="tw">
+  <table>
+    <caption>The test matrix. Seed-to-seed spread of the score was median 0.07 pp
+    (p90 2.63, max 7.05), confirming 3 seeds is sufficient.</caption>
+    <thead><tr><th>Axis</th><th style="text-align:left">Values</th><th style="text-align:left">Note</th></tr></thead>
+    <tbody>
+      <tr><td>Arrays</td><td style="text-align:left" class="lbl">patchs_with_monopoles (6 el) · spacing0.6 (16 el, 4×4) · ManyDipoles (20 el)</td>
+        <td style="text-align:left">1°, 1° and 5° export grids</td></tr>
+      <tr><td>Positions</td><td style="text-align:left" class="lbl">sep20_th · sep45_th · sep90_th · sep135_ph · sep45_ph</td>
+        <td style="text-align:left">Steering coherence 0.06 – 0.92</td></tr>
+      <tr><td>Scenarios</td><td style="text-align:left" class="lbl">STATIC (60 s) · DRIFT (2°/s, 30 s) · WINDOW (on/off, 180 s)</td>
+        <td style="text-align:left">WINDOW is the one clean turn-on and turn-off</td></tr>
+      <tr><td>Amplitude</td><td style="text-align:left" class="lbl">σ_s = 10 dB, J/N = 20 dB</td>
+        <td style="text-align:left">Deliberately comfortable — these are the easy cases</td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <div class="col">
+  <div class="note">
+    <b>Comparability caveat that cannot be designed away.</b> ManyDipoles runs single-polarization
+    while the other two run dual. Those are different signal models with different SINR
+    normalisation, so <b>absolute scores are not comparable across array rows</b>. Comparisons
+    <em>within</em> a row — algorithm against algorithm, position against position — remain valid,
+    and that is how every claim here is framed.
+  </div>
+  </div>
+</section>
+
+<section>
+  <div class="col">
+    <h2>Result 1 — where the stack stood</h2>
+    <p>Static and on/off jammers are handled comfortably. Drifting jammers are not.</p>
+  </div>
+
+  <div class="tw">
+  <table>
+    <caption>Baseline, as shipped. Mean oracle-tracking score over 15 cells, and cells at or
+    above the 90% pass mark.</caption>
+    <thead><tr><th>Scenario</th><th>lcmv</th><th>passing</th><th>predict</th><th>passing</th></tr></thead>
+    <tbody>
+      <tr><td>STATIC</td><td class="big">98.3</td><td class="pass">15 / 15</td><td class="big">98.3</td><td class="pass">15 / 15</td></tr>
+      <tr><td>DRIFT</td><td class="big">55.2</td><td class="fail">2 / 15</td><td class="big">55.0</td><td class="fail">2 / 15</td></tr>
+      <tr><td>WINDOW</td><td class="big">99.2</td><td class="pass">15 / 15</td><td class="big">99.2</td><td class="pass">15 / 15</td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <div class="col">
+  <p>Thirteen of fifteen drift cells fail, on all three arrays. Note that
+  <span class="mono">availability</span> on those same cells reads 98.2% — which is why this
+  was not caught earlier.</p>
+  </div>
+</section>
+
+<section>
+  <div class="col">
+    <h2>Result 2 — the diagnosis</h2>
+    <p>Before building anything, the question was whether better angle knowledge would even
+    help. The experiment: steer a hard null from <em>scenario truth</em> — something no
+    algorithm may do — delayed by a variable number of steps, and see which delay reproduces
+    the shipped tracker.</p>
+  </div>
+
+  <figure>
+    <svg viewBox="0 0 640 300" class="chart" role="img"
+  aria-label="Oracle-tracking score against how many steps a truth-steered null is delayed. The curve crosses the shipped tracker's score at ten steps.">
+  <g><line x1="54" y1="254.0" x2="614" y2="254.0" stroke="var(--grid)" stroke-width="1"/><text x="45" y="258.0" text-anchor="end" class="tick">0</text><line x1="54" y1="197.0" x2="614" y2="197.0" stroke="var(--grid)" stroke-width="1"/><text x="45" y="201.0" text-anchor="end" class="tick">25</text><line x1="54" y1="140.0" x2="614" y2="140.0" stroke="var(--grid)" stroke-width="1"/><text x="45" y="144.0" text-anchor="end" class="tick">50</text><line x1="54" y1="83.0" x2="614" y2="83.0" stroke="var(--grid)" stroke-width="1"/><text x="45" y="87.0" text-anchor="end" class="tick">75</text><line x1="54" y1="26.0" x2="614" y2="26.0" stroke="var(--grid)" stroke-width="1"/><text x="45" y="30.0" text-anchor="end" class="tick">100</text><text x="54.0" y="274" text-anchor="middle" class="tick">0</text><text x="141.5" y="274" text-anchor="middle" class="tick">5</text><text x="229.0" y="274" text-anchor="middle" class="tick">10</text><text x="316.5" y="274" text-anchor="middle" class="tick">15</text><text x="404.0" y="274" text-anchor="middle" class="tick">20</text><text x="491.5" y="274" text-anchor="middle" class="tick">25</text><text x="579.0" y="274" text-anchor="middle" class="tick">30</text></g>
+  <line x1="229.0" y1="254.0" x2="229.0" y2="26.0" stroke="var(--s2)" stroke-width="1" stroke-dasharray="3 3" opacity="0.55"/><text x="237.0" y="35.1" class="ann">τ = 10 = 1/(1−λ)</text>
+  <line x1="54" y1="151.9" x2="614" y2="151.9" stroke="var(--ref)" stroke-width="2" stroke-dasharray="5 4"/><text x="610" y="142.9" text-anchor="end" class="ann">shipped lcmv = 44.8%</text>
+  <polyline points="54.0,37.9 141.5,86.4 229.0,140.5 316.5,166.0 404.0,191.8 579.0,226.4" fill="none" stroke="var(--s2)" stroke-width="2"
+            stroke-linejoin="round" stroke-linecap="round"/>
+  <circle cx="54.0" cy="37.9" r="5" fill="var(--s2)" stroke="var(--surface)" stroke-width="2"/><circle cx="141.5" cy="86.4" r="5" fill="var(--s2)" stroke="var(--surface)" stroke-width="2"/><circle cx="229.0" cy="140.5" r="5" fill="var(--s2)" stroke="var(--surface)" stroke-width="2"/><circle cx="316.5" cy="166.0" r="5" fill="var(--s2)" stroke="var(--surface)" stroke-width="2"/><circle cx="404.0" cy="191.8" r="5" fill="var(--s2)" stroke="var(--surface)" stroke-width="2"/><circle cx="579.0" cy="226.4" r="5" fill="var(--s2)" stroke="var(--surface)" stroke-width="2"/>
+  <text x="64.0" y="41.9" class="ann">94.8% at zero delay</text>
+  <text x="334.0" y="294" text-anchor="middle" class="axl">null steered at truth delayed by τ (steps)</text>
+  <text x="14" y="140.0" text-anchor="middle" class="axl"
+        transform="rotate(-90 14 140.0)">oracle-tracking score (%)</text>
+</svg>
+    <figcaption>A truth-steered null delayed 10 steps reproduces the shipped tracker almost
+    exactly (49.8% vs 44.8%). Ten steps is 1/(1−λ) at λ = 0.90 — the covariance forgetting
+    horizon, which at 0.05 s/step and 2°/s is 1.0° of angular lag. Steering at the true current
+    angle instead gives 94.8%.</figcaption>
+  </figure>
+
+  <div class="col">
+    <p>Two things follow. The drift deficit is an <b>angle-lag</b> deficit, so an angle
+    predictor is the matching fix — and re-tuning λ is not, which agrees with the earlier sweep
+    that found no λ where the failing cells pass. And the realistic target is <b>~95%, not
+    100%</b>: grid quantization, finite null depth and weight smoothing set that ceiling.</p>
+
+    <h4>The lag budget, and why the lead is derived rather than fitted</h4>
+    <p>The MUSIC angle is computed from the same exponentially-forgotten
+    <span class="mono">R̂</span>, so it inherits the same lag. Measured directly, the raw MUSIC
+    estimate best matches truth delayed <b>exactly 10 steps</b> (mean error 0.27° at τ=10,
+    rising either side). Adding the one-step application delay and the weight-smoothing lag:</p>
+    <div class="eq">lead_steps = 10 (covariance horizon) + 4 (application + smoothing) = 14</div>
+    <p>This gives a design rule rather than a magic number: <b>the lead should track
+    1/(1−λ)</b>, and must be re-tuned if λ moves.</p>
+  </div>
+</section>
+
+<section>
+  <div class="col">
+    <h2>Result 3 — the fix</h2>
+    <p>A constant-velocity Kalman filter on <span class="mono">[θ, θ̇, φ, φ̇]</span>, fed by the
+    MUSIC angle the algorithm already computes, extrapolated 14 steps ahead. While the jammer is
+    both detected and moving, the null is aimed at the predicted angle.</p>
+  </div>
+
+  <figure>
+    <svg viewBox="0 0 860 330" class="chart" role="img"
+  aria-label="SINR against time for a drifting jammer: the oracle upper bound, the shipped lcmv tracker, and predict with the CV predictor.">
+  <g><line x1="52" y1="286.0" x2="664" y2="286.0" stroke="var(--grid)" stroke-width="1"/><text x="43" y="290.0" text-anchor="end" class="tick">-5</text><line x1="52" y1="242.0" x2="664" y2="242.0" stroke="var(--grid)" stroke-width="1"/><text x="43" y="246.0" text-anchor="end" class="tick">0</text><line x1="52" y1="198.0" x2="664" y2="198.0" stroke="var(--grid)" stroke-width="1"/><text x="43" y="202.0" text-anchor="end" class="tick">5</text><line x1="52" y1="154.0" x2="664" y2="154.0" stroke="var(--grid)" stroke-width="1"/><text x="43" y="158.0" text-anchor="end" class="tick">10</text><line x1="52" y1="110.0" x2="664" y2="110.0" stroke="var(--grid)" stroke-width="1"/><text x="43" y="114.0" text-anchor="end" class="tick">15</text><line x1="52" y1="66.0" x2="664" y2="66.0" stroke="var(--grid)" stroke-width="1"/><text x="43" y="70.0" text-anchor="end" class="tick">20</text><line x1="52" y1="22.0" x2="664" y2="22.0" stroke="var(--grid)" stroke-width="1"/><text x="43" y="26.0" text-anchor="end" class="tick">25</text><text x="52.0" y="306" text-anchor="middle" class="tick">0</text><text x="154.0" y="306" text-anchor="middle" class="tick">5</text><text x="256.0" y="306" text-anchor="middle" class="tick">10</text><text x="358.0" y="306" text-anchor="middle" class="tick">15</text><text x="460.0" y="306" text-anchor="middle" class="tick">20</text><text x="562.0" y="306" text-anchor="middle" class="tick">25</text><text x="664.0" y="306" text-anchor="middle" class="tick">30</text></g>
+  <g><polyline points="52.0,311.6 54.0,33.1 57.1,33.1 59.1,31.6 62.2,31.6 64.2,31.6 67.3,31.6 69.3,30.2 72.4,30.2 74.4,30.2 77.5,30.2 79.5,28.9 82.6,28.9 84.6,28.9 87.7,28.9 89.7,27.7 92.8,27.7 94.8,27.7 97.9,27.7 99.9,26.6 103.0,26.6 105.0,26.6 108.1,26.6 110.1,25.5 113.2,25.5 115.2,25.5 118.3,25.5 120.3,24.5 123.4,24.5 125.4,24.5 128.5,24.5 130.5,23.6 133.6,23.6 135.6,23.6 138.7,23.6 140.7,22.8 143.8,22.8 145.8,22.8 148.9,22.8 150.9,22.1 154.0,22.1 156.0,22.1 159.1,22.1 161.1,21.4 164.2,21.4 166.2,21.4 169.3,21.4 171.3,20.8 174.4,20.8 176.4,20.8 179.5,20.8 181.5,20.3 184.6,20.3 186.6,20.3 189.7,20.3 191.7,19.8 194.8,19.8 196.8,19.8 199.9,19.8 201.9,19.4 205.0,19.4 207.0,19.4 210.1,19.4 212.1,19.0 215.2,19.0 217.2,19.0 220.3,19.0 222.3,18.7 225.4,18.7 227.4,18.7 230.5,18.7 232.5,18.5 235.6,18.5 237.6,18.5 240.7,18.5 242.7,18.3 245.8,18.3 247.8,18.3 250.9,18.3 252.9,18.2 256.0,18.2 258.0,18.2 261.1,18.2 263.1,18.2 266.2,18.2 268.2,18.2 271.3,18.2 273.3,18.2 276.4,18.2 278.4,18.2 281.5,18.2 283.5,18.2 286.6,18.2 288.6,18.2 291.7,18.2 293.7,18.3 296.8,18.3 298.8,18.3 301.9,18.3 303.9,18.4 307.0,18.4 309.0,18.4 312.1,18.4 314.1,18.6 317.2,18.6 319.2,18.6 322.3,18.6 324.3,18.8 327.4,18.8 329.4,18.8 332.5,18.8 334.5,19.0 337.6,19.0 339.6,19.0 342.7,19.0 344.7,19.3 347.8,19.3 349.8,19.3 352.9,19.3 354.9,19.5 358.0,19.5 361.1,19.5 363.1,19.5 366.2,19.8 368.2,19.8 371.3,19.8 373.3,19.8 376.4,20.1 378.4,20.1 381.5,20.1 383.5,20.1 386.6,20.4 388.6,20.4 391.7,20.4 393.7,20.4 396.8,20.7 398.8,20.7 401.9,20.7 403.9,20.7 407.0,20.9 409.0,20.9 412.1,20.9 414.1,20.9 417.2,21.0 419.2,21.0 422.3,21.0 424.3,21.0 427.4,21.1 429.4,21.1 432.5,21.1 434.5,21.1 437.6,21.1 439.6,21.1 442.7,21.1 444.7,21.1 447.8,20.9 449.8,20.9 452.9,20.9 454.9,20.9 458.0,20.6 460.0,20.6 463.1,20.6 465.1,20.6 468.2,20.2 470.2,20.2 473.3,20.2 475.3,20.2 478.4,19.6 480.4,19.6 483.5,19.6 485.5,19.6 488.6,19.0 490.6,19.0 493.7,19.0 495.7,19.0 498.8,18.2 500.8,18.2 503.9,18.2 505.9,18.2 509.0,17.4 511.0,17.4 514.1,17.4 516.1,32.6 519.2,18.2 521.2,18.2 524.3,18.2 526.3,31.0 529.4,19.0 531.4,19.0 534.5,19.0 536.5,29.3 539.6,19.6 541.6,19.6 544.7,19.6 546.7,27.6 549.8,20.2 551.8,20.2 554.9,20.2 556.9,26.3 560.0,20.6 562.0,20.6 565.1,20.6 567.1,25.6 570.2,20.9 572.2,20.9 575.3,20.9 577.3,25.4 580.4,21.1 582.4,21.1 585.5,21.1 587.5,25.8 590.6,21.1 592.6,21.1 595.7,21.1 597.7,26.9 600.8,21.0 602.8,21.0 605.9,21.0 607.9,28.2 611.0,20.9 613.0,20.9 616.1,20.9 618.1,29.8 621.2,20.7 623.2,20.7 626.3,20.7 628.3,31.6 631.4,20.4 633.4,20.4 636.5,20.4 638.5,33.0 641.6,20.1 643.6,20.1 646.7,20.1 648.7,35.5 651.8,19.8 653.8,19.8 656.9,19.8 658.9,36.8 662.0,19.5 664.0,19.5" fill="none" stroke="var(--ref)" stroke-width="2" stroke-dasharray="5 4" stroke-linejoin="round" stroke-linecap="round"/><polyline points="52.0,311.6 54.0,278.4 57.1,225.9 59.1,174.9 62.2,109.0 64.2,75.4 67.3,50.9 69.3,82.0 72.4,77.4 74.4,69.5 77.5,57.1 79.5,101.2 82.6,91.4 84.6,83.5 87.7,72.6 89.7,110.1 92.8,94.0 94.8,80.3 97.9,61.3 99.9,101.1 103.0,81.5 105.0,68.2 108.1,46.4 110.1,84.4 113.2,65.8 115.2,54.5 118.3,42.9 120.3,88.3 123.4,76.2 125.4,67.3 128.5,56.8 130.5,102.4 133.6,90.0 135.6,80.4 138.7,64.7 140.7,102.9 143.8,82.6 145.8,68.5 148.9,50.5 150.9,92.8 154.0,80.6 156.0,72.1 159.1,54.9 161.1,98.0 164.2,84.5 166.2,71.9 169.3,54.1 171.3,91.8 174.4,82.4 176.4,73.7 179.5,61.9 181.5,100.5 184.6,85.9 186.6,76.0 189.7,57.7 191.7,88.5 194.8,68.5 196.8,49.6 199.9,35.5 201.9,76.5 205.0,67.4 207.0,59.1 210.1,54.3 212.1,94.1 215.2,80.1 217.2,71.8 220.3,61.8 222.3,94.3 225.4,81.8 227.4,74.8 230.5,61.3 232.5,94.5 235.6,82.2 237.6,74.6 240.7,62.4 242.7,97.8 245.8,83.6 247.8,75.3 250.9,64.2 252.9,97.2 256.0,84.4 258.0,73.5 261.1,60.8 263.1,90.8 266.2,81.9 268.2,76.4 271.3,65.0 273.3,89.7 276.4,75.1 278.4,64.6 281.5,50.9 283.5,80.3 286.6,74.0 288.6,70.9 291.7,67.4 293.7,92.0 296.8,77.1 298.8,69.3 301.9,55.7 303.9,77.7 307.0,58.8 309.0,44.8 312.1,32.4 314.1,63.6 317.2,50.2 319.2,38.3 322.3,32.7 324.3,63.3 327.4,53.4 329.4,46.0 332.5,35.7 334.5,59.3 337.6,49.1 339.6,45.0 342.7,36.3 344.7,58.2 347.8,45.4 349.8,41.1 352.9,44.3 354.9,71.2 358.0,67.4 361.1,56.0 363.1,51.2 366.2,64.3 368.2,60.4 371.3,55.2 373.3,50.2 376.4,62.4 378.4,50.8 381.5,40.7 383.5,38.2 386.6,46.3 388.6,43.4 391.7,44.3 393.7,41.3 396.8,44.7 398.8,36.4 401.9,35.7 403.9,33.4 407.0,43.6 409.0,39.5 412.1,36.6 414.1,34.7 417.2,44.2 419.2,40.3 422.3,36.2 424.3,34.7 427.4,44.7 429.4,43.6 432.5,40.3 434.5,34.7 437.6,40.4 439.6,36.8 442.7,33.8 444.7,31.6 447.8,34.3 449.8,29.1 452.9,28.2 454.9,29.5 458.0,34.4 460.0,34.6 463.1,30.6 465.1,28.0 468.2,26.0 470.2,25.6 473.3,28.0 475.3,31.3 478.4,36.8 480.4,28.7 483.5,26.7 485.5,26.0 488.6,26.6 490.6,23.3 493.7,22.9 495.7,23.1 498.8,24.7 500.8,21.8 503.9,20.2 505.9,21.3 509.0,24.8 511.0,27.6 514.1,22.4 516.1,23.5 519.2,22.0 521.2,26.4 524.3,25.2 526.3,40.5 529.4,43.3 531.4,40.6 534.5,34.2 536.5,50.8 539.6,43.2 541.6,41.4 544.7,40.0 546.7,53.8 549.8,44.2 551.8,39.1 554.9,33.6 556.9,40.9 560.0,37.0 562.0,40.2 565.1,39.9 567.1,54.9 570.2,47.7 572.2,48.4 575.3,45.5 577.3,56.8 580.4,52.7 582.4,47.7 585.5,42.5 587.5,51.2 590.6,45.6 592.6,41.6 595.7,30.8 597.7,40.2 600.8,39.6 602.8,40.4 605.9,42.5 607.9,53.4 611.0,50.0 613.0,50.5 616.1,47.3 618.1,59.7 621.2,54.6 623.2,50.0 626.3,44.5 628.3,60.0 631.4,57.6 633.4,52.7 636.5,45.8 638.5,57.9 641.6,43.4 643.6,36.2 646.7,32.5 648.7,49.0 651.8,45.8 653.8,41.5 656.9,34.3 658.9,54.5 662.0,47.2 664.0,46.1" fill="none" stroke="var(--s1)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/><polyline points="52.0,311.6 54.0,278.4 57.1,225.9 59.1,174.9 62.2,109.0 64.2,75.4 67.3,50.9 69.3,82.0 72.4,65.0 74.4,45.3 77.5,32.3 79.5,50.3 82.6,34.5 84.6,31.5 87.7,29.9 89.7,53.6 92.8,34.5 94.8,30.4 97.9,28.4 99.9,64.1 103.0,37.0 105.0,30.7 108.1,28.2 110.1,62.6 113.2,37.0 115.2,30.4 118.3,27.0 120.3,61.5 123.4,34.9 125.4,28.7 128.5,25.9 130.5,49.3 133.6,30.0 135.6,26.1 138.7,26.7 140.7,40.0 143.8,27.3 145.8,25.0 148.9,26.6 150.9,38.2 154.0,26.7 156.0,24.5 159.1,26.0 161.1,37.4 164.2,26.4 166.2,24.6 169.3,31.9 171.3,32.5 174.4,25.0 176.4,23.4 179.5,31.6 181.5,30.4 184.6,23.5 186.6,22.3 189.7,30.2 191.7,29.5 194.8,23.2 196.8,22.2 199.9,35.5 201.9,26.0 205.0,21.6 207.0,20.8 210.1,34.6 212.1,25.2 215.2,21.7 217.2,20.6 220.3,33.4 222.3,25.1 225.4,21.4 227.4,20.5 230.5,32.7 232.5,24.9 235.6,21.3 237.6,20.1 240.7,32.0 242.7,23.7 245.8,20.9 247.8,20.0 250.9,31.8 252.9,23.9 256.0,21.6 258.0,21.0 261.1,30.7 263.1,24.4 266.2,21.8 268.2,21.4 271.3,29.9 273.3,23.7 276.4,20.6 278.4,19.9 281.5,28.6 283.5,23.5 286.6,21.0 288.6,20.0 291.7,28.0 293.7,23.4 296.8,21.0 298.8,20.4 301.9,27.8 303.9,22.4 307.0,20.1 309.0,19.5 312.1,27.0 314.1,21.9 317.2,20.0 319.2,19.6 322.3,26.9 324.3,21.5 327.4,19.9 329.4,19.6 332.5,25.8 334.5,21.9 337.6,20.4 339.6,20.1 342.7,25.7 344.7,22.0 347.8,20.9 349.8,20.4 352.9,25.0 354.9,22.3 358.0,20.9 361.1,21.1 363.1,24.6 366.2,21.6 368.2,21.1 371.3,21.6 373.3,24.6 376.4,22.0 378.4,21.5 381.5,22.0 383.5,24.6 386.6,22.9 388.6,22.5 391.7,22.7 393.7,24.8 396.8,22.3 398.8,21.9 401.9,21.8 403.9,23.7 407.0,21.8 409.0,21.8 412.1,21.9 414.1,23.5 417.2,21.7 419.2,21.5 422.3,21.5 424.3,22.9 427.4,21.6 429.4,21.5 432.5,21.6 434.5,22.9 437.6,21.6 439.6,21.3 442.7,21.4 444.7,22.5 447.8,21.7 449.8,21.6 452.9,21.8 454.9,22.8 458.0,21.5 460.0,21.2 463.1,20.9 465.1,21.8 468.2,20.8 470.2,20.6 473.3,20.5 475.3,21.3 478.4,20.5 480.4,20.4 483.5,20.3 485.5,20.9 488.6,20.0 490.6,19.9 493.7,19.8 495.7,20.6 498.8,19.3 500.8,19.0 503.9,19.0 505.9,20.4 509.0,18.7 511.0,18.5 514.1,18.8 516.1,32.0 519.2,33.5 521.2,34.3 524.3,34.2 526.3,46.5 529.4,50.4 531.4,49.4 534.5,45.2 536.5,54.8 539.6,49.0 541.6,49.2 544.7,50.4 546.7,58.1 549.8,53.1 551.8,50.7 554.9,42.7 556.9,45.2 560.0,38.8 562.0,41.1 565.1,40.3 567.1,55.0 570.2,47.7 572.2,48.4 575.3,46.5 577.3,61.6 580.4,55.5 582.4,48.8 585.5,42.8 587.5,48.6 590.6,41.2 592.6,35.9 595.7,29.2 597.7,40.9 600.8,33.8 602.8,30.7 605.9,26.1 607.9,34.9 611.0,31.7 613.0,24.8 616.1,21.9 618.1,32.4 621.2,24.9 623.2,22.4 626.3,21.4 628.3,28.2 631.4,22.5 633.4,21.4 636.5,21.2 638.5,23.7 641.6,21.8 643.6,21.9 646.7,25.0 648.7,22.6 651.8,20.8 653.8,20.9 656.9,27.4 658.9,20.9 662.0,20.5 664.0,21.3" fill="none" stroke="var(--s3)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/></g>
+  <g><line x1="680" y1="36" x2="704" y2="36" stroke="var(--ref)" stroke-width="2" stroke-linecap="round" stroke-dasharray="5 4"/><text x="710" y="40" class="lgd">oracle</text><text x="710" y="55" class="lgdv">100% tracked</text><line x1="680" y1="70" x2="704" y2="70" stroke="var(--s3)" stroke-width="2" stroke-linecap="round"/><text x="710" y="74" class="lgd">predict + CV</text><text x="710" y="89" class="lgdv">90.3% tracked</text><line x1="680" y1="104" x2="704" y2="104" stroke="var(--s1)" stroke-width="2" stroke-linecap="round"/><text x="710" y="108" class="lgd">lcmv (shipped)</text><text x="710" y="123" class="lgdv">44.8% tracked</text></g>
+  <text x="358.0" y="324" text-anchor="middle" class="axl">time (s)</text>
+  <text x="14" y="154.0" text-anchor="middle" class="axl"
+        transform="rotate(-90 14 154.0)">output SINR (dB)</text>
+</svg>
+    <figcaption>One drift cell over 30 s. The shipped tracker sits several dB below the
+    achievable bound for most of the run; with the predictor the two are hard to separate.</figcaption>
+  </figure>
+
+  <div class="tw">
+  <table>
+    <caption>Full profile-A campaign, 45 cases per arm, 0 failed case-seeds. Static and on/off
+    scenarios are unchanged to the digit.</caption>
+    <thead><tr><th>Scenario</th><th>lcmv</th><th>predict + CV</th><th>Δ</th><th>passing</th></tr></thead>
+    <tbody>
+      <tr><td>STATIC</td><td class="num">98.3</td><td class="num">98.3</td><td class="num">+0.0</td><td class="pass">15 → 15</td></tr>
+      <tr><td>DRIFT</td><td class="num">55.2</td><td class="big">90.3</td><td class="num pass">+35.1</td><td class="pass">2 → 11</td></tr>
+      <tr><td>WINDOW</td><td class="num">99.2</td><td class="num">99.2</td><td class="num">−0.0</td><td class="pass">15 → 15</td></tr>
+      <tr><td><b>All scenarios</b></td><td class="num">—</td><td class="num">—</td><td class="num">—</td><td class="pass"><b>64 → 73 of 90</b></td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <div class="col">
+  <p>The zeros in the STATIC and WINDOW rows are not luck. The predictor is gated on estimated
+  angular speed, so on a non-drifting jammer it never engages — and those runs were measured
+  <b>bit-identical</b> with the feature on and off (max |ΔSINR| &lt; 1e-12). It is a strict
+  addition, not a change.</p>
+  </div>
+
+  <h3>Per-cell drift detail</h3>
+  <div class="tw">
+  <table>
+    <caption>Oracle-tracking score on the drifting-jammer column. <span class="mono">c</span> is
+    steering coherence — the array-independent difficulty coordinate. Bold marks cells at or
+    above the pass mark.</caption>
+    <thead><tr><th>Array</th><th>Position</th><th>c</th><th>grid</th><th>lcmv</th><th>predict + CV</th></tr></thead>
+    <tbody>
+      <tr><td class="lbl">patchs_with_monopoles</td><td class="lbl">sep20_th</td><td class="num">0.86</td><td class="num">1°</td><td class="num">20.2</td><td class="num pass">97.1</td></tr>
+      <tr><td class="lbl">patchs_with_monopoles</td><td class="lbl">sep45_th</td><td class="num">0.57</td><td class="num">1°</td><td class="num">48.6</td><td class="num pass">93.0</td></tr>
+      <tr><td class="lbl">patchs_with_monopoles</td><td class="lbl">sep90_th</td><td class="num">0.33</td><td class="num">1°</td><td class="num">21.4</td><td class="num pass">96.1</td></tr>
+      <tr><td class="lbl">patchs_with_monopoles</td><td class="lbl">sep135_ph</td><td class="num">0.16</td><td class="num">1°</td><td class="num">82.8</td><td class="num pass">97.6</td></tr>
+      <tr><td class="lbl">patchs_with_monopoles</td><td class="lbl">sep45_ph</td><td class="num">0.68</td><td class="num">1°</td><td class="num">49.9</td><td class="num pass">96.6</td></tr>
+      <tr><td class="lbl">spacing0.6</td><td class="lbl">sep20_th</td><td class="num">0.78</td><td class="num">1°</td><td class="num">27.7</td><td class="num pass">96.8</td></tr>
+      <tr><td class="lbl">spacing0.6</td><td class="lbl">sep45_th</td><td class="num">0.45</td><td class="num">1°</td><td class="num">32.1</td><td class="num fail">84.4</td></tr>
+      <tr><td class="lbl">spacing0.6</td><td class="lbl">sep90_th</td><td class="num">0.28</td><td class="num">1°</td><td class="num">32.2</td><td class="num pass">93.8</td></tr>
+      <tr><td class="lbl">spacing0.6</td><td class="lbl">sep135_ph</td><td class="num">0.32</td><td class="num">1°</td><td class="num">77.7</td><td class="num pass">98.2</td></tr>
+      <tr><td class="lbl">spacing0.6</td><td class="lbl">sep45_ph</td><td class="num">0.18</td><td class="num">1°</td><td class="num">95.5</td><td class="num pass">98.5</td></tr>
+      <tr><td class="lbl">ManyDipoles</td><td class="lbl">sep20_th</td><td class="num">0.92</td><td class="num">5°</td><td class="num">41.5</td><td class="num fail">62.2</td></tr>
+      <tr><td class="lbl">ManyDipoles</td><td class="lbl">sep45_th</td><td class="num">0.30</td><td class="num">5°</td><td class="num">69.3</td><td class="num fail">82.5</td></tr>
+      <tr><td class="lbl">ManyDipoles</td><td class="lbl">sep90_th</td><td class="num">0.37</td><td class="num">5°</td><td class="num">57.4</td><td class="num fail">69.8</td></tr>
+      <tr><td class="lbl">ManyDipoles</td><td class="lbl">sep135_ph</td><td class="num">0.08</td><td class="num">5°</td><td class="num">77.2</td><td class="num pass">91.7</td></tr>
+      <tr><td class="lbl">ManyDipoles</td><td class="lbl">sep45_ph</td><td class="num">0.06</td><td class="num">5°</td><td class="num">95.0</td><td class="num pass">96.8</td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <div class="col">
+  <p>Every cell improves; none regresses. The four that remain below the mark share a
+  cause — see <b>F7</b>: three of them are on the array with the 5° export grid, and the fourth
+  is the highest-element-count array, where the null is narrowest and pointing precision matters
+  most. The limit is angular resolution, not the estimator.</p>
+
+  <h3>What it costs</h3>
+  <div class="tw">
+  <table>
+    <caption>Secondary metrics on the drift column, averaged over cells.</caption>
+    <thead><tr><th>Metric</th><th>lcmv</th><th>predict + CV</th><th>Change</th></tr></thead>
+    <tbody>
+      <tr><td>Oracle gap, steady state</td><td class="num">3.19 dB</td><td class="num">0.70 dB</td><td class="num pass">−2.49 dB</td></tr>
+      <tr><td>Steady-state SINR</td><td class="num">22.22 dB</td><td class="num">24.71 dB</td><td class="num pass">+2.49 dB</td></tr>
+      <tr><td>Beam integrity (directivity loss)</td><td class="num">−1.03 dB</td><td class="num">−1.15 dB</td><td class="num">−0.12 dB</td></tr>
+      <tr><td>Availability</td><td class="num">98.18%</td><td class="num">98.23%</td><td class="num">+0.05 pp</td></tr>
+      <tr><td>Compute, per step</td><td class="num">1×</td><td class="num">4.6 – 126×</td><td class="num fail">see R4</td></tr>
+    </tbody>
+  </table>
+  </div>
+  <p>2.5 dB of steady-state SINR for 0.12 dB of beam integrity is a good trade. The compute cost
+  is not: MUSIC scans the full far-field grid every step, which is 126× the reactive tracker on
+  the 16-element array's 1° grid.</p>
+  </div>
+</section>
+
+<section>
+  <div class="col">
+    <h2>Result 4 — the constraint that actually matters</h2>
+    <p>Until this phase the simulator computed the desired-signal power from the <em>same</em>
+    steering vector it handed the beamformer, so a calibration error could never appear. The
+    milestone plan called this "the largest untested failure mode, and structurally untestable
+    today." This campaign added an opt-in path that lets the engine propagate the true element
+    patterns while the algorithm is handed assumed ones.</p>
+  </div>
+
+  <figure>
+    <svg viewBox="0 0 640 310" class="chart" role="img"
+  aria-label="Oracle-tracking score falls steeply as per-element calibration phase error grows; both algorithms are at the floor by three degrees RMS.">
+  <g><line x1="54" y1="262.0" x2="610" y2="262.0" stroke="var(--grid)" stroke-width="1"/><text x="45" y="266.0" text-anchor="end" class="tick">0</text><line x1="54" y1="203.0" x2="610" y2="203.0" stroke="var(--grid)" stroke-width="1"/><text x="45" y="207.0" text-anchor="end" class="tick">25</text><line x1="54" y1="144.0" x2="610" y2="144.0" stroke="var(--grid)" stroke-width="1"/><text x="45" y="148.0" text-anchor="end" class="tick">50</text><line x1="54" y1="85.0" x2="610" y2="85.0" stroke="var(--grid)" stroke-width="1"/><text x="45" y="89.0" text-anchor="end" class="tick">75</text><line x1="54" y1="26.0" x2="610" y2="26.0" stroke="var(--grid)" stroke-width="1"/><text x="45" y="30.0" text-anchor="end" class="tick">100</text><text x="54.0" y="282" text-anchor="middle" class="tick">0</text><text x="165.2" y="282" text-anchor="middle" class="tick">1</text><text x="276.4" y="282" text-anchor="middle" class="tick">2</text><text x="387.6" y="282" text-anchor="middle" class="tick">3</text><text x="498.8" y="282" text-anchor="middle" class="tick">4</text><text x="610.0" y="282" text-anchor="middle" class="tick">5</text></g>
+  <g><polygon points="54.0,48.9 109.6,47.2 165.2,49.6 220.8,59.0 276.4,80.8 387.6,178.7 610.0,251.6 610.0,261.3 387.6,261.3 276.4,259.4 220.8,250.9 165.2,168.3 109.6,61.9 54.0,48.9" fill="var(--s3)" opacity="0.12"/><polyline points="54.0,156.3 109.6,159.8 165.2,173.7 220.8,203.9 276.4,237.2 387.6,257.8 610.0,261.3" fill="none" stroke="var(--s1)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/><circle cx="54.0" cy="156.3" r="4.5" fill="var(--s1)" stroke="var(--surface)" stroke-width="2"/><circle cx="109.6" cy="159.8" r="4.5" fill="var(--s1)" stroke="var(--surface)" stroke-width="2"/><circle cx="165.2" cy="173.7" r="4.5" fill="var(--s1)" stroke="var(--surface)" stroke-width="2"/><circle cx="220.8" cy="203.9" r="4.5" fill="var(--s1)" stroke="var(--surface)" stroke-width="2"/><circle cx="276.4" cy="237.2" r="4.5" fill="var(--s1)" stroke="var(--surface)" stroke-width="2"/><circle cx="387.6" cy="257.8" r="4.5" fill="var(--s1)" stroke="var(--surface)" stroke-width="2"/><circle cx="610.0" cy="261.3" r="4.5" fill="var(--s1)" stroke="var(--surface)" stroke-width="2"/><polyline points="54.0,48.9 109.6,51.7 165.2,60.5 220.8,90.0 276.4,155.3 387.6,246.0 610.0,260.6" fill="none" stroke="var(--s3)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/><circle cx="54.0" cy="48.9" r="4.5" fill="var(--s3)" stroke="var(--surface)" stroke-width="2"/><circle cx="109.6" cy="51.7" r="4.5" fill="var(--s3)" stroke="var(--surface)" stroke-width="2"/><circle cx="165.2" cy="60.5" r="4.5" fill="var(--s3)" stroke="var(--surface)" stroke-width="2"/><circle cx="220.8" cy="90.0" r="4.5" fill="var(--s3)" stroke="var(--surface)" stroke-width="2"/><circle cx="276.4" cy="155.3" r="4.5" fill="var(--s3)" stroke="var(--surface)" stroke-width="2"/><circle cx="387.6" cy="246.0" r="4.5" fill="var(--s3)" stroke="var(--surface)" stroke-width="2"/><circle cx="610.0" cy="260.6" r="4.5" fill="var(--s3)" stroke="var(--surface)" stroke-width="2"/><line x1="165.2" y1="262.0" x2="165.2" y2="26.0" stroke="var(--ref)" stroke-width="1" stroke-dasharray="3 3"/><text x="172.2" y="33.1" class="ann">usable limit ≈ 1° RMS</text></g>
+  <line x1="398.7" y1="92.1" x2="437.6" y2="92.1" stroke="var(--s3)" stroke-width="2" stroke-linecap="round"/><text x="448.8" y="96.1" class="lgd">predict + CV</text><line x1="398.7" y1="120.4" x2="437.6" y2="120.4" stroke="var(--s1)" stroke-width="2" stroke-linecap="round"/><text x="448.8" y="124.4" class="lgd">lcmv</text>
+  <text x="332.0" y="304" text-anchor="middle" class="axl">per-element calibration phase error (deg RMS)</text>
+  <text x="14" y="144.0" text-anchor="middle" class="axl" transform="rotate(-90 14 144.0)">oracle-tracking score (%)</text>
+</svg>
+    <figcaption>Per-element calibration error <span class="mono">g = exp(jε)</span>, 12 random
+    error draws per level, median with the p10–p90 band. Both algorithms fall steeply; by 3° RMS
+    both are at the floor. The predictor keeps a 2–4× advantage throughout, so a hard null at an
+    assumed steering vector is <em>not</em> more fragile than a covariance-derived one.</figcaption>
+  </figure>
+
+  <div class="col">
+    <p>This is the classical MPDR signal-cancellation sensitivity: the snapshots contain the
+    desired signal, so a mis-specified constraint direction causes the beamformer to null its
+    own signal. The practical readings:</p>
+    <ul class="tight">
+      <li><b>Usable region is below ~1° RMS</b> per-element phase error.</li>
+      <li><b>The spread is enormous.</b> At 2° the p10–p90 range is 1.1–76.8 — one array build
+      could be fine and the next unusable. Any calibration statement needs a distribution, not a
+      point.</li>
+      <li>This exposure is <b>unchanged</b> by the CV predictor. It is a larger risk to fielding
+      than the gap this campaign closed.</li>
+    </ul>
+    <div class="note">
+      <b>Not a calibration test:</b> <span class="mono">data/spacing0.6_disturbed3</span> is a
+      file-for-file counterpart to <span class="mono">data/spacing0.6</span> and was the intended
+      mismatch pair, but the two arrays differ grossly (steering coherence median 0.40, min 0.15)
+      and every algorithm sits at 0.2%. It is a "wrong array" test, not a "mis-calibrated array"
+      test. The parametric per-element model is the right instrument.
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="col">
+    <h2>Result 5 — the stress axes</h2>
+    <p>A second campaign perturbs one axis at a time so a failure is attributable: near-guard,
+    near-endfire, a grating-lobe hunt, low signal, fast drift, and multi-cycle on/off. 46 cases,
+    414 runs, 0 failed case-seeds — and the first time any of these has been run with the
+    predictor enabled.</p>
+    <p><b>The headline is a negative result, and it is the one worth having:</b> across all 46
+    cells the predictor is <b>never worse</b> than the baseline — zero cells regress by more
+    than half a point. Mean 87.3 → 91.3, cells passing 34 → 35 of 46.</p>
+    <h4>Where it pays, and where it runs out</h4>
+    <p>Nominal drift is 2°/s. These push to 10 and 20°/s:</p>
+  </div>
+  <div class="tw">
+  <table>
+    <caption>Fast-drift stress. The predictor recovers most of a total collapse — but at 5–10×
+    nominal it no longer reaches the pass mark, which bounds the operating envelope.</caption>
+    <thead><tr><th>Scenario</th><th>Array</th><th>lcmv</th><th>predict + CV</th><th>Δ</th></tr></thead>
+    <tbody>
+      <tr><td>DRIFT 10°/s</td><td class="lbl">patchs_with_monopoles</td><td class="num">1.9</td><td class="num">62.7</td><td class="num pass">+60.8</td></tr>
+      <tr><td>DRIFT 10°/s</td><td class="lbl">spacing0.6</td><td class="num">44.8</td><td class="num">87.6</td><td class="num pass">+42.7</td></tr>
+      <tr><td>DRIFT 10°/s</td><td class="lbl">ManyDipoles</td><td class="num">89.2</td><td class="num pass">90.5</td><td class="num">+1.3</td></tr>
+      <tr><td>DRIFT 20°/s</td><td class="lbl">patchs_with_monopoles</td><td class="num">0.8</td><td class="num">38.9</td><td class="num pass">+38.1</td></tr>
+      <tr><td>DRIFT 20°/s</td><td class="lbl">spacing0.6</td><td class="num">32.3</td><td class="num">74.4</td><td class="num pass">+42.1</td></tr>
+      <tr><td>DRIFT 20°/s</td><td class="lbl">ManyDipoles</td><td class="num">80.1</td><td class="num">81.2</td><td class="num">+1.1</td></tr>
+    </tbody>
+  </table>
+  </div>
+  <div class="col">
+    <p>At 10–20°/s the reactive tracker essentially stops working — 0.8% to 1.9% on the
+    six-element array. The predictor lifts that enormously without reaching 90. So it
+    <b>extends the usable drift envelope rather than removing the limit</b>, and the honest
+    statement is that the system is qualified at 2°/s, degraded but functional near 10°/s, and
+    not qualified at 20°/s.</p>
+    <div class="note">
+      <b>One stress case fails for both algorithms, and it is a configuration problem rather
+      than an algorithm one.</b> <span class="mono">near_guard</span> on ManyDipoles scores
+      <b>0.1%</b> for <em>both</em> — the jammer sits 10° from the target at steering coherence
+      0.9948, effectively inside the main beam. <span class="mono">guard_deg = 5</span> is
+      derived from that cut's 15° HPBW and is roughly 2× too optimistic. The predictor correctly
+      does not mask this.
+    </div>
+    <p>Everything else is flat by design: the static, endfire, low-signal and grating-lobe cases
+    move by 0.0 pp, because the speed gate keeps the predictor out of them. The grating-lobe hunt
+    across 10–70° separation scores 89–99 throughout with no coverage hole, re-confirming that
+    closed hypothesis under the new algorithm.</p>
+  </div>
+</section>
+
+<section>
+  <div class="col">
+    <h2>Findings</h2>
+    <p>Seven findings, referenced by ID from the session log and the milestone plan.</p>
+  </div>
+
+  <div class="finding">
+    <span class="fid">F1</span><span class="tag new">new</span>
+    <h3>ManyDipoles is exactly θ-mirror degenerate</h3>
+    <div class="col">
+    <p><span class="mono">e(θ,φ) ≡ e(180−θ,φ)</span> — steering coherence 1.0000, whole-stack
+    relative difference 2.8e-6. This is the textbook up/down ambiguity of a planar array in the
+    z=0 plane with a common phase centre and no geometric phase re-added; the other two arrays
+    have ground planes that break it (mirror coherence 0.85→0.08 and 0.87→0.53 over θ = 110→170).</p>
+    <p><b>It is benign for nulling</b> — identical steering vectors mean a null at the mirror
+    <em>is</em> the null at truth — <b>but fatal for tracking</b>, because the MUSIC peak hops
+    branches and a naive filter differences the hops into a phantom velocity.</p>
+    </div>
+  </div>
+
+  <div class="finding">
+    <span class="fid">F2</span><span class="tag corr">corrects a retraction</span>
+    <h3>The 2026-09-06 front/back retraction measured the wrong angle pair</h3>
+    <div class="col">
+    <p>That note retracted a front/back-ambiguity diagnosis on the grounds that ManyDipoles has
+    the <em>lowest</em> antipodal coherence of the three arrays (0.013). That is true — but the
+    antipodal pair is <span class="mono">(180−θ, φ+180)</span>, and the actual degeneracy is
+    <span class="mono">(180−θ, φ)</span>, a different pair. The ambiguity was real; the
+    measurement that dismissed it was aimed at the wrong angles.</p>
+    </div>
+  </div>
+
+  <div class="finding">
+    <span class="fid">F3</span>
+    <h3>The drift gap is angle lag of exactly one λ-horizon</h3>
+    <div class="col">
+    <p>A truth-steered null delayed 10 steps reproduces <span class="mono">lcmv</span> (49.8% /
+    3.88 dB vs 44.8% / 4.00 dB); 10 = 1/(1−λ). Perfect current-angle knowledge gives 94.8%. The
+    covariance contributes almost nothing once the angle is known — the R = I and
+    R = <span class="mono">R̂</span> variants score within 0.6 pp of each other.</p>
+    </div>
+  </div>
+
+  <div class="finding">
+    <span class="fid">F4</span>
+    <h3>MUSIC inherits the covariance lag, which is why the lead is 14</h3>
+    <div class="col">
+    <p>The raw MUSIC angle best matches truth delayed exactly 10 steps. The lead is therefore
+    derived — 10 + 4 — not fitted. The optimum is genuinely drift-rate dependent (10 at 1°/s,
+    16–18 at 4°/s), so a single fixed value is a compromise; 14 has the best mean over 1/2/4°/s
+    and is never worse than <span class="mono">lcmv</span> at any rate tested.</p>
+    </div>
+  </div>
+
+  <div class="finding">
+    <span class="fid">F5</span><span class="tag new">new capability</span>
+    <h3>Calibration mismatch is the dominant deliverability risk</h3>
+    <div class="col">
+    <p>Usable below ~1° RMS phase error; at the floor by 3°. Verified sound: passing the true
+    patterns as the assumed ones reproduces the unmodified run to max |ΔSINR| = 0.00e+00.</p>
+    </div>
+  </div>
+
+  <div class="finding">
+    <span class="fid">F6</span>
+    <h3>The mirror fold auto-detects and rescues the DoA</h3>
+    <div class="col">
+    <p>The filter measures each array's own mirror coherence once at init — 1.0000 on
+    ManyDipoles (fold on), 0.0505 on patchs (fold off) — with no configuration. On ManyDipoles
+    the MUSIC DoA error against truth is <b>median 139° raw, 1.5° modulo the fold</b>. MUSIC was
+    accurate all along; it was reporting the mirror branch. This also closes the open P8 item
+    "DoA front-end untested on real element patterns."</p>
+    </div>
+  </div>
+
+  <div class="finding">
+    <span class="fid">F7</span>
+    <h3>The residual failures are grid-limited, not algorithm-limited</h3>
+    <div class="col">
+    <p>On <span class="mono">spacing0.6/sep45_th</span> the DoA is perfect (median error 1.00°,
+    presence 100%) and the lead sweep is flat and still climbing at L=24 — yet the cell scores
+    84.4% against a truth-steered <b>ceiling of 98.3%</b>. Fourteen points sit between a
+    perfectly-steered null and one steered by a 1°-quantized angle. Three of the four other
+    failures are on the 5°-grid array. The binding limit is angular resolution.</p>
+    </div>
+  </div>
+
+  <div class="finding">
+    <span class="fid">P9</span>
+    <h3>Settled: adaptive and fixed diagonal loading are indistinguishable here</h3>
+    <div class="col">
+    <p>The open question from Phase P9, arbitrated on the headline metric: the paired difference
+    is <b>+0.00 pp on all 90 cells</b> — exactly zero, every cell — and identically zero
+    again across all 90 cells of the with-CV comparison. At this operating
+    point <span class="mono">loading_factor_db: 0</span> is a no-op, consistent with the config's
+    own note that it reproduces the tuned ~10 dB in this regime. The choice can be made on
+    simplicity; it should still be re-read at the high-σ_s corner P9 was built for, which this
+    profile does not visit.</p>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="col">
+    <h2>What to do to make this deliverable</h2>
+    <p>Ordered by what most limits fielding, not by effort.</p>
+  </div>
+  <ol class="recs">
+    <li>
+      <div>
+        <h4>Put a calibration tolerance in the specification</h4>
+        <p>The stack needs better than ~1° RMS per-element phase calibration, and degrades with
+        enormous variance beyond it. This belongs in the interface contract with whoever builds
+        and calibrates the array — today it is an undocumented assumption. Then extend the sweep
+        to the other two arrays and to amplitude corners; only one array and one drift rate were
+        measured.</p>
+        <p class="effort">Blocking · spec + ~1 day of campaign</p>
+      </div>
+    </li>
+    <li>
+      <div>
+        <h4>Add robustness to steering error, and measure it on the same instrument</h4>
+        <p>The mismatch path built this phase makes the standard mitigations testable for the
+        first time: worst-case-optimisation robust MVDR, or a diagonal-loading schedule tied to
+        assumed steering uncertainty. This is the single highest-value algorithm work remaining,
+        and it is worth more than further drift tuning.</p>
+        <p class="effort">High value · moderate</p>
+      </div>
+    </li>
+    <li>
+      <div>
+        <h4>Interpolate the MUSIC peak sub-grid</h4>
+        <p>F7 shows the residual drift failures are angular-resolution limited. Parabolic
+        interpolation on the pseudospectrum should recover much of the 14-point gap on high-DoF
+        arrays — and the technique is already in-tree, used for the FFT period estimate in the
+        same file. Expected to be nearly free.</p>
+        <p class="effort">Cheap · likely closes 3–4 of the 4 remaining cells</p>
+      </div>
+    </li>
+    <li>
+      <div>
+        <h4>Make the predictor affordable</h4>
+        <p>MUSIC over the full far-field grid is 42×/126×/4.6× the reactive tracker. For a real-time
+        build this needs a coarse-to-fine search or a gated update rate — striding the grid is the
+        crude version and costs DoA accuracy (1.00° → 2.30° at stride 8), which F7 says is exactly
+        the wrong thing to spend. Decide this before any hardware targeting.</p>
+        <p class="effort">Blocking for real-time · moderate</p>
+      </div>
+    </li>
+    <li>
+      <div>
+        <h4>Declare the array's ambiguity explicitly</h4>
+        <p>A planar array with no geometric phase cannot tell up from down. That is a property of
+        the geometry, not a bug, but it should be a declared field in the array configuration
+        rather than something auto-detected from the pattern data at runtime — auto-detection is
+        the right safety net, not the right contract.</p>
+        <p class="effort">Cheap · reduces a whole class of confusion</p>
+      </div>
+    </li>
+    <li>
+      <div>
+        <h4>Retire availability as a headline number</h4>
+        <p>It reported 98.2% on cells scoring 20% against the achievable bound, and moved 0.05 pp
+        for a 35-point real improvement. Keep it as a diagnostic; report oracle-tracking score.</p>
+        <p class="effort">Free · documentation</p>
+      </div>
+    </li>
+    <li>
+      <div>
+        <h4>Close the remaining test debt before claiming coverage</h4>
+        <p>The Tier B stress axes are now done with the predictor on (Result 5). Still not run
+        with it enabled: the amplitude sweep. Still untested anywhere: multiple simultaneous
+        jammers and polarization mismatch — both outside the current scope, both plausible in
+        the field. And <span class="mono">guard_deg</span> needs re-deriving per array: 5° is
+        about 2× too optimistic on ManyDipoles.</p>
+        <p class="effort">Reduced · amplitude sweep + a guard_deg re-derivation</p>
+      </div>
+    </li>
+  </ol>
+</section>
+
+<section>
+  <div class="col">
+    <h2>Reproducing this</h2>
+    <p>The CV predictor ships <b>disabled</b>: the <span class="mono">adapt.predict.cv</span>
+    block in <span class="mono">config.yaml</span> is commented out, and with it absent the code
+    path is byte-identical to before. Uncomment it to enable.</p>
+  </div>
+  <div class="tw">
+  <table>
+    <caption>Code changed or added. No <span class="mono">sim_</span> or
+    <span class="mono">agent_</span> module was modified, so every P1–P11 gate stands unchanged.</caption>
+    <thead><tr><th>File</th><th style="text-align:left">Change</th></tr></thead>
+    <tbody>
+      <tr><td class="lbl">antijam_utils/adapt_cv_init.m</td><td style="text-align:left">New — CV filter state, mirror-fold detection</td></tr>
+      <tr><td class="lbl">antijam_utils/adapt_cv_update.m</td><td style="text-align:left">New — predict / fold / gate / update / lead</td></tr>
+      <tr><td class="lbl">antijam_utils/adapt_predict_update.m</td><td style="text-align:left">One new branch, gated on speed</td></tr>
+      <tr><td class="lbl">antijam_utils/adapt_predict_init.m</td><td style="text-align:left">Optional CV state construction</td></tr>
+      <tr><td class="lbl">antijam_utils/closed_loop_run.m</td><td style="text-align:left">Optional <span class="mono">assumed</span> patterns argument</td></tr>
+      <tr><td class="lbl">scripts/run_acceptance_grid_script.m</td><td style="text-align:left"><span class="mono">GRID_OVERRIDE</span> hook, whitelisted</td></tr>
+      <tr><td class="lbl">scripts/run_mode_c_campaign_script.m</td><td style="text-align:left">New — drives the grid once per arm</td></tr>
+      <tr><td class="lbl">tests/test_antijam_cv.m</td><td style="text-align:left">New — 6 gates, all passing</td></tr>
+      <tr><td class="lbl">config.yaml</td><td style="text-align:left">The <span class="mono">cv</span> block, commented out</td></tr>
+    </tbody>
+  </table>
+  </div>
+  <div class="col">
+  <p>Anti-jam gates stand at <b>53 of 53</b>. One unrelated repository test fails —
+  <span class="mono">test_metrics/test_evaluate_metrics_matches_python</span>, a pre-existing
+  MATLAB-versus-Python discrepancy on phi-wrap null windows in
+  <span class="mono">matlab_utils/</span> — and was failing before this work began.</p>
+  <p style="color:var(--ink3);font-size:.9rem">All four campaign arms are complete at 45 cases
+  each — 1,620 closed-loop runs, 0 failed case-seeds. The CV gain is identical under both
+  loading modes (DRIFT +35.1 pp, 2 &rarr; 11 passing, either way), so the fix is independent of
+  the loading question. The Tier B stress campaign is complete too — a further 46 cases and
+  414 runs, 0 failed case-seeds.</p>
+  </div>
+</section>
+
+</div>
