@@ -57,6 +57,15 @@ k = state.k;
 X = obs.snapshots;
 R_batch = (X * X') / size(X, 2);
 state.R_hat = state.lambda * state.R_hat + (1 - state.lambda) * R_batch;
+% [O] Second, SHORT-memory covariance used only for presence detection. The
+% beamformer wants a long memory (low variance); the on/off detector wants a
+% short one (fast transitions). One lambda cannot serve both -- measured: with
+% the single long-lambda estimate, presence saturates at 100% for toggle
+% periods <= 5 s because R_hat still holds jammer energy through the whole OFF
+% phase. This estimate is never used to form weights.
+if state.onoff_enabled
+    state.R_fast = state.fast_lambda * state.R_fast + (1 - state.fast_lambda) * R_batch;
+end
 
 % [P9] Data-driven loading (opt-in — see adapt_tracking_init.m/
 % adapt_tracking_update.m for the full geometric-mean rationale; duplicated
@@ -83,8 +92,42 @@ end
 doa = adapt_music_doa(state.R_hat, state.E1, state.E2, ...
     state.theta_deg, state.phi_deg, state.doa_cfg);
 
+% [O] If this aperture cannot support MUSIC at all (n_el <= 2*n_comp), there is
+% no DoA and no prediction to be had. Degrade to the reactive MPDR beamformer --
+% i.e. behave exactly like `lcmv` -- rather than failing the run. This is what
+% lets `predict` be handed ANY array without the caller pre-screening it.
+if ~doa.feasible
+    w_target = adapt_lcmv_null(state.R_hat, state.e_s, [], state.loading);
+    w = smooth_weights(state.w, w_target, state.mu);
+    state.w = w;
+    state.last = struct('theta_j_deg', NaN, 'phi_j_deg', NaN, ...
+        'present', false, 'predicted_on', false, 'period_est', NaN, ...
+        'cv_valid', false, 'cv_theta_deg', NaN, 'cv_phi_deg', NaN, ...
+        'cv_speed_deg_s', NaN);
+    return
+end
+
+% [O] Presence from the FAST covariance. The DoA (angle) still comes from the
+% long-memory R_hat above, which is the right trade: the angle wants averaging,
+% the on/off edge wants immediacy.
+if state.onoff_enabled
+    doa.present = presence_from_covariance(state.R_fast, size(state.e_s, 2), ...
+        state.n_el, state.doa_cfg.presence_gap_db);
+    if ~doa.present
+        doa.theta_j_deg = NaN;
+        doa.phi_j_deg   = NaN;
+    end
+end
+
 % ── 3. Update presence history + last-known jammer direction ───────
 prev_present = ~isempty(state.presence) && state.presence(end) > 0;
+% [O] Elapsed absence, used by the release gate. Counted from the presence
+% indicator the algorithm actually has, never from the scenario.
+if doa.present
+    state.steps_absent = 0;
+else
+    state.steps_absent = state.steps_absent + 1;
+end
 state.presence(end + 1) = double(doa.present);
 if doa.present && ~prev_present
     state.last_on_k = k;                          % 0 -> 1 turn-on this step
@@ -115,7 +158,25 @@ predicted_on = doa.present;
 if ~doa.present && trusted && ~isnan(state.last_on_k)
     ph = mod(k - state.last_on_k, state.period_est);   % steps since last on-start
     steps_to_next = state.period_est - ph;             % steps to next on-start
-    predicted_on = steps_to_next <= state.lead_steps;
+    % [O] Lead scaled to the DETECTED period, not a fixed 6 steps. A constant
+    % lead is a shrinking fraction of a lengthening cycle: at a 40 s period,
+    % 6 steps (0.3 s) pre-nulls for 0.75% of the OFF window, which is why the
+    % branch measured a <= 1.3% firing rate. lead_frac expresses it as a
+    % fraction of the period instead, floored at the configured lead_steps so
+    % the fast end never gets a shorter lead than before.
+    lead = state.lead_steps;
+    if state.onoff_enabled
+        % ...and CAPPED, because the useful lead is bounded by how long the
+        % covariance takes to re-converge after the jammer returns, not by the
+        % cycle length. Pre-nulling earlier than that constrains the beam while
+        % there is nothing to null, which costs gain during the OFF window.
+        % Measured without the cap: +34 pp at a 5 s period but -2.5 pp at 40 s,
+        % where the reactive path was already near its ceiling. The cap is
+        % expressed in covariance horizons (1/(1-lambda) steps).
+        lead = max(state.lead_steps, ...
+            min(state.lead_frac * state.period_est, state.lead_cap_steps));
+    end
+    predicted_on = steps_to_next <= lead;
 end
 
 % ── 6. Choose the null constraint and recompute the weights ────────
@@ -157,6 +218,21 @@ elseif predicted_on && ~isnan(state.last_doa.idx)
     % (identity) — the hard constraint forms the null before any energy is back.
     e_null = steer_col(state, state.last_doa.idx);
     w_target = adapt_lcmv_null(eye(state.n_el), state.e_s, e_null, state.loading);
+elseif state.onoff_enabled && ~release_is_worth_it(state)
+    % [O] Jammer absent, but the OFF window is too SHORT to be worth releasing
+    % the null for. Releasing restores full quiescent gain, which is the whole
+    % point -- but the null then has to be re-acquired at the next turn-on, and
+    % that costs one covariance horizon of degraded SINR. When OFF is only a few
+    % horizons long, the re-acquisition cost outweighs the gain benefit.
+    %
+    % This was measured the hard way: with presence saturated at ~100% (the
+    % pre-repair behaviour) `predict` never reached the release branch at all,
+    % so it silently behaved as `lcmv`. Repairing presence exposed the release
+    % policy for the first time, and at a 4 s toggle period it cost 3-9 pp on
+    % cells the reactive path was already handling -- a regression that was
+    % invariant to both fast_lambda and lead_frac, which is what pointed here
+    % rather than at the detector or the lead.
+    w_target = adapt_lcmv_null(state.R_hat, state.e_s, [], state.loading);
 else
     % Jammer absent and no imminent return: restore the quiescent full-gain beam.
     w_target = adapt_lcmv_null(eye(state.n_el), state.e_s, [], state.loading);
@@ -181,6 +257,49 @@ e = state.E1(:, idx);
 if ~isempty(state.E2)
     e = [e, state.E2(:, idx)];
 end
+end
+
+
+function ok = release_is_worth_it(state)
+% Should the null be dropped, given how long the jammer has ACTUALLY been away?
+%
+%   Releasing restores full quiescent gain, which is the point of detecting OFF
+%   at all -- but the null then has to be re-acquired at the next turn-on, and
+%   that costs about one covariance horizon of degraded SINR. For a brief gap
+%   the re-acquisition costs more than the gain buys.
+%
+%   This is deliberately CAUSAL and learning-free: it counts the steps the
+%   jammer has been absent so far, rather than reasoning from a detected
+%   period. An earlier version gated on period_est * (1 - duty_est) and was
+%   useless, because `min_periods` = 3 cycles of learning consumes most of a
+%   short run -- the damage is done long before a period exists to reason
+%   about. Elapsed absence is known from the first step.
+if state.release_min_horizons <= 0
+    ok = true;                       % gate disabled: always release
+    return
+end
+need = state.release_min_horizons / max(1 - state.lambda, eps);
+ok = state.steps_absent >= need;
+end
+
+
+function present = presence_from_covariance(R, n_comp, n_el, gap_db_threshold)
+% PRESENCE_FROM_COVARIANCE  Jammer-present flag from a covariance eigengap.
+%   Same statistic adapt_music_doa uses, evaluated on whichever covariance is
+%   handed in, and WITHOUT the pseudospectrum scan -- so it costs one
+%   eigendecomposition rather than a full grid sweep.
+n_sig = 2 * n_comp;
+if n_sig >= n_el
+    present = false;
+    return
+end
+lam = sort(real(eig((R + R') / 2)), 'descend');
+noise_floor = mean(lam((n_sig + 1):n_el));
+if ~isfinite(noise_floor) || noise_floor <= 0
+    present = false;
+    return
+end
+present = 10 * log10(lam(n_comp + 1) / noise_floor) >= gap_db_threshold;
 end
 
 

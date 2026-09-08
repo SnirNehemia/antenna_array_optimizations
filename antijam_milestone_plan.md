@@ -1007,6 +1007,100 @@ derivation; and the full gate suite still passes.
 
 ---
 
+### Phase O — Stationary on/off jammer, every array, every target
+
+**Status:** in-progress (opened 2026-09-07; campaign complete 2026-09-08, repair
+opt-in and NOT recommended as a default yet — see the regression below)
+
+**Motivation.** The customer asked to focus on the stationary on/off jammer and to
+verify the stack works on *any* array it is handed, getting as close as possible to
+each array's own potential. Both halves turned out to be untested: the anticipatory
+on/off algorithm was never firing, and two of the seven exported arrays crashed the
+stack outright.
+
+**Scope.** All 7 arrays in `data/`, 5 target directions, jammer separation set as a
+multiple of a DERIVED guard, 3 toggle periods (4/10/25 s), duty 0.5, 3 seeds,
+{oracle, lcmv, predict}. 198 testable cases × 2 arms = 1,782 closed-loop runs,
+0 failed case-seeds.
+
+**Two axes swept that no previous campaign varied:**
+- *Target direction.* Quiescent directivity toward a target swings ~18 dB and HPBW
+  spans 24-120 deg across (array, target). On ManyDipoles the incumbent (90, 260) is
+  the mirror-symmetry plane — that array's most favourable target.
+- *Separation in units of the array's own beam*, so the same numbers mean the same
+  physical difficulty everywhere.
+
+**`guard_deg = 5` is wrong on every array.** Derived per (array, target) it spans
+**16-72.5 deg**. New `kpi_array_profile` returns gain, beamwidth, derived guard,
+mirror coherence and MUSIC feasibility. It also refuses cells that are not real
+tests: **11 of 35 (array, target) pairs**, each with a reason (no gain, or a main
+beam covering the sphere). All five `Dipole` targets are refused — correct, a
+1-element array has no spatial DoF.
+
+**TWO DEFECTS made the stack unusable on small apertures (now fixed).**
+`Dipole` (1 el) and `patch_back2back` (2 el, dual-pol) previously threw on BOTH
+`lcmv` and `predict`: the opt-in P9 loading precondition aborted initialization, and
+MUSIC's hardcoded `n_sig = 2*n_comp` threw. Both now degrade with a warning.
+`Dipole` scores **100.0** (SINR 5.92 = oracle 5.92) — with one element the quiescent
+beam IS the optimum, and the metric correctly reports the array reached its
+potential. P9's loading was measured at +0.00 pp on all 90 cells of the P12b
+campaign, so it bought nothing anywhere and cost two arrays entirely.
+
+**THE ON/OFF ALGORITHM WAS NEVER RUNNING.** Its anticipatory branch fired on **at
+most 1.3% of steps**, and never at all outside a 10-15 s band. Two independent
+causes, both arithmetic:
+- *Period >= 20 s:* `buffer_len` 1024 steps = 51.2 s with `min_periods` = 3 means a
+  period above ~17 s can never be trusted.
+- *Period <= 5 s:* presence saturates at 100%. The covariance horizon is 0.5 s but
+  the OFF phase is 1-2.5 s, so the eigengap never collapses. **The presence signal
+  the periodogram consumes is itself low-pass filtered by the beamformer's own
+  lambda.** One forgetting factor was serving two jobs with opposite requirements.
+
+**Repair** (opt-in `adapt.predict.onoff`): a second short-memory covariance for
+presence only, a window sized from `max_period_s`, and a lead scaled to the detected
+period and capped at a few covariance horizons. Mechanism, over 198 cases —
+presence error vs the true duty: 0.455/0.321/0.138 -> **0.127/0.060/0.033** at
+T = 4/10/25 s; pre-null firing 0.3-1.0% -> 1.3-4.6%.
+
+**Outcome is MIXED and the repair is NOT recommended as a default yet:**
+
+| array | potential | lcmv | predict | predict+repair | delta |
+|---|---|---|---|---|---|
+| spacing0.6_disturbed3 | 30.2 dB | 56.6 | 60.4 | **71.2** | +10.8 |
+| spacing0.6 | 31.3 dB | 56.9 | 60.7 | **70.3** | +9.6 |
+| Monopoles | 18.4 dB | 83.6 | 84.0 | **88.5** | +4.5 |
+| patchs_with_monopoles | 26.5 dB | 87.8 | 87.9 | 87.8 | -0.1 |
+| patch_back2back | 8.1 dB | 87.2 | 87.2 | 87.2 | 0.0 |
+| **ManyDipoles** | 20.8 dB | 83.3 | 83.0 | **79.7** | **-3.3** |
+
+**The regression is a RELEASE-POLICY finding.** All 27 regressing cells are at the
+4 s period. Two hypotheses were tested and BOTH refuted by measurement — shortening
+`fast_lambda` improved presence error 0.30 -> 0.09 and cutting `lead_frac` halved
+the firing rate, and in both cases the score stayed at **exactly 80.1**. The real
+cause: with presence saturated, `predict` never reached its "jammer absent" branch
+and silently behaved as `lcmv`. Fixing presence exposed that branch, which
+**releases the null and returns to the quiescent beam** during OFF; at a 4 s period
+re-acquisition costs more than the gain buys (recovery 5.0 -> 9.2 steps).
+
+A causal release gate (release only after N covariance horizons of measured absence)
+removes every regression cleanly — the worst ManyDipoles cell goes 66.4 -> 93.5 —
+but costs the wins, a hard 10 s cell falling 59.8 -> 39.8. Structural: during OFF the
+oracle sits at full quiescent gain, so every held step scores zero, and any fixed
+threshold holds through the first N steps of EVERY OFF window. **One constant cannot
+serve two regimes** — the same shape as the P12b lambda finding. Shipped defaulted
+off; the graded-release replacement is the top follow-up.
+
+**New modules:** `kpi_array_profile`, `save_comparison_video`,
+`run_onoff_campaign_script`, `run_onoff_videos_script`, `tests/test_antijam_onoff.m`
+(6 gates). Anti-jam suite 59/59. Five side-by-side videos in
+`results/onoff_campaign/*_videos/`.
+
+**Known limit:** runs are 4 toggle cycles and period learning needs 3, so ~75% of
+each run is spent unlearned. These numbers understate the anticipatory benefit; a
+longer-run re-measurement is the cheapest sharpening available.
+
+---
+
 ## 5. KPIs and standard scenario suite
 
 ### KPIs (implemented in `kpi_evaluate.m` — existing `matlab_utils` metrics untouched)

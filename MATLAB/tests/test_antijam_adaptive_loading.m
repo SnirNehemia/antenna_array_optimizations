@@ -106,13 +106,34 @@ end
 
 
 % ── Contract: too few elements for the 2*n_comp signal+jammer split ─
+%
+% [O, 2026-09-07] This used to assert a hard ERROR. It now asserts a WARNING
+% plus a documented fall back to fixed loading. The change is deliberate: the
+% throw made the whole Mode C stack unusable on small apertures -- `Dipole`
+% (1 el) and `patch_back2back` (2 el, dual-pol) could not run even the reactive
+% tracker, because this OPT-IN feature aborted initialization. P9 measured
+% adaptive loading at +0.00 pp against fixed on all 90 campaign cells, so
+% refusing to run bought nothing and cost a capability. The fallback is
+% announced rather than silent, which is what CLAUDE.md rule 4 requires.
 
 function test_adaptive_loading_too_few_elements(testCase)
 td = testCase.TestData;
-e_s = td.E(1:2, 1);                            % N_el = 2 = n_sig -> must error
-verifyError(testCase, ...
+e_s = td.E(1:2, 1);                            % N_el = 2 = n_sig -> infeasible
+verifyWarning(testCase, ...
     @() adapt_tracking_init(td.acfg_adapt, e_s, 2), ...
-    'adapt_tracking_init:TooFewElements');
+    'adapt_tracking_init:AdaptiveLoadingInfeasible');
+
+% ...and it must still return a USABLE state that falls back to fixed loading.
+w = warning('off', 'adapt_tracking_init:AdaptiveLoadingInfeasible');
+c = onCleanup(@() warning(w));
+trk = adapt_tracking_init(td.acfg_adapt, e_s, 2);
+verifyFalse(testCase, trk.adaptive_loading, ...
+    'An infeasible aperture must fall back to fixed loading, not stay adaptive.');
+verifyEqual(testCase, trk.loading, 10^(td.acfg_adapt.diagonal_loading_db / 10), ...
+    'RelTol', 1e-12, ...
+    'The fallback must use the CONFIGURED diagonal_loading_db, not a constant.');
+verifyEqual(testCase, size(trk.w), [2 1], ...
+    'The fallback must still produce weights for this aperture.');
 end
 
 

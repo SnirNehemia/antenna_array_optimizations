@@ -121,20 +121,33 @@ if isfield(adapt_config, 'loading_factor_db') && ~isempty(adapt_config.loading_f
     n_comp = size(e_s, 2);
     n_sig  = 2 * n_comp;                   % desired signal + 1 jammer (locked scope)
     if n_sig >= n_elements
-        error('adapt_tracking_init:TooFewElements', ...
-            'Adaptive loading needs N_el > 2*n_comp (= %d); got N_el = %d.', ...
-            n_sig, n_elements);
+        % [O, 2026-09-07] DEGRADE, do not throw. This precondition used to be a
+        % hard error, which made the whole Mode C stack unusable on small
+        % apertures: `Dipole` (1 el) and `patch_back2back` (2 el, dual-pol) could
+        % not run even the REACTIVE tracker, because this opt-in feature aborted
+        % initialization. P9 measured adaptive loading at +0.00 pp against fixed
+        % on all 90 campaign cells, so refusing to run rather than falling back
+        % traded a real capability for no measured benefit. The configured
+        % diagonal_loading_db is used instead, and the fallback is announced --
+        % it is a warning, not a silent default (CLAUDE.md rule 4).
+        warning('adapt_tracking_init:AdaptiveLoadingInfeasible', ...
+            ['Adaptive loading needs N_el > 2*n_comp (= %d) but this array has ' ...
+             'N_el = %d; falling back to the configured diagonal_loading_db ' ...
+             '(%.1f dB) for this run.'], n_sig, n_elements, ...
+            adapt_config.diagonal_loading_db);
+        state.adaptive_loading = false;
+    else
+        state.adaptive_loading = true;
+        state.n_sig            = n_sig;
+        state.loading_factor   = 10^(adapt_config.loading_factor_db / 10);
+        state.noise_floor_hat  = 1.0;           % matches R_hat = eye(.) at k=0
+        state.sig_power_hat    = 1.0;           % Rayleigh quotient of eye(.) at e_s
+        % [P11] state.loading was set from diagonal_loading_db above; keep it as
+        % the FLOOR the data-driven value may never go below (header note).
+        state.loading_floor    = state.loading;
+        state.loading          = max(state.loading_floor, state.loading_factor * ...
+            sqrt(state.sig_power_hat * state.noise_floor_hat));
     end
-    state.adaptive_loading = true;
-    state.n_sig            = n_sig;
-    state.loading_factor   = 10^(adapt_config.loading_factor_db / 10);
-    state.noise_floor_hat  = 1.0;           % matches R_hat = eye(.) at k=0
-    state.sig_power_hat    = 1.0;           % Rayleigh quotient of eye(.) at e_s
-    % [P11] state.loading was set from diagonal_loading_db above; keep it as
-    % the FLOOR the data-driven value may never go below (header note).
-    state.loading_floor    = state.loading;
-    state.loading          = max(state.loading_floor, state.loading_factor * ...
-        sqrt(state.sig_power_hat * state.noise_floor_hat));
 else
     state.adaptive_loading = false;
 end

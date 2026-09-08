@@ -68,8 +68,16 @@ V = V(:, ord);
 % dimension 2*n_comp and the noise subspace is everything below it.
 n_sig = 2 * n_comp;
 if n_sig >= n_el
-    error('adapt_music_doa:TooFewElements', ...
-        'MUSIC needs N_el > 2*n_comp (= %d); got N_el = %d.', n_sig, n_el);
+    % [O, 2026-09-07] REPORT infeasibility, do not throw. MUSIC needs a
+    % non-empty noise subspace, so it genuinely cannot run when the assumed
+    % source count fills the aperture -- but that is a property of the ARRAY,
+    % not an error in the call, and throwing here made `predict` unusable on
+    % `Dipole` (1 el) and `patch_back2back` (2 el, dual-pol) instead of letting
+    % it degrade to the reactive beamformer. The caller checks doa.feasible and
+    % falls back; see adapt_predict_update.
+    doa = struct('present', false, 'theta_j_deg', NaN, 'phi_j_deg', NaN, ...
+        'gap_db', NaN, 'sigma_j_sq', NaN, 'pspec', [], 'feasible', false);
+    return
 end
 noise_idx   = (n_sig + 1):n_el;
 noise_floor = mean(lam(noise_idx));
@@ -82,7 +90,7 @@ gap_db = 10 * log10(lam(n_comp + 1) / noise_floor);
 present = gap_db >= cfg.presence_gap_db;
 
 doa = struct('present', present, 'theta_j_deg', NaN, 'phi_j_deg', NaN, ...
-    'gap_db', gap_db, 'sigma_j_sq', NaN, 'pspec', []);
+    'gap_db', gap_db, 'sigma_j_sq', NaN, 'pspec', [], 'feasible', true);
 
 % ── MUSIC pseudospectrum over the far-field grid (guard excluded) ──
 % (theta, phi) for every grid point, flattened theta-fastest to match the

@@ -100,20 +100,33 @@ if isfield(adapt_config, 'loading_factor_db') && ~isempty(adapt_config.loading_f
     n_comp = size(e_s, 2);
     n_sig  = 2 * n_comp;                   % desired signal + 1 jammer (locked scope)
     if n_sig >= n_elements
-        error('adapt_predict_init:TooFewElements', ...
-            'Adaptive loading needs N_el > 2*n_comp (= %d); got N_el = %d.', ...
-            n_sig, n_elements);
+        % [O, 2026-09-07] DEGRADE, do not throw. This precondition used to be a
+        % hard error, which made the whole Mode C stack unusable on small
+        % apertures: `Dipole` (1 el) and `patch_back2back` (2 el, dual-pol) could
+        % not run even the REACTIVE tracker, because this opt-in feature aborted
+        % initialization. P9 measured adaptive loading at +0.00 pp against fixed
+        % on all 90 campaign cells, so refusing to run rather than falling back
+        % traded a real capability for no measured benefit. The configured
+        % diagonal_loading_db is used instead, and the fallback is announced --
+        % it is a warning, not a silent default (CLAUDE.md rule 4).
+        warning('adapt_predict_init:AdaptiveLoadingInfeasible', ...
+            ['Adaptive loading needs N_el > 2*n_comp (= %d) but this array has ' ...
+             'N_el = %d; falling back to the configured diagonal_loading_db ' ...
+             '(%.1f dB) for this run.'], n_sig, n_elements, ...
+            adapt_config.diagonal_loading_db);
+        state.adaptive_loading = false;
+    else
+        state.adaptive_loading = true;
+        state.n_sig            = n_sig;
+        state.loading_factor   = 10^(adapt_config.loading_factor_db / 10);
+        state.noise_floor_hat  = 1.0;           % matches R_hat = eye(.) at k=0
+        state.sig_power_hat    = 1.0;           % Rayleigh quotient of eye(.) at e_s
+        % [P11] Floor the data-driven value at the fixed diagonal_loading_db —
+        % see adapt_tracking_init's header for the campaign evidence.
+        state.loading_floor    = state.loading;
+        state.loading          = max(state.loading_floor, state.loading_factor * ...
+            sqrt(state.sig_power_hat * state.noise_floor_hat));
     end
-    state.adaptive_loading = true;
-    state.n_sig            = n_sig;
-    state.loading_factor   = 10^(adapt_config.loading_factor_db / 10);
-    state.noise_floor_hat  = 1.0;           % matches R_hat = eye(.) at k=0
-    state.sig_power_hat    = 1.0;           % Rayleigh quotient of eye(.) at e_s
-    % [P11] Floor the data-driven value at the fixed diagonal_loading_db —
-    % see adapt_tracking_init's header for the campaign evidence.
-    state.loading_floor    = state.loading;
-    state.loading          = max(state.loading_floor, state.loading_factor * ...
-        sqrt(state.sig_power_hat * state.noise_floor_hat));
 else
     state.adaptive_loading = false;
 end
@@ -131,6 +144,88 @@ state.doa_cfg = struct('theta_s_deg', aj_config.theta_s_deg, ...
     'phi_s_deg', aj_config.phi_s_deg, 'guard_deg', aj_config.guard_deg, ...
     'presence_gap_db', p.presence_gap_db, 'doa_stride', p.doa_stride, ...
     'return_pspec', false);
+
+% [O, 2026-09-07] On/off detection repair. OPT-IN: with the adapt.predict.onoff
+% block absent this is inert and the pre-P12c behaviour is byte-identical.
+%
+% WHY (measured, patchs_with_monopoles, J/N 25 dB, duty 0.5): the anticipatory
+% pre-null branch -- the entire reason P8 exists -- fires on AT MOST 1.3% of
+% steps, and never at all outside a narrow 10-15 s toggle band. Two independent
+% causes, both structural rather than tuning:
+%
+%   A. SLOW toggling (period >= 20 s): buffer_len = 1024 steps = 51.2 s and
+%      min_periods = 3 requires three cycles inside the analysis window, so a
+%      period above ~17 s can NEVER be trusted. Arithmetic, not tuning.
+%   B. FAST toggling (period <= 5 s): presence saturates at 100%. The
+%      covariance horizon is 1/(1-lambda) = 10 steps = 0.5 s but the OFF phase
+%      is only 1-2.5 s, so R_hat still carries jammer energy and the eigengap
+%      never collapses. The presence signal the periodogram consumes is itself
+%      low-pass filtered by lambda. Constant presence -> no spectral line.
+%
+% The repair is therefore two-part: size the analysis window from the longest
+% period worth detecting (A), and derive presence from a SECOND, much faster
+% covariance so on/off transitions are visible at all (B). A single forgetting
+% factor cannot serve both the beamformer and the presence detector -- the
+% beamformer wants a long memory, the detector wants a short one.
+if isfield(p, 'onoff') && ~isempty(p.onoff)
+    OREQ = {'fast_lambda', 'max_period_s', 'lead_frac'};
+    for i = 1:numel(OREQ)
+        if ~isfield(p.onoff, OREQ{i}) || isempty(p.onoff.(OREQ{i}))
+            error('adapt_predict_init:MissingKey', ...
+                'Missing required adapt.predict.onoff key: ''%s''.', OREQ{i});
+        end
+    end
+    if nargin < 9 || isempty(sim_config) || ~isfield(sim_config, 'dt_s')
+        error('adapt_predict_init:MissingSimConfig', ...
+            'adapt.predict.onoff needs the sim config (9th argument) for dt_s.');
+    end
+    if p.onoff.fast_lambda >= adapt_config.forgetting_lambda
+        error('adapt_predict_init:BadFastLambda', ...
+            ['adapt.predict.onoff.fast_lambda (%.3f) must be SHORTER-memory than ' ...
+             'forgetting_lambda (%.3f); a detector slower than the beamformer ' ...
+             'cannot resolve transitions the beamformer already smooths.'], ...
+            p.onoff.fast_lambda, adapt_config.forgetting_lambda);
+    end
+    state.onoff_enabled = true;
+    state.fast_lambda   = p.onoff.fast_lambda;
+    state.lead_frac     = p.onoff.lead_frac;
+    % Cap the lead at lead_cap_horizons covariance horizons. 1/(1-lambda) is
+    % how long R_hat needs to re-acquire the jammer after it returns, so
+    % leading further than a small multiple of that pre-nulls into empty space.
+    if isfield(p.onoff, 'lead_cap_horizons') && ~isempty(p.onoff.lead_cap_horizons)
+        cap_h = p.onoff.lead_cap_horizons;
+    else
+        cap_h = 2.0;
+    end
+    state.lead_cap_steps = cap_h / max(1 - adapt_config.forgetting_lambda, eps);
+    % How long the OFF window must be, in covariance horizons, before dropping
+    % the null is worth the re-acquisition cost at the next turn-on.
+    %
+    % DEFAULT 0 = always release, which is the un-gated behaviour. The gate is
+    % available but is NOT recommended on the evidence: it removes a small tail
+    % of regressions at the fastest toggle (a 4 s period cell goes 89.4 -> 90.0
+    % instead of 89.4 -> 80.1) but costs far more where the repair pays most --
+    % a hard 10 s cell collapses from 62.2 back to 33.0, because holding the
+    % null through OFF forfeits the quiescent gain that made the repair
+    % worthwhile. Net over the campaign the un-gated form is +7.5 pp; the gate
+    % trades that away to tidy the tail. Kept as a knob, defaulted off.
+    if isfield(p.onoff, 'release_min_horizons') && ~isempty(p.onoff.release_min_horizons)
+        state.release_min_horizons = p.onoff.release_min_horizons;
+    else
+        state.release_min_horizons = 0.0;
+    end
+    state.R_fast        = eye(n_elements);
+    % (A) size the window so min_periods cycles of the LONGEST period fit.
+    state.buffer_len = max(p.buffer_len, ...
+        ceil(p.min_periods * p.onoff.max_period_s / sim_config.dt_s));
+else
+    state.onoff_enabled  = false;
+    state.fast_lambda    = NaN;
+    state.lead_frac      = NaN;
+    state.lead_cap_steps = NaN;
+    state.release_min_horizons = NaN;
+    state.R_fast         = [];
+end
 
 % [P12b] Constant-velocity DoA predictor. OPT-IN: with the adapt.predict.cv
 % block absent this is inert and every pre-P12b result stands unchanged. With
@@ -157,13 +252,16 @@ end
 
 % Presence history + on/off period-detection state. The periodogram analyses
 % the most recent buffer_len samples of this growing 0/1 record.
-state.buffer_len  = p.buffer_len;
+if ~state.onoff_enabled
+    state.buffer_len = p.buffer_len;    % (the onoff block sizes it above)
+end
 state.presence    = [];                            % 1 = jammer detected, per step
 state.min_periods = p.min_periods;
 state.lead_steps  = p.lead_steps;
 state.period_est  = NaN;                           % [steps], NaN until learned
 state.duty_est    = NaN;                           % ON fraction, NaN until learned
 state.last_on_k   = NaN;                           % step index of last 0->1 turn-on
+state.steps_absent = 0;                            % [O] consecutive steps with no jammer
 state.last_doa    = struct('theta_deg', NaN, 'phi_deg', NaN, 'idx', NaN);
 state.k           = 0;
 

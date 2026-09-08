@@ -205,6 +205,67 @@ or `ValueError` — never silently fall back to a hardcoded default.
 > Claude Code must append an entry here at the end of every working session.
 > Format shown below. Newest entry at the top.
 
+### 2026-09-08 — [O] On/off jammer on every array: the predictor was never firing
+
+**Implemented**:
+- `kpi_array_profile.m` — per-(array, target) quiescent directivity, HPBW, DERIVED
+  guard sector, mirror coherence and MUSIC feasibility. This is the self-configuration
+  core: the shipped `guard_deg = 5` is wrong on every array (derived range 16–72.5°).
+- Opt-in `adapt.predict.onoff` block: a **second short-memory covariance used only for
+  presence**, an analysis window sized from `max_period_s`, and a lead scaled to the
+  detected period and capped at a few covariance horizons. Absent → byte-identical to
+  before.
+- **Graceful degradation** (always on): the P9 loading precondition and
+  `adapt_music_doa` now warn and fall back instead of throwing. `Dipole` (1 el) and
+  `patch_back2back` (2 el, dual-pol) previously crashed BOTH `lcmv` and `predict`.
+- `save_comparison_video.m` + `run_onoff_videos_script.m` — multi-algorithm
+  side-by-side MP4s on a shared colour scale.
+- `run_onoff_campaign_script.m` — 7 arrays × 5 targets × 3 separations × 3 periods,
+  with a feasibility preflight that refuses non-tests.
+- `tests/test_antijam_onoff.m` — 6 gates. Anti-jam suite **59/59**.
+
+**Decisions made**:
+- **Separation is expressed as a multiple of each array's derived guard**, so the same
+  numbers mean the same physical difficulty on a 6- and a 20-element array.
+- **A cell is only a test if the array has gain toward the target AND some direction
+  lies outside its main beam.** 11 of 35 (array, target) pairs refused with a reason;
+  all five `Dipole` targets among them.
+- **The on/off repair ships opt-in and is NOT recommended as a default yet** — it wins
+  on three arrays and regresses ManyDipoles by 3.3 (20 → 17 passing cells).
+- A causal release gate was implemented, measured, and **defaulted off**: it removes
+  every regression (worst ManyDipoles cell 66.4 → 93.5) but costs the wins (a 10 s cell
+  59.8 → 39.8). One fixed threshold cannot serve short and long OFF windows.
+
+**Findings**:
+- **The anticipatory branch fired on ≤ 1.3% of steps** and never outside a 10–15 s
+  band. Cause A: `buffer_len` 1024 steps ÷ `min_periods` 3 ⇒ periods above ~17 s are
+  undetectable by arithmetic. Cause B: presence saturates at 100% below ~5 s because
+  **the presence signal is low-pass filtered by the beamformer's own λ**. One
+  forgetting factor was serving two jobs with opposite requirements.
+- Repaired presence error vs the true duty: 0.455/0.321/0.138 → **0.127/0.060/0.033**
+  at T = 4/10/25 s.
+- **A high closeness score does not mean good absolute performance.**
+  `patch_back2back` scores 87.2 with 2 elements while `spacing0.6` scores 56.9 with
+  16 — because their potentials are 8.1 dB and 31.3 dB. Always report both.
+- `Dipole` scores **100.0** (5.92 dB = oracle 5.92 dB): with one element the quiescent
+  beam is the optimum, and the metric correctly says the array reached its potential.
+- The T=4 s regression is a **release-policy** finding, not a tuning miss. Two
+  hypotheses were falsified by the score being *invariant* to the knob swept (exactly
+  80.1 under both `fast_lambda` and `lead_frac` sweeps), which is what pointed at the
+  release branch instead.
+
+**Open questions / known issues**:
+- Runs are 4 toggle cycles and learning needs 3, so ~75% of each run is unlearned —
+  these numbers understate the anticipatory benefit. Re-run longer.
+- Graded (confidence-weighted) release instead of binary hold/release is the top
+  follow-up; it is what would make the repair safe to enable by default.
+- MUSIC's `n_sig = 2*n_comp` is an assumption, not a measurement; a rank-aware model
+  order would remove a class of array-specific failures.
+- Process: algorithm modules were edited while a campaign was in flight. MATLAB
+  reloads changed functions, so this could have split an arm; neutralised by
+  defaulting the new gate inert and verifying the code reproduces the pre-edit numbers
+  exactly. Standing rule: do not edit modules mid-campaign.
+
 ### 2026-09-07 — [P12b] Mode C campaign: drift diagnosed, CV-Kalman implemented, calibration exposed
 
 **Implemented**:
