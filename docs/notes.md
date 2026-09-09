@@ -205,6 +205,53 @@ or `ValueError` — never silently fall back to a hardcoded default.
 > Claude Code must append an entry here at the end of every working session.
 > Format shown below. Newest entry at the top.
 
+### 2026-09-10 — [O2] Videos re-rendered at 8 cycles; amplitude-regime figure
+
+**Renderers**:
+- `save_comparison_video` — light-mode colour scheme forced explicitly (axes/legend/
+  colorbar text black on white; MATLAB's session theme was leaking grey-on-white
+  legends). The number after each pattern title is now labelled `output SINR`
+  rather than sitting bare in parentheses, and a subtitle line states the signal
+  and jammer amplitudes and the noise floor they are referenced to.
+- `save_amplitude_grid_video` (new) — one algorithm across four regimes,
+  (weak/strong desired signal) x (weak/strong jammer), each pattern above its own
+  output-SINR trace. **Two shared scales are the whole point**: one colour scale
+  across the four patterns and one SINR y-range across the four traces. Per-panel
+  autoscaling would make every regime look equally healthy, which is exactly the
+  impression the figure exists to prevent.
+- Rendered for spacing0.6, patchs_with_monopoles, ManyDipoles, Monopoles.
+
+**Finding — the shortfall is a strong-signal effect, not a strong-jammer effect.**
+Mean SINR achieved of achievable, weak-jammer / strong-jammer columns:
+
+| array | sigma_s=0 | sigma_s=20 |
+|---|---|---|
+| spacing0.6 | 23.7 of 25.3 / 23.3 of 25.2 | 35.6 of 45.3 / 36.1 of 45.2 |
+| patchs_with_monopoles | 15.0 of 15.8 / 14.9 of 15.7 | 32.3 of 35.8 / 32.1 of 35.7 |
+| ManyDipoles | 9.4 of 10.5 / 7.4 of 10.4 | 29.1 of 30.5 / 27.0 of 30.4 |
+| Monopoles | 10.9 of 12.9 / 11.2 of 12.8 | 30.7 of 32.9 / 30.2 of 32.8 |
+
+Raising the jammer 20 dB costs almost nothing; raising the *desired signal* 20 dB
+opens a gap of up to 9.7 dB (spacing0.6). That is the MPDR signature: the desired
+signal is inside the estimated covariance, so under any steering mismatch the
+solution partially cancels it, and the stronger it is the more there is to cancel.
+The oracle rises with sigma_s because it knows the true steering vector. **This is
+a calibration-sensitivity result, not a nulling result** — it points at the
+mismatch/steering-error work, not at the on/off predictor.
+
+**Gotchas hit** (worth not repeating):
+- `text(ax, 'Units','normalized', 'Position', [...])` without positional `x,y`
+  arguments does not bind where you expect — the label landed in the figure header
+  on the top row and inside the pattern on the bottom row. Used an axes `title` and
+  deleted the colliding `xlabel` instead.
+- Eight `pcolor` panels of a 181x360 grid is ~500k patches per frame and `getframe`
+  ran out of memory building the offscreen framebuffer. Decimated the grid for
+  DISPLAY ONLY (directivity is still computed on the full grid, so nothing
+  quantitative changes) and shrank the canvas.
+- Sequential `matlab -batch` renders OOM'd even though each fits alone: Windows had
+  not reclaimed the previous process's pages when the next started. A pause between
+  renders fixed it. Worth a `sleep` in any future batch-render loop.
+
 ### 2026-09-09 — [O2] Graded release built and rejected; Phase O recommendation reversed
 
 **Implemented**:

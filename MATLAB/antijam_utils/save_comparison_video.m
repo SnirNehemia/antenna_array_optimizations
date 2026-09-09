@@ -97,7 +97,14 @@ for m = 1:M
     ax_map(m) = subplot(2, M, m);
 end
 ax_tr = subplot(2, 1, 2);
-set([ax_map, ax_tr], 'Color', 'w', 'XColor', 'k', 'YColor', 'k');
+% Force LIGHT styling explicitly. Setting only Color/XColor/YColor is not
+% enough: MATLAB themes title, label and legend text through separate
+% properties, so on a dark-themed session those render mid-grey on the white
+% figure -- which is exactly how the legend came out unreadable.
+set([ax_map, ax_tr], 'Color', 'w', 'XColor', 'k', 'YColor', 'k', ...
+    'GridColor', [0.15 0.15 0.15], 'MinorGridColor', [0.15 0.15 0.15], ...
+    'GridAlpha', 0.15);
+set(findall(fig, 'Type', 'text'), 'Color', 'k');
 
 first = true;
 fi = 0;
@@ -126,7 +133,9 @@ for k = frames
         end
         % The achieved SINR in each panel's own title: the picture shows the
         % pattern, the number says what it bought.
-        title(ax_map(m), sprintf('%s  (%.1f dB)', ...
+        % Name the quantity: an unlabelled "(12.3 dB)" reads as gain, depth or
+        % SINR depending on the reader.
+        title(ax_map(m), sprintf('%s  \\rm| output SINR %.1f dB', ...
             strrep(labels{m}, '_', '\_'), sinr(m, k)), ...
             'Interpreter', 'tex', 'Color', 'k', 'FontWeight', 'bold');
         if m == 1
@@ -136,6 +145,11 @@ for k = frames
         if m == M
             cb = colorbar(ax_map(m));
             cb.Label.String = 'directivity [dBi]';
+            % A colorbar's ticks and label are ruler properties, not text
+            % objects, so the blanket findall(...,'Type','text') recolour below
+            % does not reach them -- they stayed themed grey.
+            set(cb, 'Color', 'k');
+            set(cb.Label, 'Color', 'k');
         end
     end
 
@@ -153,18 +167,28 @@ for k = frames
     xlim(ax_tr, [scenario.t_s(1), scenario.t_s(end)]);
     ylim(ax_tr, [y_lo, y_hi]);
     xlabel(ax_tr, 'time [s]'); ylabel(ax_tr, 'output SINR [dB]');
-    legend(ax_tr, [{'oracle'}, labels(:)', {'threshold'}], ...
+    lg = legend(ax_tr, [{'oracle'}, labels(:)', {'threshold'}], ...
         'Location', 'southeast', 'Box', 'off', 'Interpreter', 'none');
+    set(lg, 'TextColor', 'k', 'Color', 'w', 'EdgeColor', 'none');
     grid(ax_tr, 'on');
     if jam_on
         st = sprintf('jammer ON (J/N %.0f dB)', scenario.jn_ratio_db(k));
     else
         st = 'jammer OFF';
     end
-    title(ax_tr, sprintf('%s — t = %.1f s — %s', ...
-        strrep(title_label, '_', '\_'), scenario.t_s(k), st), ...
+    % Amplitudes belong on the figure: an SINR trace is meaningless without the
+    % signal and jammer levels it was produced at. All powers are referred to the
+    % per-element noise floor, which is 0 dB by construction (sigma_n^2 = 1).
+    title(ax_tr, sprintf(['%s — t = %.1f s — %s\n' ...
+        '\\rm\\fontsize{9}signal \\sigma_s = %.0f dB   ·   jammer J/N = %.0f dB   ·   ' ...
+        'noise floor 0 dB (per element)   ·   threshold %.0f dB   ·   shaded = jammer ON'], ...
+        strrep(title_label, '_', '\_'), scenario.t_s(k), st, ...
+        aj.sigma_s_db, aj.jn_ratio_db, aj.sinr_min_db), ...
         'Interpreter', 'tex', 'Color', 'k');
 
+    % Titles/labels are recreated each frame, so re-assert black text before the
+    % capture rather than relying on the one-time set() above.
+    set(findall(fig, 'Type', 'text'), 'Color', 'k');
     im = frame2im(getframe(fig));
     if strcmp(fmt, 'mp4')
         im = im(1:end - mod(size(im, 1), 2), 1:end - mod(size(im, 2), 2), :);
