@@ -198,21 +198,29 @@ if isfield(p, 'onoff') && ~isempty(p.onoff)
         cap_h = 2.0;
     end
     state.lead_cap_steps = cap_h / max(1 - adapt_config.forgetting_lambda, eps);
-    % How long the OFF window must be, in covariance horizons, before dropping
-    % the null is worth the re-acquisition cost at the next turn-on.
+    % GRADED RELEASE. The null is relaxed continuously with measured elapsed
+    % absence rather than switched off: alpha ramps 0 -> 1 starting after
+    % release_min_horizons covariance horizons and completing
+    % release_ramp_horizons later, and is applied through diagonal loading.
     %
-    % DEFAULT 0 = always release, which is the un-gated behaviour. The gate is
-    % available but is NOT recommended on the evidence: it removes a small tail
-    % of regressions at the fastest toggle (a 4 s period cell goes 89.4 -> 90.0
-    % instead of 89.4 -> 80.1) but costs far more where the repair pays most --
-    % a hard 10 s cell collapses from 62.2 back to 33.0, because holding the
-    % null through OFF forfeits the quiescent gain that made the repair
-    % worthwhile. Net over the campaign the un-gated form is +7.5 pp; the gate
-    % trades that away to tidy the tail. Kept as a knob, defaulted off.
-    if isfield(p.onoff, 'release_min_horizons') && ~isempty(p.onoff.release_min_horizons)
-        state.release_min_horizons = p.onoff.release_min_horizons;
-    else
-        state.release_min_horizons = 0.0;
+    % BOTH DEFAULT TO 0, which makes alpha 1 from the first absent step -- the
+    % un-graded behaviour, bit-identical to the previous campaign. A binary
+    % policy provably cannot serve both regimes (see release_fraction in
+    % adapt_predict_update for the measurements); the ramp is the replacement.
+    state.release_min_horizons  = opt_num(p.onoff, 'release_min_horizons',  0.0);
+    state.release_ramp_horizons = opt_num(p.onoff, 'release_ramp_horizons', 0.0);
+    % How far past trace(R_hat) the loading must go to count as "fully
+    % released". 1.0 already swamps the covariance since the trace upper-bounds
+    % its largest eigenvalue; the default leaves margin.
+    state.release_swamp = opt_num(p.onoff, 'release_swamp', 4.0);
+    % Once the period is learned, complete the ramp within this fraction of the
+    % predicted OFF window (0 = keep the fixed ramp). This is what lets one
+    % setting serve short and long gaps: the ramp becomes short relative to a
+    % long gap and never completes inside a short one.
+    state.release_off_frac = opt_num(p.onoff, 'release_off_frac', 0.0);
+    if state.release_min_horizons < 0 || state.release_ramp_horizons < 0
+        error('adapt_predict_init:BadRelease', ...
+            'release_min_horizons and release_ramp_horizons must be >= 0.');
     end
     state.R_fast        = eye(n_elements);
     % (A) size the window so min_periods cycles of the LONGEST period fit.
@@ -223,7 +231,10 @@ else
     state.fast_lambda    = NaN;
     state.lead_frac      = NaN;
     state.lead_cap_steps = NaN;
-    state.release_min_horizons = NaN;
+    state.release_min_horizons  = NaN;
+    state.release_ramp_horizons = NaN;
+    state.release_swamp    = NaN;
+    state.release_off_frac = NaN;
     state.R_fast         = [];
 end
 
@@ -271,4 +282,15 @@ state.last = struct('theta_j_deg', NaN, 'phi_j_deg', NaN, 'present', false, ...
 
 % Initial weights: quiescent MVDR (no jammer seen yet).
 state.w = adapt_lcmv_null(state.R_hat, e_s, [], state.loading);
+end
+
+
+function v = opt_num(blk, name, default_value)
+% Optional numeric config field with a documented default. Required keys are
+% validated separately -- these are refinements whose absence means "off".
+if isfield(blk, name) && ~isempty(blk.(name))
+    v = blk.(name);
+else
+    v = default_value;
+end
 end

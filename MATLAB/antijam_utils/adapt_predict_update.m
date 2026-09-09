@@ -218,24 +218,42 @@ elseif predicted_on && ~isnan(state.last_doa.idx)
     % (identity) — the hard constraint forms the null before any energy is back.
     e_null = steer_col(state, state.last_doa.idx);
     w_target = adapt_lcmv_null(eye(state.n_el), state.e_s, e_null, state.loading);
-elseif state.onoff_enabled && ~release_is_worth_it(state)
-    % [O] Jammer absent, but the OFF window is too SHORT to be worth releasing
-    % the null for. Releasing restores full quiescent gain, which is the whole
-    % point -- but the null then has to be re-acquired at the next turn-on, and
-    % that costs one covariance horizon of degraded SINR. When OFF is only a few
-    % horizons long, the re-acquisition cost outweighs the gain benefit.
-    %
-    % This was measured the hard way: with presence saturated at ~100% (the
-    % pre-repair behaviour) `predict` never reached the release branch at all,
-    % so it silently behaved as `lcmv`. Repairing presence exposed the release
-    % policy for the first time, and at a 4 s toggle period it cost 3-9 pp on
-    % cells the reactive path was already handling -- a regression that was
-    % invariant to both fast_lambda and lead_frac, which is what pointed here
-    % rather than at the detector or the lead.
-    w_target = adapt_lcmv_null(state.R_hat, state.e_s, [], state.loading);
 else
-    % Jammer absent and no imminent return: restore the quiescent full-gain beam.
-    w_target = adapt_lcmv_null(eye(state.n_el), state.e_s, [], state.loading);
+    % [O] Jammer absent and no imminent return -- RELEASE the null, gradually.
+    %
+    % Releasing restores full quiescent gain, which is the point of detecting
+    % OFF at all. But the null then has to be re-acquired at the next turn-on,
+    % costing about one covariance horizon of degraded SINR, so for a brief gap
+    % releasing loses more than it wins. Measured: a binary release cost 3-9 pp
+    % at a 4 s toggle period on cells the reactive path already handled, and up
+    % to 35 pp on the 5 deg-grid array; a binary HOLD removed those regressions
+    % but destroyed the wins elsewhere (a hard 10 s cell fell 59.8 -> 39.8),
+    % because during OFF the perfect-knowledge reference sits at full quiescent
+    % gain, so every step spent holding scores zero. No single threshold can
+    % serve both: it necessarily holds through the first N steps of EVERY OFF
+    % window, including the long ones where releasing is right.
+    %
+    % So relax CONTINUOUSLY instead of switching. release_fraction() ramps from
+    % 0 (hold the measured null) to 1 (full quiescent beam) with elapsed
+    % absence, and the relaxation is applied through DIAGONAL LOADING -- the
+    % physical knob that trades null depth for gain. Raising the load toward
+    % the scale of R_hat's own energy progressively swamps the jammer
+    % eigenvalue, shallowing the null and returning the beam to quiescent,
+    % without ever blending two beamformer solutions (which are defined only up
+    % to a phase and can cancel each other).
+    alpha = release_fraction(state);
+    if alpha >= 1
+        % Fully released: the quiescent beam, bit-identical to the un-graded
+        % path. With the ramp disabled (the default) alpha is always 1 here.
+        w_target = adapt_lcmv_null(eye(state.n_el), state.e_s, [], state.loading);
+    else
+        % trace(R_hat) upper-bounds the largest eigenvalue and costs O(n) rather
+        % than an eigendecomposition; scaling past it is what makes the loading
+        % dominate every source in the covariance.
+        load_hi  = state.release_swamp * real(trace(state.R_hat));
+        load_eff = state.loading * (max(load_hi, state.loading) / state.loading)^alpha;
+        w_target = adapt_lcmv_null(state.R_hat, state.e_s, [], load_eff);
+    end
 end
 w = smooth_weights(state.w, w_target, state.mu);
 state.w = w;
@@ -260,7 +278,62 @@ end
 end
 
 
-function ok = release_is_worth_it(state)
+function alpha = release_fraction(state)
+% How far to relax the null, in [0, 1], given measured elapsed absence.
+%   0 = hold the reactive null exactly; 1 = full quiescent beam.
+%
+%   The ramp starts after release_min_horizons covariance horizons of absence
+%   and completes release_ramp_horizons later. Both default to 0, which makes
+%   alpha 1 from the first absent step -- i.e. the un-graded behaviour, so an
+%   absent config reproduces the previous campaign exactly.
+%
+%   Deliberately CAUSAL and learning-free: it counts absence actually observed
+%   rather than reasoning from a detected period. An earlier version gated on
+%   period_est * (1 - duty_est) and did nothing useful, because `min_periods`
+%   cycles of learning consume most of a short run -- the damage is done long
+%   before a period exists to reason about.
+% Fully released unless a ramp is BOTH configured and finite. The NaN guard is
+% load-bearing, not defensive: with the onoff block absent these fields are NaN,
+% and `NaN <= 0` is false -- so without it the ramp maths runs on NaN, the
+% loading goes NaN, and the beamformer solve turns singular. That silently
+% wrecked the un-repaired path (a 25 s cell read 12.8 instead of 88.2) before it
+% was caught.
+if ~isfinite(state.release_min_horizons) || ~isfinite(state.release_ramp_horizons) ...
+        || (state.release_ramp_horizons <= 0 && state.release_min_horizons <= 0)
+    alpha = 1;
+    return
+end
+horizon = 1 / max(1 - state.lambda, eps);
+t0 = state.release_min_horizons  * horizon;
+t1 = t0 + state.release_ramp_horizons * horizon;
+
+% [O2] If the toggle period HAS been learned, scale the ramp to the predicted
+% OFF window instead of leaving it fixed. A fixed ramp is the wrong length for
+% every period but one: measured, it recovered the fast-toggle regressions but
+% cost 15-20 pp at a 10 s period, where the OFF window is only ~10 horizons and
+% a fixed ramp consumes most of it. Completing within a fixed FRACTION of the
+% predicted OFF window instead means the ramp is short when the gap is long
+% (release early, keep the gain) and never completes when the gap is short
+% (hold the null, avoid the re-acquisition cost) -- which is the behaviour a
+% single constant provably cannot provide.
+if isfinite(state.release_off_frac) && state.release_off_frac > 0 && isfinite(state.period_est) && isfinite(state.duty_est)
+    off_steps = state.period_est * (1 - state.duty_est);
+    if isfinite(off_steps) && off_steps > 0
+        t1 = max(t0 + state.release_ramp_horizons * horizon, ...
+                 state.release_off_frac * off_steps);
+    end
+end
+if state.steps_absent <= t0
+    alpha = 0;
+elseif state.steps_absent >= t1 || t1 <= t0
+    alpha = 1;
+else
+    alpha = (state.steps_absent - t0) / (t1 - t0);
+end
+end
+
+
+function ok = release_is_worth_it(state) %#ok<DEFNU>
 % Should the null be dropped, given how long the jammer has ACTUALLY been away?
 %
 %   Releasing restores full quiescent gain, which is the point of detecting OFF

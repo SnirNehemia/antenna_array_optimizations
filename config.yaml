@@ -399,6 +399,52 @@ adapt:
     lead_steps: 6           # pre-form the null this many steps before turn-on
                             # (cover MUSIC-presence detection lag at turn-on)
     doa_stride: 1           # MUSIC grid subsample (1 = full far-field grid)
+    # [O2, 2026-09-09] On/off detection repair -- ENABLED by default.
+    #
+    # WHY IT IS ON. Measured over 90 cells x 3 seeds x 6 arrays at 8 toggle
+    # cycles: mean oracle-tracking score 73.5 -> 80.6, cells at or above the 90
+    # pass mark 24 -> 32, and 69 of 90 cells improve against 11 that regress by
+    # more than a point. It improves or ties on EVERY array.
+    #
+    # This REVERSES the Phase O recommendation, which measured a regression on
+    # the 5 deg-grid array and advised against enabling. That campaign ran only
+    # 4 toggle cycles, and period detection needs 3 -- so most of each run was
+    # spent before a period existed. At 8 cycles that array goes 73.6 -> 77.8.
+    #
+    # WHAT IT FIXES. The anticipatory branch previously fired on <= 1.3% of
+    # steps and never outside a 10-15 s band, for two arithmetic reasons: the
+    # analysis window could not hold min_periods cycles above ~17 s, and below
+    # ~5 s the presence indicator saturated because it read a covariance
+    # smoothed by the beamformer's own forgetting factor. fast_lambda gives the
+    # detector its own short-memory covariance; max_period_s sizes the window.
+    onoff:
+      fast_lambda: 0.5      # SHORT-memory covariance used ONLY for presence
+                            # detection, never to form weights. Must be
+                            # shorter-memory than forgetting_lambda -- a
+                            # detector slower than the beamformer cannot
+                            # resolve edges the beamformer already smooths.
+      max_period_s: 60.0    # longest toggle period worth detecting; sizes the
+                            # periodogram window so min_periods cycles fit.
+      lead_frac: 0.15       # pre-null lead as a fraction of the DETECTED
+                            # period. A fixed lead is a shrinking fraction of a
+                            # lengthening cycle, which is why the shipped 6
+                            # steps fired on ~1% of steps at long periods.
+      lead_cap_horizons: 2.0  # ...capped at this many covariance horizons: the
+                            # useful lead is bounded by re-acquisition time, not
+                            # by cycle length. Uncapped this cost -2.5 pp at a
+                            # 40 s period; capped it gains +5.6.
+      # GRADED RELEASE -- available, and deliberately OFF (all three zero).
+      # Relaxing the null continuously with elapsed absence instead of dropping
+      # it outright was implemented and measured at scale: 76.1 mean against the
+      # binary 80.6, worse on 45 of 90 cells. It DOES rescue the binary policy's
+      # 11 regressions (-7.06 -> +0.18 on those cells), but taking the better of
+      # base/binary per cell -- an unbeatable oracle -- scores only 81.5 against
+      # binary's 80.6, so the whole family of switching policies is bounded at
+      # +0.9 mean and zero extra passing cells. Enable only for a deployment
+      # known to face fast toggling on a coarse-grid array, where it wins.
+      # release_min_horizons: 2.0
+      # release_ramp_horizons: 2.0
+      # release_off_frac: 0.30
     # [P12b] Constant-velocity DoA predictor. OPT-IN, and currently OFF:
     # uncomment the `cv` block below to turn it on. While it is commented
     # out, adapt_predict_update is byte-identical to its pre-P12b

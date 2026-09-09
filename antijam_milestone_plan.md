@@ -1009,8 +1009,9 @@ derivation; and the full gate suite still passes.
 
 ### Phase O — Stationary on/off jammer, every array, every target
 
-**Status:** in-progress (opened 2026-09-07; campaign complete 2026-09-08, repair
-opt-in and NOT recommended as a default yet — see the regression below)
+**Status:** in-progress (opened 2026-09-07. First campaign 2026-09-08. **Phase O2
+re-run 2026-09-09 at 8 cycles REVERSES the recommendation: the repair is now ON by
+default.** The graded release was built, measured worse, and rejected.)
 
 **Motivation.** The customer asked to focus on the stationary on/off jammer and to
 verify the stack works on *any* array it is handed, getting as close as possible to
@@ -1098,6 +1099,70 @@ off; the graded-release replacement is the top follow-up.
 **Known limit:** runs are 4 toggle cycles and period learning needs 3, so ~75% of
 each run is spent unlearned. These numbers understate the anticipatory benefit; a
 longer-run re-measurement is the cheapest sharpening available.
+
+---
+
+### Phase O2 — graded release: built, measured, rejected; and Phase O reversed
+
+**Status:** done (2026-09-09)
+
+**Two open items from Phase O**, addressed by one campaign of 90 cases × 3 seeds
+× 3 algorithms × 3 arms at **8 toggle cycles** (2,430 runs, 0 failed case-seeds):
+the binary release policy that provably could not serve both fast and slow
+toggling, and the suspicion that 4-cycle runs were too short to judge an
+algorithm needing 3 cycles to learn a period.
+
+**The graded release.** The null is relaxed CONTINUOUSLY through diagonal
+loading — the physical knob that trades null depth for main-beam gain — rather
+than dropped the instant presence goes false. Chosen over blending two
+beamformer solutions, which are defined only up to a phase and can cancel. Once
+the period is learned the ramp sizes itself to complete inside a fraction of the
+predicted OFF window (`release_off_frac`), so it is short relative to a long gap
+and never completes inside a short one.
+
+**VERDICT: worse at scale. Negative result.**
+
+| arm (predict) | mean | cells >= 90 of 90 | paired vs base |
+|---|---|---|---|
+| base (no repair) | 73.5 | 24 | — |
+| graded release | 76.1 | 29 | +2.63 |
+| **binary release** | **80.6** | **32** | **+7.10** |
+
+Graded vs binary: **-4.46 mean, worse on 45 of 90 cells**, losing at every
+toggle period. It does what it was designed to do — on the 11 cells where binary
+regresses, binary averages -7.06 and graded +0.18, turning a -25.5 worst case
+into +0.2 — but pays far more on the 79 cells that were never the problem.
+
+**Why the tuning misled:** the ramp was tuned on a 5-cell probe hand-picked as
+conflict cells (3 fast-toggle regressions vs 2 long-period wins) — a 60/40 split
+of a population that is really 11/79. Guard not applied, and recorded for next
+time: weight a tuning set by the population's own incidence before trusting it.
+
+**THE QUESTION IS CLOSED.** Taking the better of {base, binary} PER CELL — an
+oracle no real rule could beat — scores **81.5 / 32 passing** against binary's
+**80.6 / 32**. Every switching, hybrid or confidence-weighted release policy is
+therefore bounded at **+0.9 mean and zero additional passing cells**. Building
+the graded release was worth it to establish that bound; the bound says stop.
+
+**RETRACTION — Phase O's "regresses ManyDipoles" was a run-length artifact.**
+Phase O measured 83.0 -> 79.7 on that array and advised against enabling the
+repair. At 8 cycles it is **73.6 -> 77.8 (+4.2)** and the repair improves or ties
+on EVERY array (spacing0.6 61.6 -> 72.1; disturbed3 60.7 -> 75.5; Monopoles
+79.5 -> 84.5; patchs 90.8 -> 92.0; patch_back2back 98.9 -> 98.9). O-F4 predicted
+exactly this. Recovery after turn-on also improves: 14.7 -> 9.7 steps at 10 s,
+25.1 -> 16.5 at 25 s.
+
+**config.yaml now ENABLES `adapt.predict.onoff` by default.** The graded release
+ships commented out beside it, documented as the better choice only for a
+deployment facing fast toggling on a coarse-grid array (ManyDipoles at 4 s:
+binary -25.5, graded +0.2).
+
+**Bug found and gated:** with the onoff block absent the release fields are NaN
+and `NaN <= 0` is false, so the ramp maths ran on NaN, the loading went NaN and
+the beamformer solve turned singular — the run still COMPLETED, silently
+returning garbage (a 25 s cell read 12.8 instead of 88.2). Caught only because
+the probe printed the un-repaired baseline alongside. `test_antijam_onoff` now
+asserts finite SINR and finite weights on an un-repaired run. Suite 59/59.
 
 ---
 

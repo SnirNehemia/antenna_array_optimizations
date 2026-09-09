@@ -205,6 +205,52 @@ or `ValueError` — never silently fall back to a hardcoded default.
 > Claude Code must append an entry here at the end of every working session.
 > Format shown below. Newest entry at the top.
 
+### 2026-09-09 — [O2] Graded release built and rejected; Phase O recommendation reversed
+
+**Implemented**:
+- **Graded release** in `adapt_predict_update`: the null is relaxed continuously via
+  diagonal loading instead of dropped outright, and once the period is learned the
+  ramp sizes itself to complete inside a fraction of the predicted OFF window
+  (`release_min_horizons` / `release_ramp_horizons` / `release_off_frac`, all
+  default 0 = un-graded). Loading was chosen over weight blending because two MVDR
+  solutions are defined only up to a phase and can cancel.
+- `config.yaml` now **enables `adapt.predict.onoff` by default**; the graded block
+  ships commented out beside it.
+- Campaign re-run at **8 cycles** (was 4) with a third arm: 90 cases × 3 seeds ×
+  3 algorithms × 3 arms, 2,430 runs, 0 failed case-seeds.
+
+**Decisions made**:
+- **Reject the graded release.** 76.1 mean against the binary policy's 80.6, worse
+  on 45 of 90 cells, losing at every toggle period. Kept as a documented knob for
+  fast toggling on a coarse-grid array, where it is decisively better.
+- **Enable the binary on/off repair by default** — reversing Phase O.
+- Do not pursue release policy further: the oracle-pick bound is +0.9.
+
+**Findings**:
+- **The question is closed.** Best-of-{base, binary} per cell scores 81.5 / 32
+  passing against binary's 80.6 / 32, so any switching or hybrid release rule is
+  bounded at **+0.9 mean and zero extra passing cells**.
+- **RETRACTION:** Phase O's ManyDipoles regression (83.0 → 79.7) was a run-length
+  artifact. At 8 cycles it is 73.6 → 77.8, and the repair improves or ties on every
+  array. O-F4 predicted this.
+- Graded does rescue binary's tail (11 cells: binary −7.06, graded +0.18; worst
+  −25.5 → +0.2) — it just costs more on the 79 cells that were fine.
+- **Tuning-set bias, recorded as a method lesson.** The ramp was tuned on a 5-cell
+  probe that was 60% regression cells against a population that is 11/79. Weight a
+  tuning set by the population's incidence before trusting it.
+- **A silent-garbage bug**: with the onoff block absent, release fields are NaN and
+  `NaN <= 0` is false, so the loading went NaN and the solve turned singular while
+  the run still completed (a cell read 12.8 vs 88.2). Gated now.
+
+**Open questions / known issues**:
+- Release policy is closed; the remaining levers are detection quality, MUSIC's
+  hardcoded `n_sig = 2*n_comp`, and calibration tolerance.
+- The 8-cycle grid is 3 targets × 2 separations (trimmed to pay for run length), so
+  it is narrower than Phase O's 5 × 3 — the two campaigns are not comparable
+  cell-for-cell, only in aggregate.
+- Videos were rendered from the 4-cycle configuration and have not been re-made at
+  8 cycles with the default now enabled.
+
 ### 2026-09-08 — [O] On/off jammer on every array: the predictor was never firing
 
 **Implemented**:

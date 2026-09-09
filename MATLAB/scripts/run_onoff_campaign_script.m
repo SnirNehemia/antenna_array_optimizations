@@ -58,17 +58,26 @@ ARRAYS = {'patchs_with_monopoles', 'spacing0.6', 'spacing0.6_disturbed3', ...
           'Monopoles', 'ManyDipoles', 'patch_back2back', 'Dipole'};
 
 % Target directions, common across arrays so rows are comparable.
-TARGETS = [90 260; 60 260; 90 30; 45 150; 20 260];
+% [O2] Trimmed from five to three. (90, 30) and (20, 260) contributed most of
+% the infeasible cells and no axis the other three do not cover, and the run
+% length below doubled -- the budget was better spent on cycles than targets.
+TARGETS = [90 260; 60 260; 45 150];
 
 % Jammer separation as a MULTIPLE of that cell's derived guard.
-SEP_MULT = [1.25, 2.0, 3.5];
+SEP_MULT = [1.25, 2.5];
 
 % Toggle periods [s]. Chosen to straddle the two failure modes measured in O0:
 % below the covariance horizon's ability to resolve OFF phases, and above the
 % window length that made a period detectable at all.
 PERIODS  = [4.0, 10.0, 25.0];
 DUTY     = 0.5;
-CYCLES   = 4;            % run length = CYCLES * period (>= min_periods to learn)
+% [O2] EIGHT cycles, not four. Period detection needs min_periods = 3 cycles,
+% so a 4-cycle run spends ~75% of itself unlearned -- which understated the
+% anticipatory benefit and, more importantly, stopped the off-window-adaptive
+% release from ever engaging (it needs a learned period to size its ramp).
+% A fielded jammer toggles for far longer than four cycles; eight is closer to
+% the regime the system actually occupies and is what the budget allows.
+CYCLES   = 8;
 
 SIGMA_S_DB  = 10.0;
 JN_RATIO_DB = 25.0;
@@ -80,11 +89,26 @@ TRACK_TOL_DB = 3.0;   % "within this of the oracle" defines the score
 MIN_DIR_DBI   = 0.0;
 MAX_GUARD_DEG = 90.0;
 
+% The repair as measured in the first campaign: presence from a fast covariance,
+% a window sized for the longest period, a period-scaled lead -- and a BINARY
+% release of the null the moment the jammer is declared absent.
 ONOFF_BLOCK = struct('fast_lambda', 0.5, 'max_period_s', 60.0, ...
                      'lead_frac', 0.15, 'lead_cap_horizons', 2.0);
 
-ARMS = { struct('tag', 'base',  'onoff', []), ...
-         struct('tag', 'onoff', 'onoff', ONOFF_BLOCK) };
+% [O2] The same, with the release GRADED instead of binary: the null is relaxed
+% continuously through diagonal loading as measured absence accumulates, and
+% once the period is learned the ramp is sized to complete within a fraction of
+% the predicted OFF window. That last part is what lets one setting serve both
+% regimes -- the ramp is short relative to a long gap and never completes inside
+% a short one, which no fixed threshold can do.
+GRADED_BLOCK = ONOFF_BLOCK;
+GRADED_BLOCK.release_min_horizons  = 2.0;
+GRADED_BLOCK.release_ramp_horizons = 2.0;
+GRADED_BLOCK.release_off_frac      = 0.30;
+
+ARMS = { struct('tag', 'base',   'onoff', []), ...
+         struct('tag', 'onoff',  'onoff', ONOFF_BLOCK), ...
+         struct('tag', 'graded', 'onoff', GRADED_BLOCK) };
 
 tags = cellfun(@(a) a.tag, ARMS, 'UniformOutput', false);
 if ~isempty(arm_filter)
@@ -123,10 +147,13 @@ for ia = 1:numel(ARRAYS)
     a = struct('id', A, 'pol', pol, 'stack1', s1, 'stack2', s2, ...
         'theta_deg', patterns(1).theta_deg, 'phi_deg', patterns(1).phi_deg, ...
         'n_el', size(s1, 1));
-    % MUSIC over a 1 deg grid every step is the dominant cost; stride 2 halves
-    % it for a measured DoA RMSE change of 1.00 -> 1.04 deg. The 5 deg array is
-    % already cheap and keeps the full grid.
-    a.doa_stride = 1 + (mean(diff(a.theta_deg)) < 2);
+    % MUSIC over a 1 deg grid every step is the dominant cost. Stride 4 quarters
+    % it for a measured DoA RMSE of 1.45 deg against 1.00 at stride 1 -- an
+    % acceptable trade HERE because the on/off question turns on presence
+    % detection rather than angular precision, and the doubled run length has to
+    % be paid for somewhere. The 5 deg array is already cheap and keeps the full
+    % grid.
+    a.doa_stride = 1 + 3 * (mean(diff(a.theta_deg)) < 2);
     arrays.(key) = a;
 
     for it = 1:size(TARGETS, 1)
