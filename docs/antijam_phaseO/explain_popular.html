@@ -1,0 +1,458 @@
+<title>How the Array Learns to Ignore a Jammer</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,600;1,6..72,400&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+:root{
+  color-scheme: light;
+  --paper:#fbfaf8; --card:#ffffff; --sunken:#f2efe9;
+  --ink:#1a1714; --ink2:#4a443c; --ink3:#7a7268;
+  --rule:#e2ddd3; --rule2:#cfc8ba;
+  --accent:#1f6f5c; --accent2:#c2582c;
+  --sig:#2a78d6; --jam:#c0392f; --null:#1baf7a;
+  --sans:"IBM Plex Sans",ui-sans-serif,system-ui,sans-serif;
+  --serif:"Newsreader",Georgia,serif;
+  --mono:"IBM Plex Mono",ui-monospace,Consolas,monospace;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    color-scheme: dark;
+    --paper:#14120f; --card:#1c1916; --sunken:#231f1b;
+    --ink:#f2ece2; --ink2:#c4bbad; --ink3:#8f867a;
+    --rule:#2e2a24; --rule2:#40392f;
+    --accent:#5fbfa4; --accent2:#e0824f;
+    --sig:#5598e7; --jam:#e07068; --null:#3fc296;
+  }
+}
+:root[data-theme="dark"]{
+  color-scheme: dark;
+  --paper:#14120f; --card:#1c1916; --sunken:#231f1b;
+  --ink:#f2ece2; --ink2:#c4bbad; --ink3:#8f867a;
+  --rule:#2e2a24; --rule2:#40392f;
+  --accent:#5fbfa4; --accent2:#e0824f;
+  --sig:#5598e7; --jam:#e07068; --null:#3fc296;
+}
+*{box-sizing:border-box;}
+body{background:var(--paper);color:var(--ink);font-family:var(--serif);
+  font-size:19px;line-height:1.66;margin:0;-webkit-font-smoothing:antialiased;}
+.wrap{max-width:1000px;margin:0 auto;padding:0 26px 110px;}
+.col{max-width:34em;}
+h1,h2,h3,.eyebrow,.kicker,figcaption,.card h4{font-family:var(--sans);}
+h1{font-family:var(--serif);font-size:3.1rem;line-height:1.06;font-weight:600;
+  letter-spacing:-.02em;margin:0 0 .3em;text-wrap:balance;}
+h2{font-size:1.42rem;font-weight:600;margin:0 0 .55em;letter-spacing:-.01em;text-wrap:balance;}
+h3{font-family:var(--serif);font-size:1.28rem;font-weight:600;margin:2em 0 .4em;}
+p{margin:0 0 1.1em;}
+.eyebrow{font-size:.72rem;font-weight:600;letter-spacing:.15em;text-transform:uppercase;
+  color:var(--accent);margin:0 0 1em;}
+.lede{font-size:1.28rem;line-height:1.55;color:var(--ink2);}
+.mono{font-family:var(--mono);font-size:.86em;}
+header{padding:88px 0 34px;margin-bottom:10px;}
+section{padding:40px 0;border-top:1px solid var(--rule);}
+.step{display:grid;grid-template-columns:auto 1fr;gap:26px;align-items:start;}
+.stepnum{font-family:var(--sans);font-size:.74rem;font-weight:600;letter-spacing:.1em;
+  color:var(--accent);border:1px solid var(--rule2);border-radius:99px;
+  padding:5px 12px;white-space:nowrap;margin-top:.35em;}
+figure{margin:32px 0;}
+svg.fig{width:100%;height:auto;display:block;background:var(--card);
+  border:1px solid var(--rule);border-radius:6px;}
+figcaption{font-size:.85rem;color:var(--ink3);margin-top:11px;max-width:34em;line-height:1.5;}
+.flabel{font-family:var(--sans);font-size:12.5px;fill:var(--ink2);}
+.fsmall{font-family:var(--sans);font-size:11px;fill:var(--ink3);}
+.fbold{font-family:var(--sans);font-size:13px;font-weight:600;fill:var(--ink);}
+.pull{border-left:3px solid var(--accent);padding:4px 0 4px 22px;margin:30px 0;
+  font-size:1.2rem;line-height:1.5;color:var(--ink);max-width:34em;}
+.card{background:var(--card);border:1px solid var(--rule);border-radius:6px;
+  padding:22px 26px;margin:26px 0;}
+.card h4{margin:0 0 .4em;font-size:.95rem;font-weight:600;color:var(--ink);}
+.card p{margin:0;font-size:.97rem;color:var(--ink2);line-height:1.6;}
+.card p + p{margin-top:.7em;}
+.two{display:grid;grid-template-columns:1fr 1fr;gap:34px;}
+.term{background:var(--sunken);border-radius:4px;padding:.05em .38em;
+  font-family:var(--sans);font-size:.88em;font-weight:500;}
+.big{font-size:2.6rem;font-family:var(--sans);font-weight:600;letter-spacing:-.02em;
+  line-height:1;color:var(--ink);}
+.bigrow{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));
+  gap:28px;margin:28px 0;}
+.bigrow div span{display:block;font-family:var(--sans);font-size:.83rem;
+  color:var(--ink3);margin-top:9px;line-height:1.35;}
+ul{padding-left:1.2em;margin:0 0 1.1em;}
+li{margin-bottom:.5em;}
+.foot{color:var(--ink3);font-size:.9rem;font-family:var(--sans);}
+a{color:var(--accent);}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px;}
+@media (max-width:720px){
+  h1{font-size:2.1rem;} body{font-size:17.5px;}
+  .two{grid-template-columns:1fr;gap:8px;}
+  .step{grid-template-columns:1fr;gap:8px;}
+  header{padding-top:52px;}
+}
+</style>
+
+<div class="wrap">
+
+<header>
+  <p class="eyebrow">Anti-jam beamforming · a plain-language guide</p>
+  <h1>How an antenna array<br>learns to ignore a jammer</h1>
+  <p class="lede col">There is a signal you want and a hostile transmitter drowning it out. Nobody
+  tells you where the jammer is. You have a few seconds and a handful of antennas. This is how the
+  system works out what to do — and where, honestly, it still struggles.</p>
+</header>
+
+<section>
+  <div class="col">
+    <h2>The problem, in one picture</h2>
+    <p>An <span class="term">array</span> is several antenna elements listening at once. Each hears
+    the same world, but from a slightly different position — so a wave arriving from one direction
+    reaches them at slightly different moments.</p>
+    <p>That tiny timing difference is the whole trick. If you delay each element by just the right
+    amount before adding them up, waves from your chosen direction line up and reinforce, while
+    waves from elsewhere arrive out of step and partly cancel. You have <em>pointed</em> the array
+    without moving it.</p>
+  </div>
+
+  <figure>
+    <svg viewBox="0 0 900 300" class="fig" role="img"
+      aria-label="Four antenna elements receive a wanted signal from one direction and a jammer from another; weighted summation forms a beam toward the signal and a null toward the jammer.">
+      <!-- elements -->
+      <g>
+        <circle cx="120" cy="230" r="9" fill="var(--ink3)"/>
+        <circle cx="180" cy="230" r="9" fill="var(--ink3)"/>
+        <circle cx="240" cy="230" r="9" fill="var(--ink3)"/>
+        <circle cx="300" cy="230" r="9" fill="var(--ink3)"/>
+        <line x1="105" y1="252" x2="315" y2="252" stroke="var(--rule2)" stroke-width="2"/>
+        <text x="210" y="274" text-anchor="middle" class="fsmall">four antenna elements</text>
+      </g>
+      <!-- wanted signal wavefronts -->
+      <g stroke="var(--sig)" stroke-width="2" fill="none" opacity="0.85">
+        <path d="M60 90 Q210 30 360 90"/>
+        <path d="M70 125 Q210 68 350 125"/>
+        <path d="M80 160 Q210 105 340 160"/>
+      </g>
+      <text x="210" y="26" text-anchor="middle" class="fbold" fill="var(--sig)">wanted signal</text>
+      <!-- jammer wavefronts -->
+      <g stroke="var(--jam)" stroke-width="2" fill="none" opacity="0.85">
+        <path d="M600 60 Q640 150 560 230"/>
+        <path d="M640 70 Q680 155 600 240"/>
+        <path d="M680 80 Q720 160 640 250"/>
+      </g>
+      <text x="700" y="46" text-anchor="middle" class="fbold" fill="var(--jam)">jammer</text>
+      <!-- resulting beam pattern -->
+      <g transform="translate(560,190)">
+        <path d="M0 0 C -70 -60 -40 -140 -150 -150 C -40 -110 -70 -40 0 0 Z"
+              fill="var(--sig)" opacity="0.18" stroke="var(--sig)" stroke-width="2"/>
+        <path d="M0 0 L 120 -30 L 118 -22 Z" fill="var(--null)" opacity="0.35"/>
+        <text x="150" y="-40" class="flabel" fill="var(--null)">null</text>
+        <text x="-120" y="-160" class="flabel" fill="var(--sig)">beam</text>
+      </g>
+      <text x="560" y="278" text-anchor="middle" class="fsmall">the array's sensitivity, after weighting</text>
+    </svg>
+    <figcaption>Left: the same two waves reach the four elements at slightly different times.
+    Right: the sensitivity pattern the array can synthesise from them — a lobe of high sensitivity
+    toward the signal, and a <b>null</b>, a direction of near-deafness, aimed at the jammer.</figcaption>
+  </figure>
+
+  <div class="col">
+    <p>Two things matter and they are not the same. A <span class="term">beam</span> is where you
+    are listening hardest. A <span class="term">null</span> is a direction you are almost perfectly
+    deaf to. You want the beam on your signal and a null on the jammer, and — this is the hard part
+    — you must place the null without being told where the jammer is.</p>
+  </div>
+</section>
+
+<section>
+  <div class="col">
+    <h2>The classical trick: don't look for the jammer at all</h2>
+    <p>The natural instinct is to find the jammer first, then null it. The classical method does
+    something cleverer, and it is the foundation of everything here.</p>
+    <p>Instead, tell the array: <b>keep exactly unit sensitivity toward my signal's direction, and
+    subject to that, make the total noise coming out of you as small as you possibly can.</b></p>
+    <p>That single instruction solves the problem by itself. The array cannot reduce your signal —
+    it is pinned. So the only way to get quieter is to become deaf toward whatever else is loud.
+    If a jammer is blaring from somewhere, the cheapest way to go quiet is to grow a null right at
+    it. Nobody had to find it.</p>
+  </div>
+
+  <div class="pull">
+    Minimise what comes out, while holding the wanted direction fixed. The jammer gets nulled as a
+    side effect of the array trying to be quiet.
+  </div>
+
+  <div class="col">
+    <p>The array works this out from a running summary of what it is hearing — which directions
+    currently carry energy and how they relate to one another. That summary is called the
+    <span class="term">covariance</span>, and it is the only thing the algorithm is allowed to see.
+    It never gets told the jammer's position.</p>
+  </div>
+
+  <div class="card">
+    <h4>What "listening" actually means here</h4>
+    <p>Every 50 milliseconds the receiver hands the algorithm a fresh block of samples from every
+    element. It folds them into its running summary, recomputes the best weights, and applies them.
+    Twenty times a second, forever.</p>
+    <p>The summary is <b>faded</b> as it goes: recent samples count fully, older ones are gradually
+    forgotten. That fading is what lets the array adapt to a jammer that moves — and, as it turns
+    out, it is also the source of most of the problems in this report.</p>
+  </div>
+</section>
+
+<section>
+  <div class="col">
+    <h2>Why fading memory causes trouble</h2>
+    <p>How fast should the array forget? It is a genuine dilemma with no free answer.</p>
+    <p><b>Forget slowly</b> and the summary is smooth and reliable — but it describes where the
+    jammer <em>was</em>, not where it is. <b>Forget quickly</b> and you track a moving jammer, but
+    the summary becomes jittery and the null gets sloppy.</p>
+    <p>The system forgets over about half a second. Measured against a drifting jammer, the array
+    behaves precisely like something aiming <b>half a second behind the target</b> — and against a
+    jammer sweeping at two degrees per second, that is a whole degree of aiming error. Enough to
+    miss.</p>
+  </div>
+
+  <figure>
+    <svg viewBox="0 0 820 250" class="fig" role="img"
+      aria-label="A jammer moves steadily while the array's null trails behind it by a fixed lag, and a predictor closes the gap by aiming ahead.">
+      <line x1="60" y1="180" x2="760" y2="180" stroke="var(--rule2)" stroke-width="2"/>
+      <text x="410" y="212" text-anchor="middle" class="fsmall">time</text>
+      <!-- true jammer -->
+      <circle cx="600" cy="120" r="11" fill="var(--jam)"/>
+      <text x="600" y="98" text-anchor="middle" class="fbold" fill="var(--jam)">jammer, now</text>
+      <!-- lagging null -->
+      <circle cx="470" cy="120" r="11" fill="none" stroke="var(--null)" stroke-width="3"/>
+      <text x="455" y="152" text-anchor="middle" class="flabel" fill="var(--null)">null, aimed here</text>
+      <!-- gap -->
+      <line x1="481" y1="120" x2="589" y2="120" stroke="var(--ink3)" stroke-width="1.5"
+            stroke-dasharray="4 4"/>
+      <text x="535" y="112" text-anchor="middle" class="fsmall">the lag</text>
+      <!-- trail -->
+      <g opacity="0.35">
+        <circle cx="200" cy="120" r="7" fill="var(--jam)"/>
+        <circle cx="300" cy="120" r="7" fill="var(--jam)"/>
+        <circle cx="400" cy="120" r="7" fill="var(--jam)"/>
+        <circle cx="500" cy="120" r="7" fill="var(--jam)"/>
+      </g>
+      <text x="300" y="98" text-anchor="middle" class="fsmall">where it has been</text>
+      <!-- prediction -->
+      <path d="M600 138 q40 26 96 26" stroke="var(--accent)" stroke-width="2" fill="none"
+            marker-end="url(#ar)"/>
+      <defs><marker id="ar" markerWidth="9" markerHeight="9" refX="7" refY="3.2" orient="auto">
+        <path d="M0 0 L7 3.2 L0 6.4 z" fill="var(--accent)"/></marker></defs>
+      <text x="700" y="182" text-anchor="middle" class="flabel" fill="var(--accent)">aim here instead</text>
+    </svg>
+    <figcaption>The fix is not to forget faster. It is to notice that the jammer is <em>moving</em>,
+    estimate how fast, and deliberately aim ahead of it — the same thing you do when throwing a ball
+    to someone running.</figcaption>
+  </figure>
+
+  <div class="col">
+    <p>That is what the motion tracker does. It watches the estimated jammer direction over time,
+    works out its speed, and aims the null where the jammer will be a fraction of a second from now.
+    The amount to lead by is not guesswork: it is the memory lag plus the small delay in applying
+    new weights, which comes out at about <b>0.7 seconds</b> of lead.</p>
+    <p>On a drifting jammer this took the system from tracking the theoretical best <b>45% of the
+    time to 90%</b>. And because it only engages when the jammer is actually moving, standing-still
+    cases are completely unaffected — not "barely affected", but identical to the last decimal.</p>
+  </div>
+</section>
+
+<section>
+  <div class="col">
+    <h2>The jammer that blinks</h2>
+    <p>A cleverer adversary does not transmit continuously. It pulses — a few seconds on, a few
+    seconds off — hoping you waste your effort re-learning it each time it returns.</p>
+    <p>There is a genuine opportunity here. If the pulsing is regular, you can <em>learn the
+    rhythm</em> and have the null already in place the moment it comes back, instead of spending
+    the first half-second of every burst catching up.</p>
+    <p>The system had exactly that feature. Testing it revealed something uncomfortable: it had
+    essentially never worked. Across every test it engaged on <b>at most 1.3% of the time steps</b>,
+    and in most conditions never at all.</p>
+  </div>
+
+  <div class="two">
+    <div class="card">
+      <h4>When the pulses are slow</h4>
+      <p>To spot a rhythm you need to see several repeats. The system kept a memory of the last
+      51 seconds and insisted on three full cycles inside it — so any pattern slower than about
+      17 seconds could <b>never</b> be recognised, no matter how obvious.</p>
+      <p>Not a tuning problem. Just arithmetic nobody had checked.</p>
+    </div>
+    <div class="card">
+      <h4>When the pulses are fast</h4>
+      <p>This one is subtler and more interesting. To spot the rhythm, the system first has to
+      notice "jammer on" and "jammer off". But it read that from the same fading summary the
+      beamformer uses — and that summary is <b>deliberately smoothed</b>.</p>
+      <p>With a half-second memory and a one-second gap, the echo of the last burst was still in
+      the summary when the next arrived. It concluded the jammer was on <em>always</em>. A flat
+      signal has no rhythm to find.</p>
+    </div>
+  </div>
+
+  <div class="pull">
+    One setting was quietly doing two incompatible jobs. The beamformer wants a long memory to stay
+    steady. The blink-detector wants a short one to see the edges. You cannot have both from one
+    number — so we gave the detector a second, faster memory of its own.
+  </div>
+
+  <div class="col">
+    <p>With its own fast memory, the detector's estimate of how often the jammer is actually
+    transmitting went from being <b>wrong by 46 percentage points</b> to wrong by 13, and the
+    anticipatory feature started firing for the first time.</p>
+  </div>
+</section>
+
+<section>
+  <div class="col">
+    <h2>A mistake worth showing you</h2>
+    <p>Fixing the detector exposed something that had been hidden behind it, and the story is a
+    good illustration of how this kind of work actually goes.</p>
+    <p>Once the system could tell the jammer had stopped, it did the apparently sensible thing:
+    dropped the null and went back to listening at full sensitivity. Why keep a deaf spot pointed
+    at something that is not transmitting?</p>
+    <p>Because you have to <em>rebuild</em> the null when the jammer returns, and rebuilding costs
+    about half a second. If the gap was only two seconds long, you spend a quarter of every cycle
+    recovering from a decision that was supposed to help.</p>
+  </div>
+
+  <div class="card">
+    <h4>Two confident explanations, both wrong</h4>
+    <p>The obvious suspects were that the detector's timing was off, or that the anticipatory
+    feature was firing too eagerly. Both were tested by adjusting the relevant setting across its
+    range.</p>
+    <p>In both cases the score did not move <b>at all</b> — it stayed at exactly 80.1 while the
+    knob swung across its whole range. That is the useful signal: when a number refuses to budge as
+    you change something, you are changing the wrong thing. The cause was elsewhere entirely.</p>
+  </div>
+
+  <div class="col">
+    <p>So a gentler policy was built: instead of dropping the null the instant the jammer goes
+    quiet, <em>relax</em> it gradually, so a brief gap barely loosens it while a long one lets the
+    array fully recover its sensitivity. It sounds obviously better.</p>
+    <p>It was worse. Measured across ninety scenarios it scored <b>76 against the blunt policy's
+    81</b>, and lost in the majority of cases. It did rescue the handful of situations it was
+    designed for — it just charged far more for that rescue everywhere else.</p>
+  </div>
+
+  <div class="card">
+    <h4>Why it looked good before it was tested properly</h4>
+    <p>The gentle policy had been tuned on five hand-picked "hard cases" — the situations where the
+    blunt policy struggled. Three of the five were problem cases.</p>
+    <p>But in the real population, problem cases are eleven out of ninety. The tuning set was
+    <b>60% problems</b> where reality is <b>12%</b>. It was optimised for a world that does not
+    exist, and it duly won there and lost everywhere else.</p>
+  </div>
+
+  <div class="col">
+    <p>The negative result turned out to be the valuable part. If you imagine a magical version that
+    somehow picks the better of the two policies for every single situation — something no real
+    system could do, since it would require knowing the answer in advance — it scores <b>81.5</b>
+    against the blunt policy's <b>80.6</b>.</p>
+    <p>That is the entire remaining prize: <b>nine tenths of one point</b>, and not a single extra
+    scenario brought up to standard. So the question of when to drop the null is <em>closed</em>.
+    No amount of cleverness there is worth having. The effort belongs elsewhere.</p>
+  </div>
+</section>
+
+<section>
+  <div class="col">
+    <h2>Judging fairly across very different antennas</h2>
+    <p>The system was tested on seven arrays, from a single antenna up to twenty. This creates an
+    obvious scoring problem: a twenty-element array can do things a one-element array physically
+    cannot. Grading them against a common target would just rank them by size.</p>
+    <p>So each is graded against <b>its own ceiling</b> — the best any perfect method could achieve
+    on that particular antenna in that particular situation. The question is not "did it hit some
+    number", but "did it get what this hardware had to give".</p>
+  </div>
+
+  <div class="bigrow">
+    <div><span class="big">100</span><span>score for the single-element array — it matched the theoretical best exactly</span></div>
+    <div><span class="big">5.9 dB</span><span>…and the theoretical best on that antenna was 5.9 dB. Its potential was to do nothing</span></div>
+    <div><span class="big">11 of 35</span><span>antenna-and-target combinations correctly refused as impossible, with a stated reason</span></div>
+  </div>
+
+  <div class="col">
+    <p>The single-element result is the one that convinced us the grading was right. One antenna has
+    no ability to prefer one direction over another — nulling is not merely hard, it is
+    meaningless. The system scored 100 because it did as well as anything could, which was nothing
+    at all, and it said so instead of crashing.</p>
+    <p>That matters, because two of these arrays used to <b>crash the software outright</b>. Not
+    perform badly — abort. A feature that was supposed to be optional refused to start on small
+    antennas, and took the basic method down with it. Now they run, and the ones that genuinely
+    cannot do the job report why.</p>
+  </div>
+
+  <div class="card">
+    <h4>The trap in this kind of scoring</h4>
+    <p>A two-element array scores <b>99</b>. A sixteen-element array scores <b>72</b>. The small one
+    is not better.</p>
+    <p>The two-element array's ceiling is low, so reaching it is easy. The sixteen-element array
+    could deliver three times the performance, and we are getting less of what is available. A high
+    score means "we extracted what was there" — never "this is a good antenna". Both numbers have
+    to be read together, always.</p>
+  </div>
+</section>
+
+<section>
+  <div class="col">
+    <h2>An antenna that cannot tell up from down</h2>
+    <p>One array turned out to be physically incapable of distinguishing a direction from its
+    mirror image below the horizon. Not imprecise — <em>exactly</em> incapable. The two directions
+    produce identical readings, to the limits of measurement.</p>
+    <p>This is not a defect. It is the expected behaviour of a flat array of simple antennas: with
+    nothing to break the symmetry, up and down genuinely look the same. Every flat array has some
+    version of it.</p>
+    <p>It has a curious consequence. For <em>nulling</em>, it does not matter at all — if the two
+    directions are indistinguishable, a null aimed at the mirror is automatically a null aimed at
+    the real thing. But for <em>tracking</em> it is ruinous: the estimate flips between the two, and
+    a tracker measuring speed sees the jammer teleporting back and forth.</p>
+    <p>So the tracker measures each antenna's symmetry when it starts up and, where the ambiguity
+    is real, quietly keeps its estimates on one consistent side. With that, the direction estimates
+    on that array went from being wrong by <b>139 degrees</b> to wrong by <b>1.5</b>. They had been
+    right all along — just reported from the wrong hemisphere.</p>
+  </div>
+</section>
+
+<section>
+  <div class="col">
+    <h2>What actually limits this system</h2>
+    <p>After all of the above, the thing most likely to stop this working in the field is none of
+    it. It is <b>calibration</b>.</p>
+    <p>Everything depends on knowing precisely how each element responds — a fraction of a
+    wavelength of error in the assumed geometry and the array is solving a slightly wrong problem.
+    Worse, it fails in a nasty direction: the method tries to minimise output power, and if it is
+    mistaken about where your signal is, the cheapest way to go quiet is to <b>null your own
+    signal</b>.</p>
+    <p>Measured: with per-element phase errors of about one degree it still works. By three degrees
+    every method is at the floor, and the spread between builds is enormous — one unit fine, the
+    next unusable. That belongs in the hardware specification, and it is a bigger risk than any
+    algorithm choice discussed here.</p>
+  </div>
+
+  <div class="card">
+    <h4>Where it stands</h4>
+    <p><b>Works well:</b> a stationary jammer, and a pulsing one, on every array tested, once the
+    detector was given its own memory. Slow drift is handled by aiming ahead.</p>
+    <p><b>Works partly:</b> fast drift. Beyond roughly ten degrees a second the prediction extends
+    the envelope but does not remove the limit.</p>
+    <p><b>Not yet addressed:</b> calibration tolerance in the hardware spec, more than one jammer at
+    a time, and the computational cost of the direction-finding step, which is currently far too
+    expensive for real-time hardware.</p>
+  </div>
+</section>
+
+<section>
+  <div class="col">
+    <h2>The habit underneath all of this</h2>
+    <p>Three times in this work a confident explanation turned out to be wrong, and each time the
+    same thing exposed it: a number that <em>refused to move</em> when the supposed cause was
+    adjusted.</p>
+    <p>And once, a recommendation was issued on a measurement already known to be compromised — the
+    tests were too short for the feature being judged, which had been written down as a caveat and
+    then not acted on. A longer re-run reversed the conclusion entirely.</p>
+    <p>The pattern worth taking away is not any particular fix. It is that the measurement design
+    decided the answer at least as often as the algorithm design did.</p>
+    <p class="foot" style="margin-top:2em">A detailed companion document covers the mathematics,
+    the estimator equations and the exact decision logic.</p>
+  </div>
+</section>
+
+</div>

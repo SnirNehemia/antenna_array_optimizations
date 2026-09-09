@@ -1,0 +1,835 @@
+<title>Mode C Anti-Jam: Algorithm Reference</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Serif:ital,wght@0,400;0,600;1,400&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
+<style>
+:root{
+  color-scheme: light;
+  --ground:#f7f8fa; --surface:#ffffff; --sunken:#eef1f5; --eqbg:#f4f6f9;
+  --ink:#10151c; --ink2:#3d4756; --ink3:#6b7688;
+  --rule:#dfe3ea; --rule2:#c9d0da;
+  --accent:#1c5cab; --warn:#c0392f; --ok:#008300;
+  --sans:"IBM Plex Sans",ui-sans-serif,system-ui,sans-serif;
+  --serif:"IBM Plex Serif",Georgia,serif;
+  --mono:"IBM Plex Mono",ui-monospace,Consolas,monospace;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    color-scheme: dark;
+    --ground:#0f1319; --surface:#161b23; --sunken:#1c222b; --eqbg:#1a212b;
+    --ink:#eef2f7; --ink2:#b9c2d0; --ink3:#8a94a4;
+    --rule:#262d38; --rule2:#333c49;
+    --accent:#6da7ec; --warn:#e07068; --ok:#3fa63f;
+  }
+}
+:root[data-theme="dark"]{
+  color-scheme: dark;
+  --ground:#0f1319; --surface:#161b23; --sunken:#1c222b; --eqbg:#1a212b;
+  --ink:#eef2f7; --ink2:#b9c2d0; --ink3:#8a94a4;
+  --rule:#262d38; --rule2:#333c49;
+  --accent:#6da7ec; --warn:#e07068; --ok:#3fa63f;
+}
+*{box-sizing:border-box;}
+body{background:var(--ground);color:var(--ink);font-family:var(--serif);
+  font-size:16.5px;line-height:1.62;margin:0;-webkit-font-smoothing:antialiased;}
+.wrap{max-width:1120px;margin:0 auto;padding:0 28px 100px;}
+.col{max-width:680px;}
+h1,h2,h3,h4,.eyebrow{font-family:var(--sans);text-wrap:balance;}
+h1{font-size:2.3rem;line-height:1.12;font-weight:600;letter-spacing:-.02em;margin:0 0 .35em;}
+h2{font-size:1.42rem;font-weight:600;letter-spacing:-.01em;margin:0 0 .5em;}
+h3{font-size:1.05rem;font-weight:600;margin:2em 0 .5em;}
+h4{font-size:.92rem;font-weight:600;margin:1.5em 0 .4em;color:var(--ink);}
+p{margin:0 0 1em;}
+.eyebrow{font-size:.72rem;font-weight:600;letter-spacing:.13em;text-transform:uppercase;
+  color:var(--ink3);margin:0 0 .9em;}
+.lede{font-family:var(--sans);font-size:1.12rem;line-height:1.55;color:var(--ink2);}
+code,.mono{font-family:var(--mono);font-size:.87em;}
+code{background:var(--sunken);padding:.1em .34em;border-radius:3px;}
+header{padding:66px 0 28px;border-bottom:1px solid var(--rule);margin-bottom:14px;}
+section{padding:40px 0;border-top:1px solid var(--rule);}
+section:first-of-type{border-top:none;}
+.toc{background:var(--surface);border:1px solid var(--rule);border-radius:5px;
+  padding:20px 24px;margin:26px 0 0;font-family:var(--sans);font-size:.9rem;}
+.toc ol{margin:0;padding-left:1.3em;columns:2;column-gap:36px;}
+.toc li{margin-bottom:.4em;color:var(--ink2);}
+.toc a{color:var(--ink2);text-decoration:none;}
+.toc a:hover{color:var(--accent);text-decoration:underline;}
+/* equations */
+.eq{font-family:var(--mono);font-size:.92rem;line-height:1.75;background:var(--eqbg);
+  border:1px solid var(--rule);border-left:3px solid var(--accent);border-radius:4px;
+  padding:14px 18px;margin:18px 0;overflow-x:auto;color:var(--ink);}
+.eq .cm{color:var(--ink3);}
+.eqn{float:right;color:var(--ink3);font-size:.8rem;font-family:var(--sans);}
+var{font-family:var(--mono);font-style:normal;font-size:.92em;}
+/* tables */
+.tw{overflow-x:auto;margin:20px 0;}
+table{border-collapse:collapse;width:100%;font-family:var(--sans);font-size:.86rem;
+  font-variant-numeric:tabular-nums;}
+caption{caption-side:bottom;text-align:left;color:var(--ink3);font-size:.79rem;
+  padding-top:9px;font-family:var(--sans);}
+th,td{padding:7px 11px;text-align:right;border-bottom:1px solid var(--rule);vertical-align:top;}
+th:first-child,td:first-child{text-align:left;}
+thead th{font-weight:600;color:var(--ink3);font-size:.75rem;letter-spacing:.05em;
+  text-transform:uppercase;border-bottom:1px solid var(--rule2);}
+td.lbl{font-family:var(--mono);font-size:.79rem;color:var(--ink2);}
+td.d{text-align:left;font-family:var(--serif);font-size:.93rem;color:var(--ink2);
+  white-space:normal;}
+.warn{color:var(--warn);font-weight:600;} .ok{color:var(--ok);font-weight:600;}
+.note{background:var(--sunken);border:1px solid var(--rule);border-radius:4px;
+  padding:15px 19px;margin:20px 0;font-size:.93rem;color:var(--ink2);}
+.note b{color:var(--ink);}
+.note.derr{border-left:3px solid var(--warn);}
+.two{display:grid;grid-template-columns:1fr 1fr;gap:32px;}
+ul.tight{padding-left:1.15em;margin:0 0 1em;}
+ul.tight li{margin-bottom:.42em;}
+ol.steps{padding-left:1.3em;margin:0 0 1em;}
+ol.steps li{margin-bottom:.6em;}
+figure{margin:26px 0;}
+svg.fig{width:100%;height:auto;display:block;background:var(--surface);
+  border:1px solid var(--rule);border-radius:5px;}
+figcaption{font-family:var(--sans);font-size:.81rem;color:var(--ink3);margin-top:9px;
+  max-width:680px;line-height:1.5;}
+.flabel{font-family:var(--sans);font-size:12px;fill:var(--ink2);}
+.fsmall{font-family:var(--mono);font-size:10.5px;fill:var(--ink3);}
+.fbold{font-family:var(--sans);font-size:12.5px;font-weight:600;fill:var(--ink);}
+.fileref{font-family:var(--mono);font-size:.78rem;color:var(--ink3);
+  border-top:1px dashed var(--rule2);padding-top:7px;margin-top:14px;}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px;}
+@media (max-width:760px){
+  h1{font-size:1.8rem;} body{font-size:16px;}
+  .two{grid-template-columns:1fr;gap:6px;} .toc ol{columns:1;}
+  .wrap{padding:0 18px 70px;} header{padding-top:44px;}
+}
+</style>
+
+<div class="wrap">
+
+<header>
+  <p class="eyebrow">Anti-jam milestone · algorithm reference · 2026-09-09</p>
+  <h1>Mode C anti-jam: signal model, estimators and decision logic</h1>
+  <p class="lede col">The complete algorithm as implemented: the array and interference model, the
+  beamformer solutions for rank-1 and rank-<var>r</var> desired signals, covariance estimation,
+  MUSIC direction finding, presence detection, period estimation, the constant-velocity predictor,
+  the release policies, and the metric everything is scored against.</p>
+  <div class="toc">
+    <ol>
+      <li><a href="#model">Signal and array model</a></li>
+      <li><a href="#beamformer">The beamformer: MVDR, LCMV, max-SINR</a></li>
+      <li><a href="#loading">Diagonal loading</a></li>
+      <li><a href="#covariance">Covariance estimation and its lag</a></li>
+      <li><a href="#music">MUSIC direction finding</a></li>
+      <li><a href="#presence">Presence detection and the two-timescale fix</a></li>
+      <li><a href="#period">Period estimation and anticipatory nulling</a></li>
+      <li><a href="#cv">Constant-velocity DoA prediction</a></li>
+      <li><a href="#mirror">The mirror ambiguity</a></li>
+      <li><a href="#release">Release policies and the bound</a></li>
+      <li><a href="#guard">Array profiling and feasibility</a></li>
+      <li><a href="#metric">The metric</a></li>
+      <li><a href="#loop">The full update, in order</a></li>
+    </ol>
+  </div>
+</header>
+
+<section id="model">
+  <div class="col">
+    <h2>1 · Signal and array model</h2>
+    <p>The array has <var>N</var> elements. Element patterns come from CST far-field exports on a
+    <span class="mono">(θ, φ)</span> grid, so the steering vector is <em>measured</em>, not assumed
+    — mutual coupling is included by construction, and there is no analytic <span class="mono">exp(jkd
+    sinθ)</span> model anywhere in the signal path.</p>
+    <p>Write <var>e(θ,φ) ∈ ℂ<sup>N×n<sub>c</sub></sup></var> for the stacked element responses at a
+    direction, where <var>n<sub>c</sub></var> is the number of polarization components retained
+    (1 for a single-component export, 2 for <span class="mono">total</span>). A source at that
+    direction excites all <var>n<sub>c</sub></var> columns.</p>
+    <p>Per control step the receiver delivers <var>K</var> snapshots (default 128):</p>
+  </div>
+
+  <div class="eq"><span class="eqn">(1)</span>
+x(t) = Σ<sub>c</sub> e<sub>c</sub>(θ<sub>s</sub>,φ<sub>s</sub>)·s<sub>c</sub>(t)
+     + Σ<sub>c</sub> e<sub>c</sub>(θ<sub>j</sub>,φ<sub>j</sub>)·j<sub>c</sub>(t)
+     + n(t)
+
+<span class="cm">s, j, n  i.i.d. circular complex Gaussian, drawn as
+         sqrt(σ²/2)·(randn + i·randn)   — temporally white
+σ<sub>n</sub>² = 1  by definition; σ<sub>s</sub>², σ<sub>j</sub>² are set relative to it in dB</span></div>
+
+  <div class="col">
+    <p>The interference-plus-noise covariance — the quantity the whole method is built around — is</p>
+  </div>
+  <div class="eq"><span class="eqn">(2)</span>
+R = (σ<sub>j</sub>²/n<sub>c</sub>)·e(θ<sub>j</sub>,φ<sub>j</sub>)·e(θ<sub>j</sub>,φ<sub>j</sub>)<sup>H</sup> + σ<sub>n</sub>²·I
+
+<span class="cm">note: interference + noise ONLY, no desired-signal term. This is the R of
+the MVDR oracle. What the ALGORITHM estimates from snapshots contains the
+desired signal too — that distinction (MVDR vs MPDR) drives §3 and §12.</span></div>
+
+  <div class="col">
+    <p>Output SINR for a weight vector <var>w</var>, which is what everything is ultimately scored
+    on:</p>
+  </div>
+  <div class="eq"><span class="eqn">(3)</span>
+SINR(w) = σ<sub>s</sub>²·‖w<sup>H</sup>e(θ<sub>s</sub>)‖² / ( σ<sub>j</sub>²·‖w<sup>H</sup>e(θ<sub>j</sub>)‖² + σ<sub>n</sub>²·‖w‖² )
+
+<span class="cm">the ‖w‖² term is per-element noise: it is why w cannot simply be scaled up</span></div>
+
+  <div class="note">
+    <b>Scope, and what the algorithm may see.</b> One jammer, unknown direction, 2-D
+    <span class="mono">(θ, φ)</span>. The algorithm consumes <em>only</em> the snapshot matrix
+    <var>X ∈ ℂ<sup>N×K</sup></var>. The true <var>θ<sub>j</sub></var> never leaves the simulator;
+    it is used solely to compute the oracle reference and the KPIs. Mode S — a scalar SINR feedback
+    channel with no snapshots — is a separate contract not covered here.
+  </div>
+  <p class="fileref col">sim_engine_step.m · sim_analytic_covariance.m</p>
+</section>
+
+<section id="beamformer">
+  <div class="col">
+    <h2>2 · The beamformer</h2>
+    <h3>2.1 Rank-1 desired signal: MVDR</h3>
+    <p>With a single polarization component the desired signal is rank-1 and the classical
+    minimum-variance distortionless-response problem applies: minimise output power subject to unit
+    gain on the steering direction.</p>
+  </div>
+  <div class="eq"><span class="eqn">(4)</span>
+minimise  w<sup>H</sup>R w    subject to   w<sup>H</sup>e<sub>s</sub> = 1
+
+  ⇒   w = R<sup>-1</sup>e<sub>s</sub> / ( e<sub>s</sub><sup>H</sup>R<sup>-1</sup>e<sub>s</sub> )</div>
+
+  <div class="col">
+    <p>The constraint pins the desired direction, so the only way the optimiser can reduce output
+    power is to attenuate everything else that is loud — which places a null on the jammer without
+    ever estimating its direction. This is why the reactive path needs no DoA at all.</p>
+
+    <h3>2.2 Adding an explicit null: LCMV</h3>
+    <p>To place a null at a <em>chosen</em> direction (the predictive path does this), extend to a
+    linear-constraint set: distortionless on <var>e<sub>s</sub></var>, zero on each column of
+    <var>e<sub>null</sub></var>.</p>
+  </div>
+  <div class="eq"><span class="eqn">(5)</span>
+C = [ e<sub>s</sub> , e<sub>null</sub> ] ,   g = [ 1 , 0 , … , 0 ]<sup>T</sup>
+
+  w = R<sub>l</sub><sup>-1</sup>C · ( C<sup>H</sup>R<sub>l</sub><sup>-1</sup>C )<sup>+</sup> · g          <span class="cm">R<sub>l</sub> = R + δI</span>
+
+<span class="cm">pinv, not inverse: if a predicted null direction happens to coincide with the
+steering direction, C goes rank-deficient. pinv degrades to a minimum-norm
+solution instead of throwing a warning and returning garbage.</span></div>
+
+  <div class="col">
+    <h3>2.3 Rank-<var>r</var> desired signal: max-SINR</h3>
+    <p>With <var>n<sub>c</sub></var> = 2 a distortionless constraint on <em>every</em> component is
+    over-constrained — the desired signal is rank-<var>n<sub>c</sub></var>, and demanding unit gain
+    on each column fixes the polarization response rather than the power. The correct object is the
+    generalised Rayleigh quotient:</p>
+  </div>
+  <div class="eq"><span class="eqn">(6)</span>
+maximise   w<sup>H</sup>(e<sub>s</sub>e<sub>s</sub><sup>H</sup>)w / w<sup>H</sup>R<sub>l</sub>w
+
+  A = R<sub>l</sub><sup>-1</sup>e<sub>s</sub>            <span class="cm">(N × r)</span>
+  G = e<sub>s</sub><sup>H</sup>A                <span class="cm">(r × r) Hermitian gram</span>
+  w = A · v<sub>max</sub>(G)        <span class="cm">v_max = principal eigenvector; w normalised to unit norm</span>
+
+<span class="cm">with a hard null, first restrict to the null-constrained subspace:
+  Q = null(e<sub>null</sub><sup>H</sup>) ,  then solve the same problem in Q and map back w = Qz</span></div>
+
+  <div class="note">
+    <b>Why this matters for generality.</b> Which branch runs depends on <var>n<sub>c</sub></var>,
+    which depends on the export. An array whose second component is numerical residue (~100 dB
+    down) must be treated as single-polarization: pairing a real component with noise makes
+    <var>n<sub>c</sub></var> = 2 while each physical source is rank-1, which corrupts the model
+    order used in §5 and §6. <code>select_polarization_stacks</code> hard-errors on that pairing
+    rather than letting it through.
+  </div>
+  <p class="fileref col">adapt_lcmv.m · adapt_lcmv_null.m · adapt_maxsinr.m</p>
+</section>
+
+<section id="loading">
+  <div class="col">
+    <h2>3 · Diagonal loading</h2>
+    <p>Every solve above uses <var>R<sub>l</sub> = R + δI</var>. Loading is not a numerical
+    nicety — it is the physical knob that trades <b>null depth against main-beam gain and
+    robustness</b>, and it appears again in §10 as the mechanism of the graded release.</p>
+    <p>The estimated covariance contains the desired signal (this is MPDR, not MVDR), so under any
+    steering error the optimiser can reduce output power by nulling <em>the signal itself</em>.
+    Loading bounds how sharply it can do that. Empirically δ = +10 dB relative to the noise floor;
+    at −10 dB the self-nulling cost 2–3.7 dB of oracle gap, and above the jammer eigenvalue
+    (≈ J/N + 10log₁₀N) the null is starved instead.</p>
+  </div>
+  <div class="note derr">
+    <b>Defect found and fixed.</b> A data-driven loading mode estimated δ from the data and
+    required <var>N > 2n<sub>c</sub></var>, <b>throwing</b> otherwise. That made the entire Mode C
+    stack — including the reactive tracker, which does not use the feature — unable to run on a
+    1-element or a 2-element dual-pol array. Measured across 90 campaign cells the mode was worth
+    <b>+0.00 pp</b> against fixed loading: identically zero on every cell. It now warns and falls
+    back to the configured δ.
+  </div>
+  <p class="fileref col">adapt_tracking_init.m · adapt_predict_init.m</p>
+</section>
+
+<section id="covariance">
+  <div class="col">
+    <h2>4 · Covariance estimation, and the lag it creates</h2>
+    <p>Per step, the <var>K</var> snapshots are batched and folded into a running estimate with
+    exponential forgetting:</p>
+  </div>
+  <div class="eq"><span class="eqn">(7)</span>
+R̂<sub>batch</sub>(k) = (1/K)·X(k)X(k)<sup>H</sup>
+
+R̂(k) = λ·R̂(k−1) + (1−λ)·R̂<sub>batch</sub>(k)        <span class="cm">λ = 0.90, R̂(0) = I</span>
+
+<span class="cm">effective memory ≈ 1/(1−λ) = 10 steps = 0.5 s at dt = 0.05 s</span></div>
+
+  <div class="col">
+    <p>One batch per step, not one update per snapshot column — the earlier per-column recursion
+    silently made <var>K</var> an accelerator of forgetting rather than a noise-reduction knob.</p>
+
+    <h3>4.1 The lag is exactly one horizon</h3>
+    <p>Under a jammer drifting at <var>θ̇</var>, the exponentially-weighted estimate is centred on
+    the jammer's position roughly <var>1/(1−λ)</var> steps in the past. This was measured rather
+    than assumed: steering a hard null from ground truth, delayed by <var>τ</var> steps, reproduces
+    the reactive tracker's score at <var>τ</var> ≈ 10.</p>
+  </div>
+  <div class="tw col">
+  <table>
+    <caption>Truth-steered null delayed by τ, against the reactive tracker's 44.8% / 4.00 dB.
+    2°/s drift, λ = 0.90.</caption>
+    <thead><tr><th>τ (steps)</th><th>0</th><th>5</th><th>10</th><th>15</th><th>20</th></tr></thead>
+    <tbody>
+      <tr><td>track score %</td><td>94.8</td><td>73.5</td><td class="warn">49.8</td><td>38.6</td><td>27.3</td></tr>
+      <tr><td>oracle gap dB</td><td>0.88</td><td>2.28</td><td class="warn">3.88</td><td>5.29</td><td>6.41</td></tr>
+    </tbody>
+  </table>
+  </div>
+  <div class="col">
+    <p>At 0.05 s/step and 2°/s that is <b>1.0° of angular pointing error</b> — and steering the same
+    null at the true current angle recovers 44.8 → 94.8%. The deficit is angle lag, not estimator
+    noise, which is what justifies §8 and rules out re-tuning λ (no value of λ makes the failing
+    cells pass; the two regimes cross near λ ≈ 0.83).</p>
+  </div>
+  <p class="fileref col">adapt_tracking_update.m · adapt_predict_update.m</p>
+</section>
+
+<section id="music">
+  <div class="col">
+    <h2>5 · MUSIC direction finding</h2>
+    <p>Eigendecompose the Hermitian part of <var>R̂</var>, sort descending, and split into signal
+    and noise subspaces at an assumed model order:</p>
+  </div>
+  <div class="eq"><span class="eqn">(8)</span>
+R̂ = V Λ V<sup>H</sup> ,   λ<sub>1</sub> ≥ λ<sub>2</sub> ≥ … ≥ λ<sub>N</sub>
+
+n<sub>sig</sub> = 2·n<sub>c</sub>          <span class="cm">desired signal (n_c) + one jammer (n_c)</span>
+E<sub>n</sub> = V[:, n<sub>sig</sub>+1 : N]     <span class="cm">noise subspace</span>
+
+P(θ,φ) = ‖a(θ,φ)‖² / ‖E<sub>n</sub><sup>H</sup>a(θ,φ)‖²      <span class="cm">summed over components</span></div>
+
+  <div class="col">
+    <p>The <var>‖a‖²</var> numerator is essential with <em>measured</em> element patterns. A
+    textbook ULA has constant steering-vector norm, so the numerator is a constant and is usually
+    dropped. Real exports do not: column norms vary strongly across the grid, and without
+    normalisation the metric peaks at low-norm directions (endfire) rather than at sources.</p>
+    <p>The grid search excludes a guard sector around the target (§11) and is thinned by
+    <code>doa_stride</code>. Cost is the dominant term in the whole algorithm: at full resolution
+    this is <b>42× / 126× / 4.6×</b> the reactive tracker on the 6-, 16- and 20-element arrays.
+    Striding halves it for a DoA RMSE change of 1.00 → 1.45° at stride 4.</p>
+  </div>
+
+  <div class="note derr">
+    <b>Two model-order problems, one fixed and one open.</b> <em>Fixed:</em>
+    <var>n<sub>sig</sub> ≥ N</var> leaves no noise subspace, so MUSIC genuinely cannot run — but it
+    used to <b>throw</b>, killing the whole run on small apertures. It now returns
+    <code>feasible = false</code> and the caller degrades to the reactive beamformer.
+    <em>Open:</em> <var>n<sub>sig</sub> = 2n<sub>c</sub></var> is an assumption, not a measurement.
+    On an array whose second component is weak but real it reads presence off a near-noise
+    eigenvalue. A rank-aware order estimated from the eigenvalue profile is the standing
+    recommendation.
+  </div>
+  <p class="fileref col">adapt_music_doa.m</p>
+</section>
+
+<section id="presence">
+  <div class="col">
+    <h2>6 · Presence detection, and the two-timescale fix</h2>
+    <p>Whether the jammer is currently transmitting is read from the signal/noise eigengap. The
+    first jammer eigenvalue sits at index <var>n<sub>c</sub>+1</var>; when the jammer stops it
+    collapses toward the noise floor.</p>
+  </div>
+  <div class="eq"><span class="eqn">(9)</span>
+σ̂<sub>n</sub>² = mean( λ<sub>n<sub>sig</sub>+1</sub> … λ<sub>N</sub> )        <span class="cm">noise-subspace mean</span>
+
+gap<sub>dB</sub> = 10·log₁₀( λ<sub>n<sub>c</sub>+1</sub> / σ̂<sub>n</sub>² )
+
+present  ⟺  gap<sub>dB</sub> ≥ presence_gap_db        <span class="cm">default 6 dB</span></div>
+
+  <div class="col">
+    <h3>6.1 Why this failed, and the fix</h3>
+    <p>Evaluated on <var>R̂</var>, this statistic inherits <var>R̂</var>'s smoothing. With a 0.5 s
+    memory and a 1–2.5 s OFF phase, residual jammer energy keeps the eigengap open through the
+    entire gap: <b>presence saturates at 100%</b>. And a constant indicator has no spectral line,
+    so the period estimator of §7 can never learn anything.</p>
+    <p><b>One forgetting factor cannot serve both roles.</b> The beamformer wants long memory for
+    low variance; the edge detector wants short memory for time resolution. The repair maintains a
+    second covariance used <em>only</em> for detection, never to form weights:</p>
+  </div>
+  <div class="eq"><span class="eqn">(10)</span>
+R̂<sub>fast</sub>(k) = λ<sub>f</sub>·R̂<sub>fast</sub>(k−1) + (1−λ<sub>f</sub>)·R̂<sub>batch</sub>(k)   <span class="cm">λ<sub>f</sub> = 0.5 → ~2-step memory</span>
+
+present  ←  eigengap test (9) evaluated on R̂<sub>fast</sub>
+angle    ←  MUSIC (8) evaluated on R̂            <span class="cm">the angle still wants averaging</span>
+
+<span class="cm">constraint enforced at init: λ<sub>f</sub> &lt; λ. A detector slower than the
+beamformer cannot resolve edges the beamformer already smooths.</span></div>
+
+  <div class="tw col">
+  <table>
+    <caption>Presence error against the true 50% duty cycle, 198-case campaign. A value of 0.46
+    means the indicator is effectively saturated.</caption>
+    <thead><tr><th>toggle period</th><th>single-timescale</th><th>two-timescale</th><th>pre-null firing</th></tr></thead>
+    <tbody>
+      <tr><td>4 s</td><td class="warn">0.455</td><td class="ok">0.127</td><td>0.3% → 4.6%</td></tr>
+      <tr><td>10 s</td><td class="warn">0.321</td><td class="ok">0.060</td><td>1.0% → 3.3%</td></tr>
+      <tr><td>25 s</td><td>0.138</td><td class="ok">0.033</td><td>0.0% → 1.3%</td></tr>
+    </tbody>
+  </table>
+  </div>
+  <p class="fileref col">adapt_predict_update.m :: presence_from_covariance</p>
+</section>
+
+<section id="period">
+  <div class="col">
+    <h2>7 · Period estimation and anticipatory nulling</h2>
+    <p>The presence indicator is recorded as a 0/1 sequence and its dominant non-DC spectral line
+    is taken as the toggle period.</p>
+  </div>
+  <div class="eq"><span class="eqn">(11)</span>
+p = presence record, last B samples ;   P = |FFT(p − mean p)|²
+
+bin* = argmax P[2 … ⌊n/2⌋+1]
+trusted ⟺ P[bin*] &gt; 3·mean(P[2…])  AND  n ≥ min_periods · period
+
+<span class="cm">sub-bin parabolic interpolation on (P[b−1], P[b], P[b+1]):
+  δ = ½(a−c)/(a−2b+c) ,   period = n/(bin*−1+δ)
+the bin grid is coarse (period = n/bin), and a raw bin is off by enough
+steps to mistime the pre-null.</span></div>
+
+  <div class="note derr">
+    <b>Defect: the window could not hold the periods of interest.</b> With
+    <var>B</var> = 1024 steps = 51.2 s and <code>min_periods</code> = 3, the trust condition
+    <var>n ≥ 3·period</var> can only be met for periods below ~17 s. Every slower pattern was
+    undetectable <em>by arithmetic</em>, regardless of how clean the signal was. The window is now
+    sized from the longest period worth detecting:
+    <var>B = max(B<sub>cfg</sub>, ⌈min_periods · T<sub>max</sub> / dt⌉)</var>.
+  </div>
+
+  <div class="col">
+    <p>When the period is trusted and the jammer is currently absent, the next turn-on is projected
+    and the null is pre-formed <var>L</var> steps before it:</p>
+  </div>
+  <div class="eq"><span class="eqn">(12)</span>
+φ = (k − k<sub>last_on</sub>) mod T̂ ;   steps_to_next = T̂ − φ
+
+L = clamp( lead_frac · T̂ ,  lead_steps ,  lead_cap_horizons/(1−λ) )
+
+predicted_on ⟺ steps_to_next ≤ L</div>
+
+  <div class="col">
+    <p>Both bounds are load-bearing. A <em>fixed</em> lead is a shrinking fraction of a lengthening
+    cycle — the shipped 6 steps pre-nulled for 0.75% of a 40 s OFF window. The <em>cap</em> exists
+    because the useful lead is bounded by re-acquisition time, not by cycle length: uncapped,
+    scaling with the period cost −2.5 pp at 40 s; capped at two covariance horizons it gains +5.6.</p>
+  </div>
+  <p class="fileref col">adapt_predict_update.m :: detect_period</p>
+</section>
+
+<section id="cv">
+  <div class="col">
+    <h2>8 · Constant-velocity DoA prediction</h2>
+    <p>To remove the lag quantified in §4.1, the MUSIC angle sequence drives a Kalman filter with a
+    constant-velocity model on <span class="mono">(θ, φ)</span> in degrees.</p>
+  </div>
+  <div class="eq"><span class="eqn">(13)</span>
+x = [ θ , θ̇ , φ , φ̇ ]<sup>T</sup>
+
+F = [1 dt 0  0        Q<sub>blk</sub> = q·[ dt⁴/4  dt³/2        H = [1 0 0 0
+     0  1 0  0                  dt³/2  dt²  ]           0 0 1 0]
+     0  0 1 dt
+     0  0 0  1]        Q = blkdiag(Q<sub>blk</sub>, Q<sub>blk</sub>) ,  q = q<sub>accel</sub>²
+
+R<sub>meas</sub> = diag(r², r²)        <span class="cm">r = DoA noise std, grid-quantization dominated</span></div>
+
+  <div class="col">
+    <p>Standard predict/update, with three domain-specific departures:</p>
+    <ol class="steps">
+      <li><b>Azimuth innovation is wrapped</b> to [−180°, 180°). Without it a jammer crossing
+      φ = 0 produces a 359° residual and the gate discards a perfectly good measurement.</li>
+      <li><b>Innovation gating.</b> If <var>‖y‖ &gt; gate_deg</var> the measurement is rejected and
+      the state coasts on the model. After <code>max_misses</code> consecutive rejections the track
+      is dropped, so a stale velocity cannot steer the null indefinitely.</li>
+      <li><b>Pole reflection.</b> A predicted <var>θ</var> outside [0°, 180°] is reflected back with
+      <var>φ → φ+180°</var> — the same fold the sphere applies, not a clamp.</li>
+    </ol>
+    <h3>8.1 The lead is derived, not fitted</h3>
+    <p>The prediction is extrapolated <var>L<sub>cv</sub></var> steps ahead. That value is not
+    tuned: the MUSIC angle is computed <em>from the same lagged</em> <var>R̂</var>, so it inherits
+    the covariance horizon. Measured directly, the raw MUSIC estimate best matches truth delayed
+    <b>exactly 10 steps</b> (mean |err| 0.27° at τ=10, rising either side). Adding the one-step
+    application delay and the weight-smoothing lag:</p>
+  </div>
+  <div class="eq"><span class="eqn">(14)</span>
+L<sub>cv</sub> = 1/(1−λ)  +  (application + smoothing)  =  10 + 4  =  14 steps
+
+<span class="cm">design rule: L<sub>cv</sub> tracks 1/(1−λ). Re-tune it if λ moves.</span></div>
+
+  <div class="col">
+    <h3>8.2 The engagement gate</h3>
+    <p>The predicted angle steers a hard null (5) with the measured <var>R̂</var> <em>only</em> when
+    the track is valid and the estimated angular speed exceeds a threshold:</p>
+  </div>
+  <div class="eq"><span class="eqn">(15)</span>
+speed = hypot( θ̇ , φ̇ · sin θ )          <span class="cm">great-circle rate</span>
+
+valid ⟺ n<sub>track</sub> ≥ min_track_steps  AND  speed ≥ min_speed_deg_s</div>
+
+  <div class="note">
+    <b>Why the gate is the important part.</b> Below the speed threshold the reactive path is
+    already at the oracle and there is nothing to win. With the gate, static and on/off scenarios
+    were measured <b>bit-identical</b> with the feature on and off — max |ΔSINR| &lt; 1e-12 — so
+    the CV path is a strict addition rather than a change. Measured effect where it does engage:
+    2°/s drift 44.8 → 90.3%; drift with a 10° jump 36.6 → 86.7%.
+  </div>
+  <p class="fileref col">adapt_cv_init.m · adapt_cv_update.m</p>
+</section>
+
+<section id="mirror">
+  <div class="col">
+    <h2>9 · The mirror ambiguity</h2>
+    <p>Some exported arrays are exactly degenerate under
+    <span class="mono">(θ,φ) → (180−θ,φ)</span>. Measured on a 20-element planar dipole array:
+    steering coherence <b>1.0000</b>, whole-stack relative difference <b>2.8×10⁻⁶</b>. This is the
+    textbook up/down ambiguity of a planar array in the <var>z</var>=0 plane with a common phase
+    centre and no geometric phase re-added.</p>
+    <p>It pulls two ways:</p>
+    <ul class="tight">
+      <li><b>Benign for nulling.</b> If <var>e(θ) ≡ e(180−θ)</var>, a null at the mirror <em>is</em>
+      the null at truth. The reactive path, which never uses an angle, is entirely unaffected.</li>
+      <li><b>Fatal for tracking.</b> The MUSIC peak hops between branches, and a CV filter
+      differences the hops into a large phantom velocity — worse than having no predictor.</li>
+    </ul>
+    <p>So the filter measures the array's own mirror coherence once at initialisation, over a few
+    probe directions, and takes the minimum. Above 0.99 the fold is enabled and each measurement is
+    resolved to whichever branch is nearer the current prediction.</p>
+  </div>
+  <div class="eq"><span class="eqn">(16)</span>
+coh = |a(θ,φ)<sup>H</sup>a(180−θ,φ)| / (‖a(θ,φ)‖·‖a(180−θ,φ)‖)
+
+fold ⟺ min over probes( coh ) &gt; 0.99
+
+z = argmin<sub>{z, mirror(z)}</sub> ‖ z − Hx̂<sup>−</sup> ‖        <span class="cm">nearest-branch resolution</span></div>
+
+  <div class="note">
+    <b>Consequences worth recording.</b> The threshold is not near anything — the arrays in the set
+    split into 1.0000 versus 0.05–0.87. Measured modulo the fold, the DoA error on the degenerate
+    array falls from <b>median 139° to 1.5°</b>: MUSIC was accurate all along and reporting from the
+    wrong hemisphere. Note also that any DoA-error KPI on such an array is meaningless unless
+    computed modulo the fold — and that <var>θ</var> = 90° is its own mirror, so the coherence test
+    is vacuous there and returns NaN.
+  </div>
+  <p class="fileref col">adapt_cv_init.m :: mirror_coherence</p>
+</section>
+
+<section id="release">
+  <div class="col">
+    <h2>10 · Release policy, and why the question is closed</h2>
+    <p>When presence goes false, should the null be dropped? Releasing restores full quiescent gain
+    — the point of detecting OFF at all. But the null must be re-acquired at the next turn-on, at a
+    cost of roughly one covariance horizon of degraded SINR.</p>
+    <p>Three policies were implemented and measured at scale.</p>
+
+    <h3>10.1 Binary (shipped)</h3>
+    <p>Release immediately on <var>¬present</var>: recompute from <var>R = I</var>, giving the
+    quiescent beam.</p>
+
+    <h3>10.2 Elapsed-absence gate (rejected)</h3>
+    <p>Release only after <var>s<sub>absent</sub> ≥ h/(1−λ)</var>. Deliberately causal and
+    learning-free — an earlier version gated on <var>T̂(1−duty)</var> and did nothing useful,
+    because <code>min_periods</code> cycles of learning consume most of a short run and the damage
+    is done before a period exists.</p>
+
+    <h3>10.3 Graded release via loading (rejected)</h3>
+    <p>Relax the null <em>continuously</em> rather than switching. The relaxation is applied through
+    diagonal loading — the physical knob of §3 — because raising δ toward the scale of
+    <var>R̂</var>'s own energy progressively swamps the jammer eigenvalue and returns the beam to
+    quiescent. Blending two weight vectors was rejected: they are defined only up to a phase and can
+    cancel.</p>
+  </div>
+  <div class="eq"><span class="eqn">(17)</span>
+α(s<sub>absent</sub>) = 0                                  if s ≤ t<sub>0</sub>
+                 (s − t<sub>0</sub>)/(t<sub>1</sub> − t<sub>0</sub>)                if t<sub>0</sub> &lt; s &lt; t<sub>1</sub>
+                 1                                  if s ≥ t<sub>1</sub>
+
+t<sub>0</sub> = h<sub>min</sub>/(1−λ) ,   t<sub>1</sub> = max( t<sub>0</sub> + h<sub>ramp</sub>/(1−λ) , f<sub>off</sub>·T̂(1−duty) )
+
+δ<sub>eff</sub> = δ · ( max(κ·tr R̂, δ)/δ )<sup>α</sup>        <span class="cm">geometric ramp to a swamping load</span>
+
+<span class="cm">t<sub>1</sub> scales to the PREDICTED OFF window once the period is learned: short
+when the gap is long (release early, keep the gain), never completing when the
+gap is short (hold the null, avoid re-acquisition) — behaviour a single
+constant provably cannot provide. tr R̂ upper-bounds the largest eigenvalue at
+O(N) instead of an eigendecomposition.</span></div>
+
+  <div class="tw col">
+  <table>
+    <caption>90 cells × 3 seeds × 3 algorithms × 3 arms, 8 toggle cycles, 2,430 runs.
+    Paired per cell against the same scenario and seed.</caption>
+    <thead><tr><th>policy</th><th>mean</th><th>cells ≥ 90</th><th>vs base</th><th>better</th><th>worse</th></tr></thead>
+    <tbody>
+      <tr><td>no release repair</td><td>73.5</td><td>24 / 90</td><td>—</td><td>—</td><td>—</td></tr>
+      <tr><td>graded (17)</td><td>76.1</td><td>29 / 90</td><td>+2.63</td><td>66</td><td>10</td></tr>
+      <tr><td><b>binary</b></td><td class="ok"><b>80.6</b></td><td class="ok">32 / 90</td><td class="ok">+7.10</td><td>69</td><td>11</td></tr>
+      <tr><td>best-of-both, per cell</td><td>81.5</td><td>32 / 90</td><td>+7.97</td><td>—</td><td>—</td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <div class="col">
+    <p>The graded policy loses to binary by <b>−4.46 mean, worse on 45 of 90</b>, at every toggle
+    period. It does what it was designed to do — on the 11 cells where binary regresses, binary
+    averages −7.06 and graded +0.18 — but pays far more on the 79 cells that were never the problem.</p>
+  </div>
+
+  <div class="note">
+    <b>The bound is the useful output.</b> The last row is an oracle: the better of
+    {no repair, binary} chosen per cell with hindsight, which no realisable switching rule can beat.
+    It is worth <b>+0.9 mean and zero additional passing cells</b> over binary alone. Therefore the
+    entire family of switching, hybrid and confidence-weighted release policies is bounded there,
+    and further work on <em>when to drop the null</em> cannot pay. Remaining effort belongs in
+    detection quality (§6), model order (§5) and calibration (§12).
+  </div>
+  <div class="note derr">
+    <b>A NaN trap this exposed.</b> With the feature block absent the ramp fields are NaN, and
+    <code>NaN ≤ 0</code> is false — so the ramp arithmetic ran on NaN, δ went NaN, and the solve
+    turned singular. The run <em>completed</em>, silently returning garbage (a 25 s cell read 12.8
+    instead of 88.2). The guard is now an explicit finiteness test, and a gate asserts that an
+    un-repaired run yields finite SINR and finite weights at every step.
+  </div>
+  <p class="fileref col">adapt_predict_update.m :: release_fraction, release_is_worth_it</p>
+</section>
+
+<section id="guard">
+  <div class="col">
+    <h2>11 · Array profiling, derived guard, feasibility</h2>
+    <p>Several constants were calibrated once on one array and do not generalise. They are now
+    derived per <span class="mono">(array, target)</span> from the pattern data itself.</p>
+  </div>
+  <div class="eq"><span class="eqn">(18)</span>
+w<sub>q</sub> = quiescent beam (4) with R = I
+
+D(θ<sub>s</sub>) = 10log₁₀[ P(θ<sub>s</sub>,φ<sub>s</sub>) / ⟨P⟩<sub>Ω</sub> ]   <span class="cm">⟨·⟩<sub>Ω</sub> = solid-angle-weighted mean, sinθ</span>
+
+HPBW = −3 dB width of P through the target, in θ and in φ
+
+guard = max( ½·max(HPBW<sub>θ</sub>, HPBW<sub>φ</sub>) , grid step )</div>
+
+  <div class="col">
+    <p>The guard is half the wider beamwidth: the angular distance at which a source stops being in
+    the main beam. Against the shipped global constant of 5°, the derived value spans
+    <b>16° to 72.5°</b> across the arrays — so the constant was wrong on every one of them, and any
+    earlier result whose jammer sat between the true and assumed guard was measuring a
+    main-beam jammer, out of scope by the milestone's own definition.</p>
+    <p>The same profile decides whether a cell is a test at all. A pair is refused if the array has
+    no gain toward the target (<var>D &lt; 0 dBi</var>) or if its main beam covers so much of the
+    sphere that no jammer position lies outside it (<var>guard &gt; 90°</var>). In the campaign
+    <b>11 of 35</b> pairs were refused with a stated reason — including all five targets on the
+    1-element array.</p>
+  </div>
+  <p class="fileref col">kpi_array_profile.m</p>
+</section>
+
+<section id="metric">
+  <div class="col">
+    <h2>12 · The metric</h2>
+    <p>Scoring across arrays of 1 to 20 elements needs normalisation against what each array can
+    physically achieve, not against an absolute target.</p>
+  </div>
+  <div class="eq"><span class="eqn">(19)</span>
+w<sub>oracle</sub>(k) = MVDR (4) using the ANALYTIC R of (2), applied with one step of lag
+
+track_score = 100 · mean<sub>k</sub>[ SINR<sub>oracle</sub>(k) − SINR(k) ≤ 3 dB ]</div>
+
+  <div class="col">
+    <p>The oracle scores exactly 100 by construction, giving every grid a built-in anchor. The score
+    folds convergence speed, steady-state gap and recovery into one number.</p>
+  </div>
+  <div class="note">
+    <b>Two cautions on reading it.</b> First, <b>a high score is not good absolute performance.</b>
+    A 2-element array scores 99 because its achievable SINR is 11 dB; a 16-element array scores 72
+    against an achievable 31 dB. Score and potential must always be reported together. Second,
+    <b>availability is not a substitute.</b> On the drift campaign a 35-point improvement in
+    track score moved availability by <b>+0.05 pp</b> (98.18 → 98.23) — it saturates on easy cells
+    and cannot rank algorithms.
+  </div>
+
+  <div class="col">
+    <h3>12.1 What actually limits the system</h3>
+    <p>The simulator computes the desired-signal power from the same <var>e<sub>s</sub></var> handed
+    to the beamformer, so steering-vector error was structurally unmeasurable until an opt-in
+    assumed-patterns path was added. With per-element calibration error
+    <var>g<sub>n</sub> = exp(jε<sub>n</sub>)</var>, <var>ε ~ N(0, σ<sub>φ</sub>²)</var>:</p>
+  </div>
+  <div class="tw col">
+  <table>
+    <caption>Median track score with p10–p90 across 12 error draws, 2°/s drift, fixed loading.</caption>
+    <thead><tr><th>σ<sub>φ</sub> (° RMS)</th><th>0</th><th>1</th><th>2</th><th>3</th><th>5</th></tr></thead>
+    <tbody>
+      <tr><td>reactive</td><td>44.8</td><td>37.4</td><td>10.5</td><td class="warn">1.8</td><td class="warn">0.3</td></tr>
+      <tr><td>predict + CV</td><td>90.3</td><td>85.4</td><td>45.2</td><td class="warn">6.8</td><td class="warn">0.6</td></tr>
+    </tbody>
+  </table>
+  </div>
+  <div class="col">
+    <p>This is the classical MPDR signal-cancellation sensitivity of §3: the snapshots contain the
+    desired signal, so a mis-specified constraint direction lets the optimiser null it. The usable
+    region is below ~1° RMS, and the spread is large (p10–p90 at 2° spans 1.1–76.8), so a
+    calibration statement needs a distribution rather than a point. <b>This is a larger risk to
+    fielding than any algorithm choice in this document.</b></p>
+  </div>
+  <p class="fileref col">closed_loop_run.m :: assumed · kpi_sweep_metrics.m</p>
+</section>
+
+<section id="loop">
+  <div class="col">
+    <h2>13 · The full update, in order</h2>
+    <p>One control step of the predictive Mode C algorithm. Every branch and its governing section:</p>
+  </div>
+
+  <figure>
+    <svg viewBox="0 0 980 430" class="fig" role="img"
+      aria-label="Flow of one control step: snapshots update two covariances, MUSIC gives an angle, presence and period drive branch selection among four weight solutions.">
+      <defs>
+        <marker id="a2" markerWidth="9" markerHeight="9" refX="7.5" refY="3.2" orient="auto">
+          <path d="M0 0 L7.5 3.2 L0 6.4 z" fill="var(--ink3)"/></marker>
+      </defs>
+      <g font-family="var(--sans)">
+        <!-- input -->
+        <rect x="24" y="180" width="126" height="52" rx="5" fill="var(--sunken)" stroke="var(--rule2)"/>
+        <text x="87" y="203" text-anchor="middle" class="fbold">snapshots X</text>
+        <text x="87" y="220" text-anchor="middle" class="fsmall">N x K</text>
+        <!-- two covariances -->
+        <rect x="196" y="112" width="150" height="54" rx="5" fill="var(--surface)" stroke="var(--accent)" stroke-width="2"/>
+        <text x="271" y="134" text-anchor="middle" class="fbold">R̂  (λ = 0.90)</text>
+        <text x="271" y="152" text-anchor="middle" class="fsmall">§4 · beamforming</text>
+        <rect x="196" y="246" width="150" height="54" rx="5" fill="var(--surface)" stroke="var(--accent)" stroke-width="2"/>
+        <text x="271" y="268" text-anchor="middle" class="fbold">R̂_fast (λ = 0.5)</text>
+        <text x="271" y="286" text-anchor="middle" class="fsmall">§6 · detection only</text>
+        <line x1="150" y1="196" x2="192" y2="150" stroke="var(--ink3)" stroke-width="1.6" marker-end="url(#a2)"/>
+        <line x1="150" y1="216" x2="192" y2="262" stroke="var(--ink3)" stroke-width="1.6" marker-end="url(#a2)"/>
+        <!-- estimators -->
+        <rect x="392" y="112" width="150" height="54" rx="5" fill="var(--sunken)" stroke="var(--rule2)"/>
+        <text x="467" y="134" text-anchor="middle" class="fbold">MUSIC angle</text>
+        <text x="467" y="152" text-anchor="middle" class="fsmall">§5 → §8 CV filter</text>
+        <rect x="392" y="246" width="150" height="54" rx="5" fill="var(--sunken)" stroke="var(--rule2)"/>
+        <text x="467" y="268" text-anchor="middle" class="fbold">presence, period</text>
+        <text x="467" y="286" text-anchor="middle" class="fsmall">§6 · §7</text>
+        <line x1="346" y1="139" x2="388" y2="139" stroke="var(--ink3)" stroke-width="1.6" marker-end="url(#a2)"/>
+        <line x1="346" y1="273" x2="388" y2="273" stroke="var(--ink3)" stroke-width="1.6" marker-end="url(#a2)"/>
+        <!-- branch -->
+        <rect x="590" y="180" width="126" height="52" rx="5" fill="var(--surface)" stroke="var(--rule2)"/>
+        <text x="653" y="203" text-anchor="middle" class="fbold">branch select</text>
+        <text x="653" y="220" text-anchor="middle" class="fsmall">§13</text>
+        <line x1="542" y1="145" x2="586" y2="192" stroke="var(--ink3)" stroke-width="1.6" marker-end="url(#a2)"/>
+        <line x1="542" y1="267" x2="586" y2="220" stroke="var(--ink3)" stroke-width="1.6" marker-end="url(#a2)"/>
+        <!-- outcomes -->
+        <g>
+          <rect x="764" y="36" width="192" height="46" rx="5" fill="var(--surface)" stroke="var(--rule2)"/>
+          <text x="860" y="55" text-anchor="middle" class="flabel">hard null @ CV angle</text>
+          <text x="860" y="71" text-anchor="middle" class="fsmall">present AND moving</text>
+          <rect x="764" y="122" width="192" height="46" rx="5" fill="var(--surface)" stroke="var(--rule2)"/>
+          <text x="860" y="141" text-anchor="middle" class="flabel">reactive MPDR</text>
+          <text x="860" y="157" text-anchor="middle" class="fsmall">present, static</text>
+          <rect x="764" y="208" width="192" height="46" rx="5" fill="var(--surface)" stroke="var(--rule2)"/>
+          <text x="860" y="227" text-anchor="middle" class="flabel">pre-null @ last angle</text>
+          <text x="860" y="243" text-anchor="middle" class="fsmall">absent, return imminent</text>
+          <rect x="764" y="294" width="192" height="46" rx="5" fill="var(--surface)" stroke="var(--rule2)"/>
+          <text x="860" y="313" text-anchor="middle" class="flabel">quiescent beam</text>
+          <text x="860" y="329" text-anchor="middle" class="fsmall">absent, released §10</text>
+        </g>
+        <line x1="716" y1="196" x2="760" y2="62" stroke="var(--ink3)" stroke-width="1.4" marker-end="url(#a2)"/>
+        <line x1="716" y1="202" x2="760" y2="146" stroke="var(--ink3)" stroke-width="1.4" marker-end="url(#a2)"/>
+        <line x1="716" y1="212" x2="760" y2="230" stroke="var(--ink3)" stroke-width="1.4" marker-end="url(#a2)"/>
+        <line x1="716" y1="218" x2="760" y2="314" stroke="var(--ink3)" stroke-width="1.4" marker-end="url(#a2)"/>
+        <!-- smoothing -->
+        <rect x="392" y="366" width="330" height="44" rx="5" fill="var(--sunken)" stroke="var(--rule2)"/>
+        <text x="557" y="385" text-anchor="middle" class="flabel">phase-aligned weight smoothing → apply w(k+1)</text>
+        <text x="557" y="401" text-anchor="middle" class="fsmall">§13.1 · one-step application lag</text>
+      </g>
+    </svg>
+    <figcaption>Two covariances at different timescales feed two different consumers. The branch
+    selection is exclusive and ordered; the fourth outcome is the one §10 governs.</figcaption>
+  </figure>
+
+  <div class="col">
+    <ol class="steps">
+      <li><b>Fold snapshots.</b> Batch to <var>R̂<sub>batch</sub></var>, update <var>R̂</var> (7) and,
+      if enabled, <var>R̂<sub>fast</sub></var> (10).</li>
+      <li><b>Feasibility.</b> If <var>2n<sub>c</sub> ≥ N</var>, MUSIC cannot run: emit the reactive
+      solution and return (§5).</li>
+      <li><b>Angle.</b> MUSIC on <var>R̂</var> (8), restricted outside the derived guard (18).</li>
+      <li><b>Presence.</b> Eigengap (9) on <var>R̂<sub>fast</sub></var> when enabled, else on
+      <var>R̂</var>. Update the absence counter and the presence record.</li>
+      <li><b>Period.</b> Periodogram (11); if trusted, project the next turn-on and evaluate the
+      lead (12).</li>
+      <li><b>CV filter.</b> Predict, mirror-fold (16), gate, update; extrapolate <var>L<sub>cv</sub></var>
+      ahead (13)–(14).</li>
+      <li><b>Branch</b>, in this order:
+        <ul class="tight">
+          <li>present <em>and</em> CV valid → hard null (5) at the predicted angle, with <var>R̂</var></li>
+          <li>present → reactive (4)/(6) with <var>R̂</var></li>
+          <li>absent, return predicted → pre-null at last known angle, with <var>R = I</var></li>
+          <li>absent → release policy (§10): quiescent, or the graded load (17)</li>
+        </ul>
+      </li>
+      <li><b>Smooth and apply.</b></li>
+    </ol>
+
+    <h3>13.1 Weight smoothing</h3>
+    <p>Solutions from (4)–(6) are defined only up to a unit-modulus phase, so a naive blend of two
+    representations of the same beam can destructively interfere. The global phase is aligned first:</p>
+  </div>
+  <div class="eq"><span class="eqn">(20)</span>
+ρ = w<sub>prev</sub><sup>H</sup>w<sub>target</sub> / |w<sub>prev</sub><sup>H</sup>w<sub>target</sub>|
+
+w = (1−μ)·w<sub>prev</sub> + μ·(w<sub>target</sub>·ρ*) ,   then w ← w/‖w‖    <span class="cm">μ = 0.25</span></div>
+
+  <div class="col">
+    <p>μ trades smoothness against reactivity and contributes ~3–4 steps to the lag budget of (14).
+    It is itself a measurable drift cost — the reactive tracker alone goes 44.8 → 55.4 → 59.1% as
+    μ goes 0.25 → 0.5 → 1.0 — but it was tuned for other scenarios and is left alone; the
+    interaction is recorded rather than exploited.</p>
+    <p>The applied weights are used at step <var>k+1</var>: this step's capture cannot be filtered
+    by weights derived from itself. That one-step delay is the "+1" inside the "+4" of (14).</p>
+  </div>
+  <p class="fileref col">adapt_predict_update.m :: smooth_weights</p>
+</section>
+
+<section>
+  <div class="col">
+    <h2>Open items in the algorithm itself</h2>
+    <ul class="tight">
+      <li><b>MUSIC model order</b> is hardcoded at <var>2n<sub>c</sub></var> (§5). A rank-aware
+      estimate from the eigenvalue profile would remove a class of array-specific failures.</li>
+      <li><b>Calibration robustness</b> (§12.1) is untreated. Worst-case-optimisation robust MVDR,
+      or a loading schedule tied to assumed steering uncertainty, is the highest-value remaining
+      algorithm work.</li>
+      <li><b>MUSIC cost</b> (§5) is 42–126× the reactive path. A coarse-to-fine search or a gated
+      update rate is required before real-time targeting; striding is the crude version and costs
+      exactly the angular precision that limits the residual failures.</li>
+      <li><b>guard_deg</b> (§11) is derived in the test harness but still a global constant in the
+      shipped configuration.</li>
+      <li><b>Drift beyond ~10°/s</b> — the CV predictor extends the envelope without removing the
+      limit.</li>
+      <li><b>Out of scope entirely:</b> multiple simultaneous jammers, and polarization mismatch
+      between the jammer and the assumed model.</li>
+    </ul>
+  </div>
+</section>
+
+</div>
