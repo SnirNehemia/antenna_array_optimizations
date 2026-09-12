@@ -11,11 +11,14 @@ Read these before working on the relevant area. Do not duplicate their content h
 - **`docs/pipeline.md`** — data flow, file formats, array model, cost function math
 - **`docs/STYLE.md`** — coding style, naming, docstring format, MATLAB porting flags
 - **`docs/notes.md`** — physics assumptions, open questions, session log
-- **`docs/antijam_session_summary.md`** — **read before any anti-jam work.**
-  Settled conclusions, retractions and open items from the 2026-09 campaigns
-  (~8,700 runs, 7 arrays): what the two Mode C algorithms actually do, why the
-  drift and on/off failures happened, which questions are closed, and the
-  method lessons. Saves rediscovering all of it.
+- **`docs/antijam_rewrite_brief.md`** — **read before any anti-jam work, and
+  first of all before rewriting the milestone.** The consolidated outcome of the
+  2026-09 campaigns (~8,700 runs, 7 arrays), written as the input to a rewrite:
+  what the algorithms actually are and which parts are load-bearing, what was
+  measured worthless or is closed (so it is not relitigated), the structural
+  problems and the traps that cost the most time, the open work ranked by value,
+  and the ground-truth numbers a faithful rewrite must reproduce. Supersedes the
+  former `antijam_session_summary.md`.
 - **`config.yaml`** — user-facing configuration schema
 
 ## Project Map
@@ -80,6 +83,11 @@ Module boundaries are strict: no plotting in `optimize/`, no optimization in `pl
 Plan of record: `antijam_milestone_plan.md` — phased plan (P0–P6), module contracts,
 KPIs, scenario suite, and success criteria. Phase `Status` fields there are the single
 source of truth for progress; do not duplicate plan content here.
+
+**The milestone is functionally complete (P0–P12b, Phase O, O2) and is slated for a
+structural rewrite.** Start from `docs/antijam_rewrite_brief.md`, not from the code: it
+records which questions are closed, which features measured worthless, and the
+ground-truth numbers the rewrite must reproduce. The constraints below still bind.
 
 - **MATLAB only**, R2020a + Optimization Toolbox: implemented in a new
   `MATLAB/antijam_utils/` flat function folder (prefixes `sim_` / `adapt_` /

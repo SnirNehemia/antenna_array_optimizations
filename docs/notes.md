@@ -205,6 +205,31 @@ or `ValueError` — never silently fall back to a hardcoded default.
 > Claude Code must append an entry here at the end of every working session.
 > Format shown below. Newest entry at the top.
 
+### 2026-09-12 — [O2] Rewrite brief; session summary merged into it
+
+Wrote `docs/antijam_rewrite_brief.md` as the single entry point for a structural
+rewrite of the milestone, and **deleted `docs/antijam_session_summary.md`**, folding
+its unique content in (the mirror-ambiguity DoA-KPI consequence, score-and-potential
+reporting, MUSIC's 42–126× compute cost, the retractions). Two overlapping
+"read this first" documents is exactly the sprawl a rewrite is meant to escape.
+CLAUDE.md repointed in both places it mattered — the reference list and the milestone
+section.
+
+The brief is organised as: the irreducible problem · what earned its place · what did
+not (closed questions, dead weight) · structural problems to design out · what is
+genuinely open, ranked by value · traps · things believed and later found wrong ·
+a suggested shape · ground-truth numbers to reproduce against.
+
+Sizing that motivated it: 7,665 lines in `antijam_utils/`, of which `adapt_*` is 2,186,
+`plot_*` + `save_*` is 2,950 (38%), and `adapt_predict_update.m` alone is 485. The
+target shape in the brief is ~800 algorithm lines and ~400 figure lines with no measured
+capability dropped.
+
+Also killed every leftover MATLAB process (batch renders had already exited; two stale
+MCP desktop sessions from 09-07 and 09-08, their mpa helpers, and six orphaned
+`matlab-mcp-core-server` bridges remained). Free memory 0.37 GB → 4.12 GB. The MATLAB
+MCP server needs a restart before its tools work again.
+
 ### 2026-09-12 — [O2] Report and deck brought up to date; PPTX now reproducible
 
 **Deliverables updated** with the 8-cycle video scores and the amplitude finding:
