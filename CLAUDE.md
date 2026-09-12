@@ -11,6 +11,11 @@ Read these before working on the relevant area. Do not duplicate their content h
 - **`docs/pipeline.md`** — data flow, file formats, array model, cost function math
 - **`docs/STYLE.md`** — coding style, naming, docstring format, MATLAB porting flags
 - **`docs/notes.md`** — physics assumptions, open questions, session log
+- **`docs/antijam_session_summary.md`** — **read before any anti-jam work.**
+  Settled conclusions, retractions and open items from the 2026-09 campaigns
+  (~8,700 runs, 7 arrays): what the two Mode C algorithms actually do, why the
+  drift and on/off failures happened, which questions are closed, and the
+  method lessons. Saves rediscovering all of it.
 - **`config.yaml`** — user-facing configuration schema
 
 ## Project Map
