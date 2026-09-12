@@ -205,6 +205,37 @@ or `ValueError` — never silently fall back to a hardcoded default.
 > Claude Code must append an entry here at the end of every working session.
 > Format shown below. Newest entry at the top.
 
+### 2026-09-12 — [O2] Report and deck brought up to date; PPTX now reproducible
+
+**Deliverables updated** with the 8-cycle video scores and the amplitude finding:
+- `docs/antijam_phaseO/onoff_report.html` — new verdict 05 (the residual gap is a
+  calibration problem, not a nulling problem); the Videos section rewritten with the
+  8-cycle score table and the amplitude-regime table; new finding **O-F6**; a new
+  **first** recommendation (attack the steering mismatch) that displaces the guard
+  sector; and the stale "both repairs ship disabled" paragraph corrected — `onoff`
+  has shipped enabled since the O2 reversal and the text still said otherwise.
+- `docs/antijam_p12b/modec_deck.html` — new slide 21 (the amplitude sweep), final
+  slide's open/closed lists updated.
+
+**PPTX rebuilt and made reproducible.** The briefing deck was 15 slides dated
+2026-09-07 — it predated Phase O entirely, so it still recommended against the
+on/off repair. There was no generator kept for it, so one now exists:
+`docs/antijam_p12b/build_deck_pptx.py`, with the three chart PNGs extracted from the
+old file into `docs/antijam_p12b/deck_assets/`. Rebuilt at 18 slides. Verified by
+exporting every slide to PNG through PowerPoint COM and reading them back — which
+caught a title/subtitle collision and two stat-box overflows on the title slide that
+were invisible from the XML.
+
+**Honesty note on the amplitude finding.** The loss is *not* uniform: of the 20 dB the
+oracle gains when σ_s goes 0 → 20 dB, the algorithm captures 11.9 dB on spacing0.6 but
+19.7 / 19.8 on ManyDipoles / Monopoles. The worst case being the highest-directivity
+array fits the mismatch story (a narrow beam pays more for the same angular error), but
+four arrays at one geometry each is an observation, not a controlled sweep. Both
+documents now say so explicitly rather than quoting the 9.7 dB worst case alone.
+
+**Caveat that belongs on every earlier number**: the whole campaign ran at σ_s = 0 dB,
+so every score in both documents is a weak-signal score.
+
 ### 2026-09-10 — [O2] Videos re-rendered at 8 cycles; amplitude-regime figure
 
 **Renderers**:

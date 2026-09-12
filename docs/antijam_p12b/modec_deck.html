@@ -644,8 +644,48 @@ figure{margin:4px 0;}
   </div>
 </section>
 
-<!-- 15 -->
+<!-- 21 -->
 <section class="slide"><span class="n">21</span>
+  <p class="kicker">Amplitude sweep — the last measurement</p>
+  <h2>The gap that is left is a strong-<i>signal</i> gap</h2>
+  <div class="two">
+    <div class="body">
+      <p>Every campaign number so far was taken at one amplitude. Sweeping signal and jammer
+      power independently, on four arrays:</p>
+      <p><b>Raising the jammer 20 dB is nearly free</b> — at most 2.1 dB of the achievable value,
+      usually far less. The nulling works.</p>
+      <p><b>Raising the wanted signal 20 dB is not.</b> The achievable value rises by exactly
+      20 dB, as it must; the algorithm captures only <b>11.9 dB of it on spacing0.6</b>.</p>
+      <p>This is MPDR self-cancellation: the wanted signal sits inside the estimated covariance,
+      so under steering mismatch the solver spends degrees of freedom cancelling it — and the
+      stronger it is, the more there is to cancel. The oracle is immune because it is handed the
+      true steering vector.</p>
+    </div>
+    <div class="body">
+      <div class="tw">
+      <table>
+        <caption style="caption-side:top;text-align:left">Of the 20 dB the oracle gains when
+        σ<sub>s</sub> goes 0 → 20 dB, how much the algorithm actually captures</caption>
+        <thead><tr><th>array</th><th>achievable</th><th>captured</th><th>lost</th></tr></thead>
+        <tbody>
+          <tr><td>spacing0.6</td><td class="num">20.0</td><td class="num">11.9</td><td class="num fail">8.1</td></tr>
+          <tr><td>patchs_w_mono</td><td class="num">20.0</td><td class="num">17.3</td><td class="num">2.7</td></tr>
+          <tr><td>ManyDipoles</td><td class="num">20.0</td><td class="num">19.7</td><td class="num pass">0.3</td></tr>
+          <tr><td>Monopoles</td><td class="num">20.0</td><td class="num">19.8</td><td class="num pass">0.2</td></tr>
+        </tbody>
+      </table>
+      </div>
+      <p style="margin-top:16px;font-size:.93rem"><b>Two honest caveats.</b> The worst case is the
+      highest-directivity array, which fits the mismatch story — a narrow beam pays more for the
+      same angular error — but four arrays at one geometry each is an observation, not a
+      controlled sweep. And it means <b>every other number in this deck is a weak-signal
+      number</b>, so they flatter the stack relative to a strong-signal deployment.</p>
+    </div>
+  </div>
+</section>
+
+<!-- 22 -->
+<section class="slide"><span class="n">22</span>
   <p class="kicker">Status</p>
   <h2>Where this leaves the milestone</h2>
   <div class="two">
@@ -660,13 +700,16 @@ figure{margin:4px 0;}
         <li>Tier B stress axes — CV <b>never worse</b> on any of 46 cells</li>
         <li>The on/off predictor — repaired, and <b>enabled by default</b></li>
         <li>Release policy — <b>closed</b>, bounded at +0.9</li>
+        <li>Amplitude sweep — run; it is what surfaced slide 21</li>
       </ul>
     </div>
     <div class="body">
       <p><b>Still open</b></p>
       <ul>
-        <li>Calibration tolerance on the other two arrays and at other amplitudes</li>
-        <li>Amplitude sweep with the predictor enabled</li>
+        <li><b>Steering mismatch at strong signal</b> — up to 8.1 dB of the achievable gain
+        unclaimed (slide 21), and the largest named number left</li>
+        <li>Why the loss ranges 8.1 → 0.2 dB across arrays — needs a mismatch × σ<sub>s</sub> sweep</li>
+        <li>Calibration tolerance on the other two arrays</li>
         <li><span class="mono">guard_deg</span> still a global 5° in config — derive it per array</li>
         <li><b>Not qualified above ~10°/s drift</b> — the predictor extends the envelope, it does not remove the limit</li>
         <li>Multiple simultaneous jammers; polarization mismatch; real-time compute</li>
@@ -675,7 +718,8 @@ figure{margin:4px 0;}
   </div>
   <div class="spacer"></div>
   <div class="foot">The CV drift predictor ships <b>disabled</b>; the on/off repair ships
-  <b>enabled</b> after the O2 reversal. 59 of 59 anti-jam gates pass.</div>
+  <b>enabled</b> after the O2 reversal. 59 of 59 anti-jam gates pass. <b>Next</b>: steering-mismatch
+  robustness — worth up to 8.1 dB, against the +0.9 dB a perfect release policy was worth.</div>
 </section>
 
 </div>

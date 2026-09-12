@@ -125,12 +125,15 @@ ul.tight li{margin-bottom:.4em;}
 <div class="wrap">
 
 <header>
-  <p class="eyebrow">Anti-jam milestone · Phase O + O2 · updated 2026-09-09</p>
+  <p class="eyebrow">Anti-jam milestone · Phase O + O2 · updated 2026-09-12</p>
   <h1>The on/off jammer, across every array we have</h1>
   <p class="lede">A stationary jammer that switches on and off, tested on every exported array.
   The predictive algorithm built for exactly this case turned out never to be firing. This is the
   diagnosis, the repair, a second campaign that <b>reverses</b> the first campaign's
-  recommendation, and a graded release policy that was built, measured, and rejected.</p>
+  recommendation, and a graded release policy that was built, measured, and rejected.
+  A final sweep over signal and jammer <em>amplitudes</em> then found that the residual gap
+  to the achievable bound is driven by the strength of the <b>wanted</b> signal, not the
+  jammer's — which moves the next work item off this algorithm entirely.</p>
   <div class="meta">
     <span><b>Arrays</b> 7 (5 testable, 2 degenerate)</span>
     <span><b>Runs</b> 1,782 + 2,430 closed-loop, 0 failed</span>
@@ -181,6 +184,17 @@ ul.tight li{margin-bottom:.4em;}
         binary policy's 80.6</b>, worse on 45 of 90 cells. It does rescue the binary tail, but a
         <b>perfect</b> per-cell choice between the two is worth only <b>+0.9 and zero extra
         passing cells</b> — so no release policy is worth further work.</p>
+      </div>
+    </div>
+    <div class="verdict warn">
+      <span class="n">05</span>
+      <div>
+        <h4>What is left on the table is a calibration problem, not a nulling problem</h4>
+        <p>Sweeping the amplitudes independently: raising the <b>jammer</b> by 20 dB costs
+        almost nothing, while raising the <b>wanted signal</b> by 20 dB opens a gap to the
+        achievable bound of up to <b>9.7 dB</b>. That is the MPDR self-cancellation signature
+        under steering mismatch. Every remaining decibel we can name sits here — and none of
+        it is reachable by tuning the on/off logic.</p>
       </div>
     </div>
   </div>
@@ -403,26 +417,89 @@ ul.tight li{margin-bottom:.4em;}
 <section>
   <div class="col">
     <h2>Videos</h2>
-    <p>Five side-by-side renders spanning the range, each showing the radiation pattern per
-    algorithm on a shared colour scale above a common SINR trace with the ON windows shaded.
+    <p>Two families, both re-rendered at <b>8 toggle cycles with the repair enabled by
+    default</b>, so what they show is the shipping configuration rather than the superseded one.</p>
+    <h3>Family 1 — methods side by side</h3>
+    <p>Five renders spanning the difficulty range. Each shows one radiation pattern per algorithm
+    on a shared colour scale, above a common output-SINR trace with the jammer-ON windows shaded.
     The shared scale is the point: per-panel autoscaling would make a beamformer that has thrown
     away 10 dB of gain look identical to one that has not.</p>
   </div>
-  <div class="vid"><span class="k">A_easy</span>
-    <p><span class="mono">patchs_with_monopoles</span>, T = 25 s — comfortable. Every method
-    tracks the reference; this is what success looks like.</p></div>
-  <div class="vid"><span class="k">B_repair_pays</span>
-    <p><span class="mono">spacing0.6</span> (45,150), T = 10 s — <b>lcmv 27.7, predict 30.3,
-    predict + repair 59.8.</b> The clearest single demonstration of the repair.</p></div>
-  <div class="vid"><span class="k">C_hard</span>
-    <p><span class="mono">spacing0.6_disturbed3</span>, T = 4 s, close jammer — <b>33.6 / 33.6 /
-    58.3.</b> A hard cell where the repair still nearly doubles the score.</p></div>
-  <div class="vid"><span class="k">D_mirror</span>
-    <p><span class="mono">ManyDipoles</span> — the mirror-degenerate array, where the direction
-    estimate is ambiguous by construction and the null is placed on a 5° grid.</p></div>
-  <div class="vid"><span class="k">E_infeasible</span>
-    <p><span class="mono">patch_back2back</span>, 2 elements — MUSIC cannot run at all. The point
-    is that the predictor degrades silently to the reactive solution instead of failing.</p></div>
+  <div class="tw">
+  <table>
+    <caption>Oracle-tracking score at 8 cycles, per algorithm. Higher is better; 90 is the pass
+    mark. The third column is the algorithm as it now ships.</caption>
+    <thead><tr><th>Video</th><th>Array / geometry</th><th>lcmv</th><th>predict</th>
+      <th>predict + repair</th></tr></thead>
+    <tbody>
+      <tr><td class="lbl">A_easy</td><td style="text-align:left">patchs_with_monopoles, T = 25 s</td>
+        <td>96.8</td><td>96.8</td><td class="pass">97.9</td></tr>
+      <tr><td class="lbl">B_repair_pays</td><td style="text-align:left">spacing0.6 (45,150), T = 10 s</td>
+        <td>26.2</td><td>30.4</td><td class="big">58.3</td></tr>
+      <tr><td class="lbl">C_hard</td><td style="text-align:left">spacing0.6_disturbed3, T = 4 s, close jammer</td>
+        <td>35.4</td><td>35.4</td><td class="big">62.7</td></tr>
+      <tr><td class="lbl">D_mirror</td><td style="text-align:left">ManyDipoles — mirror-degenerate</td>
+        <td>93.1</td><td>93.3</td><td class="pass">96.8</td></tr>
+      <tr><td class="lbl">E_infeasible</td><td style="text-align:left">patch_back2back, 2 elements</td>
+        <td>98.0</td><td>98.0</td><td>98.0</td></tr>
+    </tbody>
+  </table>
+  </div>
+  <div class="col">
+    <p><span class="mono">B_repair_pays</span> and <span class="mono">C_hard</span> are the two
+    worth watching: the repair roughly doubles the score on both, and the mechanism is visible —
+    the null is held through the OFF window instead of being torn down and rebuilt.
+    <span class="mono">E_infeasible</span> is a null result on purpose: MUSIC cannot run on two
+    elements, and the point is that the predictor degrades silently to the reactive solution
+    rather than failing. All three columns agree there, which is the correct outcome.</p>
+
+    <h3>Family 2 — one algorithm across four amplitude regimes</h3>
+    <p>A 2×2 grid of (weak/strong wanted signal) × (weak/strong jammer), each pattern above its
+    own output-SINR trace, rendered for four arrays. It holds <b>two</b> scales fixed across all
+    four quadrants: one colour scale for the patterns and one y-range for the SINR traces.
+    Per-panel autoscaling would render every regime equally healthy, which is precisely the
+    impression this figure exists to prevent — and the asymmetry below is what it exposed.</p>
+  </div>
+  <div class="tw">
+  <table>
+    <caption>Mean output SINR achieved, against the achievable (oracle) value, in dB. σ<sub>s</sub>
+    is the wanted-signal power and J/N the jammer-to-noise ratio, both referenced to the
+    per-element noise floor.</caption>
+    <thead><tr><th>Array</th>
+      <th>σs 0 / J/N 10</th><th>σs 0 / J/N 30</th>
+      <th>σs 20 / J/N 10</th><th>σs 20 / J/N 30</th></tr></thead>
+    <tbody>
+      <tr><td class="lbl">spacing0.6</td>
+        <td>23.7 of 25.3</td><td>23.3 of 25.2</td>
+        <td class="fail">35.6 of 45.3</td><td class="fail">36.1 of 45.2</td></tr>
+      <tr><td class="lbl">patchs_with_monopoles</td>
+        <td>15.0 of 15.8</td><td>14.9 of 15.7</td>
+        <td>32.3 of 35.8</td><td>32.1 of 35.7</td></tr>
+      <tr><td class="lbl">ManyDipoles</td>
+        <td>9.4 of 10.5</td><td>7.4 of 10.4</td>
+        <td>29.1 of 30.5</td><td>27.0 of 30.4</td></tr>
+      <tr><td class="lbl">Monopoles</td>
+        <td>10.9 of 12.9</td><td>11.2 of 12.8</td>
+        <td>30.7 of 32.9</td><td>30.2 of 32.8</td></tr>
+    </tbody>
+  </table>
+  </div>
+  <div class="col">
+    <p>Read the table across, not down. Moving from the first column to the second raises the
+    jammer by 20 dB and costs at most 2 dB, usually far less — the nulling is doing its job.
+    Moving from the second column to the third raises the <em>wanted</em> signal by 20 dB and
+    opens a gap of <b>9.7 dB on spacing0.6</b> and 3.5 dB on the patch array. The oracle rises
+    with σ<sub>s</sub> because it is handed the true steering vector; the algorithm does not,
+    because it is not.</p>
+    <p>The size of the effect is <b>strongly array-dependent</b>, and that is the part still
+    unexplained. The achievable value rises by exactly 20 dB on all four arrays, as it must. Of
+    that 20 dB the algorithm captures <b>11.9 dB on spacing0.6</b>, 17.3 on the patch array, and
+    19.7 / 19.8 on <span class="mono">ManyDipoles</span> and <span class="mono">Monopoles</span> —
+    essentially all of it. The worst case is the highest-directivity array, which is consistent
+    with mismatch (a narrow beam pays more for the same angular error), but four arrays at one
+    geometry each is an observation, not a controlled sweep. This is finding <b>O-F6</b> below,
+    and it is the reason the top recommendation changed.</p>
+  </div>
 </section>
 
 <section>
@@ -575,6 +652,23 @@ ul.tight li{margin-bottom:.4em;}
     and verifying the new code reproduces the pre-edit numbers exactly on five probe cells. The
     arm is homogeneous — but the right rule is simply not to edit modules mid-campaign.</p></div>
   </div>
+
+  <div class="finding">
+    <span class="fid">O-F6</span>
+    <h3>The residual gap is a strong-<em>signal</em> effect, and it is the largest number left</h3>
+    <div class="col"><p>Raising the jammer 20 dB costs almost nothing; raising the wanted signal
+    20 dB opens up to <b>9.7 dB</b> against the achievable bound. The mechanism is not in doubt:
+    this solver is MPDR, so the wanted signal is inside the estimated covariance, and under any
+    steering mismatch the solution spends degrees of freedom cancelling it — the stronger it is,
+    the more there is to cancel. The oracle does not suffer, because it is handed the true
+    steering vector. Two consequences. First, <b>every campaign number in this report is a
+    weak-signal number</b> (σ<sub>s</sub> = 0 dB) and therefore flatters the stack relative to a
+    strong-signal deployment. Second, the gap is invisible to any amount of on/off tuning, which
+    is why it displaces the guard sector at the top of the recommendations. What is <em>not</em>
+    established is why the loss ranges from 8.1 dB to 0.2 dB across four arrays; the highest-gain
+    array is worst, which fits the mismatch story, but confirming it needs a mismatch × σ<sub>s</sub>
+    sweep rather than the four single-geometry probes run here.</p></div>
+  </div>
 </section>
 
 <section>
@@ -583,11 +677,23 @@ ul.tight li{margin-bottom:.4em;}
   </div>
   <ol class="recs">
     <li><div>
+      <h4>Attack the steering mismatch — it is where the remaining decibels are</h4>
+      <p>Up to <b>9.7 dB</b> against the achievable bound in the strong-signal regime (O-F6),
+      against the <b>+0.9 dB</b> a perfect release policy was worth. The standard remedies are
+      well understood and cheap to try in this order: diagonal loading swept against mismatch
+      rather than against null depth; a derivative (point-and-null) constraint widening the
+      protected region around θ<sub>s</sub>; and, if those fall short, robust Capon with an
+      explicit uncertainty ellipsoid. <b>Measure it with the amplitude grid</b>, not the existing
+      campaign — the campaign runs at σ<sub>s</sub> = 0 dB and structurally cannot see this
+      effect.</p>
+      <p class="effort">Moderate · highest value · do first</p>
+    </div></li>
+    <li><div>
       <h4>Derive the guard sector per (array, target); retire the global constant</h4>
       <p>It is wrong on every array measured, by factors of 3 to 14. This is a one-line
       configuration change backed by <span class="mono">kpi_array_profile</span>, and it also
       supplies the feasibility check that lets an infeasible cell be reported rather than scored.</p>
-      <p class="effort">Cheap · do first</p>
+      <p class="effort">Cheap · do alongside</p>
     </div></li>
     <li><div>
       <h4><s>Replace the binary release policy with a graded one</s> &mdash; done, and rejected</h4>
@@ -632,10 +738,12 @@ ul.tight li{margin-bottom:.4em;}
 <section>
   <div class="col">
     <h2>Reproducing this</h2>
-    <p>Both repairs ship <b>disabled</b>: the <span class="mono">adapt.predict.onoff</span> block
-    is absent from <span class="mono">config.yaml</span>, and with it absent the code path is
-    byte-identical to before. The graceful-degradation fixes (O-F1) are always on — they only
-    replace a crash with a warning.</p>
+    <p>Shipping state, as of this revision: the <span class="mono">adapt.predict.onoff</span>
+    block is <b>enabled</b> in <span class="mono">config.yaml</span> (verdict 03 reversed Phase O),
+    and the graded-release block ships beside it <b>commented out</b> (verdict 04). Remove the
+    <span class="mono">onoff</span> block and the code path is byte-identical to the pre-Phase-O
+    behaviour — that is the contract the opt-in gates enforce. The graceful-degradation fixes
+    (O-F1) are always on; they only replace a crash with a warning.</p>
   </div>
   <div class="tw">
   <table>
@@ -644,13 +752,14 @@ ul.tight li{margin-bottom:.4em;}
     <thead><tr><th>File</th><th style="text-align:left">Change</th></tr></thead>
     <tbody>
       <tr><td class="lbl">antijam_utils/kpi_array_profile.m</td><td style="text-align:left">New — per-(array,target) gain, beamwidth, derived guard, mirror coherence, MUSIC feasibility</td></tr>
-      <tr><td class="lbl">antijam_utils/save_comparison_video.m</td><td style="text-align:left">New — multi-algorithm side-by-side renderer</td></tr>
+      <tr><td class="lbl">antijam_utils/save_comparison_video.m</td><td style="text-align:left">New — multi-algorithm side-by-side renderer; light-mode colours forced, SINR labelled, amplitudes stated</td></tr>
       <tr><td class="lbl">antijam_utils/adapt_predict_init.m</td><td style="text-align:left">Opt-in <span class="mono">onoff</span> block; loading degrades instead of throwing</td></tr>
       <tr><td class="lbl">antijam_utils/adapt_predict_update.m</td><td style="text-align:left">Fast presence covariance, period-scaled lead, release gate (off), MUSIC fallback</td></tr>
       <tr><td class="lbl">antijam_utils/adapt_music_doa.m</td><td style="text-align:left">Reports infeasibility instead of throwing</td></tr>
       <tr><td class="lbl">antijam_utils/adapt_tracking_init.m</td><td style="text-align:left">Loading degrades instead of throwing</td></tr>
       <tr><td class="lbl">scripts/run_onoff_campaign_script.m</td><td style="text-align:left">New — the campaign, with the feasibility preflight</td></tr>
-      <tr><td class="lbl">scripts/run_onoff_videos_script.m</td><td style="text-align:left">New — the five videos</td></tr>
+      <tr><td class="lbl">antijam_utils/save_amplitude_grid_video.m</td><td style="text-align:left">New — 2×2 amplitude-regime renderer with shared colour and SINR scales</td></tr>
+      <tr><td class="lbl">scripts/run_onoff_videos_script.m</td><td style="text-align:left">New — both video families, with a per-cell entry point</td></tr>
       <tr><td class="lbl">tests/test_antijam_onoff.m</td><td style="text-align:left">New — 6 gates including the degradation contract</td></tr>
     </tbody>
   </table>
