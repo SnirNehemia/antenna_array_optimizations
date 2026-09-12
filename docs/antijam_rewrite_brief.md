@@ -11,6 +11,14 @@ what earned its place and what did not, which problems are *closed* (so the rewr
 does not relitigate them), and which mistakes cost the most time — because most of them
 are structural and a rewrite can design them out.
 
+**The rewrite's goal is explainability, not capability.** `docs/next_session_prompt.md`
+is the brief for that session: a clean reimplementation in `MATLAB/antijam_clear/`, two
+deliberately separate approaches (detect-then-null, and the closed-form max-SINR
+solution), readable top to bottom, for a customer meeting where the work has to be
+*explained* rather than handed over. **A simpler algorithm that is fully understood beats
+a better one that is not**, and a few dB is an acceptable price. Read this document for
+the physics and the settled facts; read the prompt for the shape of the deliverable.
+
 Read alongside: `antijam_milestone_plan.md` (phase-by-phase record of what was built and
 why), `docs/notes.md` (session log; the `[Pn]`/`[O]` prefixes index it),
 `docs/antijam_phaseO/onoff_report.html` (the on/off results in narrative form),
@@ -354,33 +362,51 @@ Recorded so the rewrite does not re-derive the wrong answer and then re-retract 
 
 ---
 
-## 7. A suggested shape
+## 7. What this means for the clear rewrite
 
-Not prescriptive, but the rewrite should be able to hit roughly this:
+`docs/next_session_prompt.md` sets the shape; this section says which of the facts above
+bind it and which do not.
 
-```
-sim_*                  reuse unchanged — the engine is not the problem
-adapt_beamform         closed-form weights + loading                    (~80 lines)
-adapt_observer         the covariance pair, presence, DoA, track,
-                       as an explicit named pipeline                    (~350 lines)
-adapt_policy           hold / release the null                          (~60 lines)
-kpi_*                  scoring + array profile                          (~250 lines)
-antijam_figure         ONE styled figure layer, not sixteen             (~400 lines)
-```
+**Must survive, because they are physics or they are cheap and load-bearing:**
 
-Target: the algorithm side around **800 lines** against today's ~2,200, and the figure
-side around **400** against today's ~2,950 — without dropping a single measured
-capability. Everything cut in §3 is either closed, measured worthless, or orthogonal.
+- diagonal loading — **not optional** (§2.1): the snapshots contain the desired signal,
+  so without loading a steering error makes the beamformer null the wanted signal;
+- the guard sector derived from the array's own beamwidth, never the global 5° (§2.7);
+- graceful handling of the 1- and 2-element arrays (§2.6) — they are a good demonstration
+  that the method knows its own limits;
+- scoring against what that array can achieve, with the achievable figure always printed
+  beside the score (§2.3);
+- awareness of the θ/180−θ ambiguity wherever a direction is tracked over time (§2.4).
 
-**Preserve the gate suite's intent** (27 files, 3,535 lines, 59 anti-jam gates passing).
-Port the assertions, not the structure — and add finite-value assertions everywhere per
-trap 1.
+**May be dropped, and dropping them should be stated rather than hidden:**
+
+- the CV-Kalman predictor (§2.4) — it is the single largest complexity in the stack and
+  it buys one scenario. Leaving it out costs ~35 points on drift and nothing else. That
+  is a legitimate trade for a readable implementation, provided the cost is named;
+- the fast presence covariance and the whole on/off anticipation path (§2.5) — same
+  argument, and simpler still: without it the reactive solution is what you get;
+- every campaign runner, arm sweep and opt-in config block (§4.2);
+- the entire Mode S side and the frequency/notch layer (§3.2).
+
+**Must not be reintroduced under any framing:** graded or confidence-weighted release
+policies (closed, bounded at +0.9) and data-driven adaptive loading (+0.00 pp, and it
+crashed two arrays). See §3.1.
+
+**On the gate suite** (27 files, 3,535 lines, 59 gates): do not port its structure. Port
+the *assertions that encode physics* — null depth, covariance convergence, the oracle
+bound — and add finite-value assertions everywhere, per trap 1. A readable
+implementation with three honest tests is worth more here than fifty inherited ones.
 
 ---
 
-## 8. Ground truth to reproduce against
+## 8. Reference numbers
 
-If the rewrite is faithful, these should come back:
+**These are reference points, not acceptance criteria.** The clear rewrite is expected to
+be worse, and that is the agreed trade — but it should be worse *by an amount someone can
+state*. Measure against these and report the difference honestly; a simpler method that
+gives up 5 dB and says so is a better outcome than one that quietly gives up 15.
+
+If a rewrite *were* aiming at parity, these are what it would have to come back with:
 
 | measurement | value |
 |---|---|

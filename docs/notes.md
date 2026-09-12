@@ -218,7 +218,18 @@ section.
 The brief is organised as: the irreducible problem · what earned its place · what did
 not (closed questions, dead weight) · structural problems to design out · what is
 genuinely open, ranked by value · traps · things believed and later found wrong ·
-a suggested shape · ground-truth numbers to reproduce against.
+what it means for the clear rewrite · reference numbers.
+
+**Reconciled with `docs/next_session_prompt.md`**, which already existed and which
+pointed at the summary I had just merged away. That prompt's goal is *explainability*,
+not capability — a readable reimplementation in `MATLAB/antijam_clear/` for a customer
+meeting, where a simpler algorithm that is understood beats a better one that is not.
+The brief was re-aimed accordingly: §7 now says which facts bind the rewrite (loading is
+physics, the derived guard, graceful degradation, score-with-potential, the θ-ambiguity),
+which may be dropped with the cost named (the CV predictor, the whole on/off path), and
+which must never come back (graded release, adaptive loading). §8 was demoted from
+"ground truth to reproduce" to "reference numbers" — the rewrite is *expected* to be
+worse, it just has to know by how much.
 
 Sizing that motivated it: 7,665 lines in `antijam_utils/`, of which `adapt_*` is 2,186,
 `plot_*` + `save_*` is 2,950 (38%), and `adapt_predict_update.m` alone is 485. The

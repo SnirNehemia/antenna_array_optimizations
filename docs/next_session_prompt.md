@@ -16,9 +16,10 @@ through it, and I will not present something I cannot explain. **I would rather
 have a simpler algorithm I fully understand than a better one I don't.** Poorer
 numerical results are an acceptable trade; unexplainable code is not.
 
-Read `docs/antijam_session_summary.md` first — it records what three campaigns
-established, including which questions are already closed, so you do not
-rediscover any of it.
+Read `docs/antijam_rewrite_brief.md` first — it records what three campaigns
+established, including which questions are already closed and which features were
+measured worthless, so you do not rediscover any of it. Its §2 (what earned its
+place) and §6 (traps) are the parts that bear directly on this task.
 
 ## What to build
 
