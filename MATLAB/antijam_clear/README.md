@@ -175,6 +175,51 @@ for — and the guard sector already excludes the region near the signal.
 
 ---
 
+## Compute cost — the scan dominates, and Approach 2 avoids it entirely
+
+Measured per adaptation step (MATLAB R2020a, one core, double precision,
+16-element array, 181×360 grid). Relative costs are structural; absolute numbers
+would improve a lot in an embedded single-precision implementation.
+
+| per step | ms | share |
+|---|---|---|
+| `sample_covariance` | 0.055 | 0.2% |
+| `estimate_jammer_angle` (both scans) | **30.415** | **95.9%** |
+| — beamscan over the grid | 15.001 | 47.3% |
+| — MUSIC over the grid | 10.883 | 34.3% |
+| — re-normalising the manifold | 5.213 | 16.4% |
+| `detect_and_null` (2×2 solve) | 0.065 | 0.2% |
+| `max_sinr_weights` (no scan) | 0.057 | 0.2% |
+| **full step as shipped** | **31.7** | 100% |
+
+**The search is ~4,000× the arithmetic of the solve**: a full 2-D scan is about
+133 MFLOP and streams 16.7 MB of manifold, against ~33 kFLOP for the entire
+max-SINR solution. Direction finding is 96% of the per-step cost.
+
+| variant | ms/step | max rate |
+|---|---|---|
+| as shipped | 31.7 | 32 Hz |
+| beamscan only, manifold precomputed | 14.7 | 68 Hz |
+| coarse 5° grid then ±5° refine at 1° | **0.46** | **2,170 Hz** |
+| 1-D θ scan at a known azimuth | 0.075 | 13,300 Hz |
+| **Approach 2, no scan at all** | **0.062** | **16,200 Hz** |
+
+Three reductions are free and not yet applied:
+
+- **Precompute the unit manifold** in `make_array` — it is a fixed property of
+  the array, currently rebuilt every step. 16% for nothing.
+- **Drop MUSIC from the hot path** — it is reported-only and never places a
+  null. Another 34%.
+- **Coarse-to-fine** — 69× cheaper and *exact* here: identical peak on all 180
+  steps of the steady and drift runs, 0° difference.
+
+**Structural point:** Approach 2 needs no scan at all — no grid, no search, no
+resolution/compute trade. If compute is the binding constraint it is the
+deployable algorithm, and its 3.4 dB deficit on drift must be weighed against
+being 500× cheaper than the method that beats it.
+
+---
+
 ## Not to be reintroduced
 
 Two features were built, measured at scale and rejected. They are recorded here

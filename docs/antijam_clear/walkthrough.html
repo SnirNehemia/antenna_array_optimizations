@@ -361,8 +361,17 @@ threshold = noise_floor · (1 + √(N/K))²          <span class="cm">% Marchenk
 <div class="col">
 <p><b>Unit-norm steering vectors.</b> Both spectra are only source estimates when <var>e</var> has
 unit norm. With raw CST vectors the scan multiplies in the array's own gain variation and reports
-the direction the array hears <em>best</em> rather than where the jammer is. Measured here, that
-error was <b>77°</b> — and it looked entirely plausible.</p>
+the direction the array hears <em>best</em> rather than where the jammer is. Measured here the
+jammer was at 55° and the scan said <b>132°</b>.</p>
+<div class="note derr"><b>That is not a tolerable error — it is a fatal one.</b> Nulling at 132°
+when the jammer is at 55° gives <b>−8.3 dB</b>: <em>worse than not adapting at all</em> (−3.6 dB),
+and 20.4 dB below the correct null of 12.1 dB. An implementation with this bug does not degrade, it
+fails.
+<p style="margin:.8em 0 0">It is called out here because it is <b>silent</b>. The spectrum is well
+formed, the peak is sharp and narrow, the answer is confident, nothing errors and no value is
+non-finite. "Plausible" means the <em>wrong answer looked like a right one</em> — without ground
+truth to check against, you would ship it. That is the whole argument for keeping an oracle in the
+folder: not to flatter the results, but to catch estimators that are confidently wrong.</p></div>
 <p><b>Exclude the guard sector.</b> The wanted signal is one of the strong sources, so both scans
 find it too, and it is often the stronger peak. Masking the guard sector is exactly what makes "the
 largest remaining peak" mean "the jammer". Without it, Approach 1 confidently and precisely nulls
@@ -400,6 +409,69 @@ identical noise, changing only which spectrum feeds the null.</p>
 never asks for, and the guard sector already excludes the region near the signal. Both are computed
 and reported so this can be shown rather than claimed; there is no switch between them.</p>
 </div>
+<h3>What the scan costs — and why Approach 2 is the one that deploys</h3>
+<div class="col">
+<p>The scan is exactly what it looks like: form <var>R</var>, then evaluate
+<code>e_unitᴴ R e_unit</code> at <em>every direction on the grid</em> — 181 × 360 = <b>65,160</b>
+of them here — and take the largest value outside the guard sector. It is a brute-force search, and
+on a real receiver that is the expensive part of the whole method by a wide margin.</p>
+</div>
+<div class="tw"><table>
+<thead><tr><th>per adaptation step</th><th>ms</th><th>share</th></tr></thead>
+<tbody>
+<tr><td class="lbl">sample_covariance</td><td>0.055</td><td>0.2%</td></tr>
+<tr><td class="lbl">estimate_jammer_angle (both scans)</td><td class="warn">30.415</td><td class="warn">95.9%</td></tr>
+<tr><td class="d" style="padding-left:2em">— beamscan over the grid</td><td>15.001</td><td>47.3%</td></tr>
+<tr><td class="d" style="padding-left:2em">— MUSIC over the grid</td><td>10.883</td><td>34.3%</td></tr>
+<tr><td class="d" style="padding-left:2em">— re-normalising the manifold</td><td>5.213</td><td>16.4%</td></tr>
+<tr><td class="d" style="padding-left:2em">— eig(R), 16×16</td><td>0.045</td><td>0.1%</td></tr>
+<tr><td class="lbl">detect_and_null (2×2 solve)</td><td>0.065</td><td>0.2%</td></tr>
+<tr><td class="lbl">max_sinr_weights (no scan)</td><td class="ok">0.057</td><td class="ok">0.2%</td></tr>
+<tr><td class="lbl"><b>full step as shipped</b></td><td><b>31.7</b></td><td>100%</td></tr>
+</tbody>
+<caption>MATLAB R2020a, one core, double precision, 16-element array. Treat these as
+<em>relative</em> costs — an embedded implementation in single precision would be far faster in
+absolute terms, but the ratios are structural.</caption>
+</table></div>
+<div class="note derr"><b>The search is ~4,000× the arithmetic of the solve.</b> A full 2-D scan is
+about <b>133 MFLOP</b> and streams 16.7 MB of manifold; the entire max-SINR solution is one 16×16
+system, about <b>33 kFLOP</b>. As shipped, direction finding is <b>96% of the per-step cost</b> and
+everything else — covariance update, both beamformers — is rounding error.</div>
+<div class="col">
+<p><b>So is it usable in real time?</b> As written, at about 32 Hz — fine for a slowly-moving jammer
+and useless for anything fast. But almost all of that is avoidable, and three of the reductions cost
+nothing:</p>
+</div>
+<div class="tw"><table>
+<thead><tr><th>variant</th><th>ms/step</th><th>max update rate</th></tr></thead>
+<tbody>
+<tr><td class="d">as shipped — both scans, manifold re-normalised each step</td><td>31.7</td><td>32 Hz</td></tr>
+<tr><td class="d">beamscan only, manifold precomputed once</td><td>14.7</td><td>68 Hz</td></tr>
+<tr><td class="d">coarse 5° grid, then refine ±5° at 1°</td><td class="ok">0.46</td><td class="ok">2,170 Hz</td></tr>
+<tr><td class="d">1-D θ scan at a known azimuth</td><td class="ok">0.075</td><td class="ok">13,300 Hz</td></tr>
+<tr><td class="d"><b>Approach 2 — no scan at all</b></td><td class="ok"><b>0.062</b></td><td class="ok"><b>16,200 Hz</b></td></tr>
+</tbody>
+</table></div>
+<div class="col">
+<ul class="tight">
+<li><b>Precompute the unit manifold.</b> It is a fixed property of the array and is currently
+rebuilt every step — 16% of the cost for nothing. Belongs in <code>make_array</code>.</li>
+<li><b>Drop MUSIC from the hot path.</b> It is reported-only; it never places a null. Another
+34%.</li>
+<li><b>Coarse-to-fine.</b> A 5° grid then a ±5° refinement is a <b>69×</b> reduction, and it was
+<em>exact</em> here — it picked the identical peak on all 180 steps of the steady and drift runs,
+0° difference. Free, for this geometry.</li>
+<li><b>Scan only where the jammer can be.</b> Nothing forces a full-sphere search: a single θ-cut
+at a known azimuth is 181 directions instead of 65,160.</li>
+</ul>
+<p><b>The structural point, which is the one worth taking to a design review:</b> Approach 2 needs
+no scan whatsoever. It never estimates a direction, so there is no grid, no search, and no
+resolution/compute trade to argue about — just a covariance update and one 16×16 solve, at
+<b>0.062 ms</b>. If compute budget is the binding constraint, that is the deployable algorithm, and
+the fact that it gives up 3.4 dB on a drifting jammer has to be weighed against being <b>500×</b>
+cheaper than the method that beats it.</p>
+</div>
+
 <div class="note derr"><b>Presence detection is late, and by more than it looks.</b> The source
 threshold sits just above the <em>noise floor</em>, but a strong jammer's eigenvalue starts far
 above it — 23.7 dB on spacing0.6 at JNR 20 dB — and the covariance decays it by only

@@ -262,6 +262,28 @@ measurement it costs and the recipe to restore it. The fast presence covariance 
 there at the user's request for a later delivery version. Graded release and adaptive
 loading recorded as not-to-be-reintroduced per brief §3.1.
 
+**Measured the scan cost; the search dominates and Approach 2 avoids it.** Per step
+(MATLAB, one core, double, 16 el, 181x360 grid): full step 31.7 ms, of which
+`estimate_jammer_angle` is **30.4 ms = 95.9%** (beamscan 15.0, MUSIC 10.9, manifold
+re-normalisation 5.2, eig 0.045). `max_sinr_weights` is **0.057 ms** and `detect_and_null`
+0.065. A full 2-D scan is ~133 MFLOP streaming 16.7 MB of manifold; the entire max-SINR
+solution is one 16x16 solve, ~33 kFLOP -- **the search is ~4,000x the arithmetic of the
+solve**. Three reductions are free and NOT yet applied: precompute the unit manifold (it is
+a constant of the array, rebuilt every step, 16%); drop MUSIC from the hot path
+(reported-only, 34%); coarse-to-fine 5 deg then +-5 deg at 1 deg, which is **69x cheaper and
+exact** -- identical peak on all 180 steps of steady+drift, 0 deg difference. Rates: as
+shipped 32 Hz, beamscan-only precomputed 68 Hz, coarse-to-fine 2,170 Hz, 1-D theta cut
+13,300 Hz, Approach 2 16,200 Hz. **Structural conclusion for any real-time target: Approach
+2 needs no grid and no search at all, so its 3.4 dB drift deficit buys a 500x compute
+saving.**
+
+**Clarified the 77 deg wording.** It read as though a 77 deg direction error were
+tolerable. It is not: nulling at 132 deg when the jammer is at 55 gives **-8.3 dB, worse
+than not adapting (-3.6)** and 20.4 dB below the correct null. The point of the anecdote is
+that the failure is SILENT -- well-formed spectrum, sharp peak, confident answer, nothing
+non-finite -- which is the argument for keeping the oracle: to catch estimators that are
+confidently wrong, not to flatter results.
+
 **Corrected the lead to use the covariance's MEAN AGE, not its window length.** The
 EMA weights a block k steps old by (1-lambda)*lambda^k, and that weighting has two
 one-number summaries which differ by exactly 1: `1/(1-lambda) = 10` (effective window

@@ -68,7 +68,14 @@ function jammer_estimate = estimate_jammer_angle(covariance, array)
 %      e has unit norm. With raw CST vectors the scan multiplies in the array's
 %      own gain variation and reports the direction the array hears best rather
 %      than the direction the jammer is in. Measured here that error was 77
-%      degrees -- and it looked entirely plausible.
+%      degrees: the jammer was at 55, the scan said 132.
+%
+%      That is not a tolerable error, it is a fatal one -- nulling at 132 when
+%      the jammer is at 55 gives -8.3 dB, WORSE than not adapting at all
+%      (-3.6 dB) and 20.4 dB below the correct null. The reason it is called out
+%      is that it is SILENT: the spectrum is well formed, the peak is sharp, the
+%      answer is confident, and nothing errors. Without ground truth to check
+%      against you would ship it. Normalise, and check estimators against truth.
 %
 %   2. EXCLUDE THE GUARD SECTOR. The wanted signal is one of the strong sources
 %      -- it is inside the snapshots -- so both scans find it too, and it is
