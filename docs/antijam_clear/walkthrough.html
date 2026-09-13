@@ -117,7 +117,7 @@ figcaption{font-family:var(--sans);font-size:.81rem;color:var(--ink3);margin-top
       <li><a href="#score">The oracle and the score</a></li>
       <li><a href="#results">Results</a></li>
       <li><a href="#limits">What this version gives up</a></li>
-      <li><a href="#map">The three constants, and the file map</a></li>
+      <li><a href="#map">The constants, and the file map</a></li>
     </ol>
   </div>
 </header>
@@ -302,25 +302,39 @@ samples of an <var>N</var>-element array lands within about 3 dB of the ideal on
 <div class="eq">R_block = (X·Xᴴ)/K                         <span class="cm">% this step's estimate</span>
 R       = λ·R_previous + (1−λ)·R_block     <span class="cm">% blended with the past</span>
 
-horizon = 1/(1−λ) = 10 steps               <span class="cm">% at λ = 0.90</span></div>
+weight given to a block k steps old = (1−λ)·λᵏ
+
+1/(1−λ)  = 10 steps   <span class="cm">% effective window length — how much smoothing</span>
+λ/(1−λ)  =  9 steps   <span class="cm">% MEAN AGE of the data — this is the lag</span></div>
 <div class="col">
 <p><b>Why forget at all.</b> The jammer moves and switches off. A plain running average would
 remember every place it has ever been and put the null at the average of them, which is nowhere
 useful.</p>
-<p><b>Quote the horizon, not λ.</b> "The system remembers ten steps" is a sentence anyone in the
-room can reason about, and that single number explains a surprising share of the behaviour: why a
-drifting jammer is nulled where it was ten steps ago, why an on/off edge cannot be resolved from
-this covariance, and how long a null usefully survives the jammer switching off.</p>
+<p><b>Quote a horizon, not λ.</b> "The system remembers about ten steps" is a sentence anyone in
+the room can reason about, and it explains a surprising share of the behaviour: why an on/off edge
+cannot be resolved from this covariance, and how long a null usefully survives the jammer switching
+off.</p>
+<p><b>But there are two horizons, and they are not interchangeable.</b> Nothing ever leaves this
+average — a block from <var>k</var> steps ago just carries weight <code>(1−λ)λᵏ</code>. Summarising
+that decaying weighting in one number can be done two ways: the <em>effective window length</em>
+<code>1/(1−λ) = 10</code>, which says how much smoothing this is equivalent to, and the <em>mean age
+of the data</em> <code>λ/(1−λ) = 9</code>, which says how stale the answer is. They differ by
+exactly 1, since <code>1/(1−λ) − λ/(1−λ) = 1</code>.</p>
+<p>Window length governs memory — run lengths, the motion window. <b>Mean age governs lag</b>: the
+beamscan reports where the jammer was <em>on average</em>, and that average is 9 steps old. Using
+the wrong one in the lead over-shoots by one step's worth of motion, every step.</p>
 </div>
 <div class="note derr"><b>One implementation detail is load-bearing.</b> The update is applied
 <em>once per step, to the batch-averaged block</em>. Applying it once per snapshot column runs the
 recursion <var>K</var> times per step, shortening the true horizon by a factor of <var>K</var> while
 λ still reads 0.90 in the code. The previous implementation had exactly that bug, and it made a λ of
 0.98 appear correct.</div>
-<div class="note good"><b>The horizon is confirmed by measurement, not asserted.</b> On a jammer
-drifting at 0.5°/step, the covariance's angle estimate settles to a lag of <b>4.65°</b> against the
-<b>5.0°</b> predicted by <code>rate × horizon</code> from λ alone. On a stationary jammer the same
-estimator is exact to 0.00°.</div>
+<div class="note good"><b>Confirmed by measurement, not asserted — and it settles which horizon.</b>
+Dividing the measured lag by the drift rate gives the lag in steps directly. At 0.10 and 0.20°/step
+it comes out at <b>9.00 steps exactly</b> — the mean age <code>λ/(1−λ)</code>, not the window length
+<code>1/(1−λ) = 10</code>. (Above about 0.25°/step the ratio scatters between 8 and 10, within the 1°
+grid quantisation and the onset of the smear saturation described in section 11.) On a stationary
+jammer the same estimator is exact to 0.00°.</div>
 <p class="fileref">simulate_snapshots.m · sample_covariance.m</p>
 </section>
 
@@ -376,11 +390,12 @@ then jumps.</p>
 to 0.00°.</caption>
 </table></div>
 <div class="col">
-<p>The beamscan's lag is exactly <code>rate × horizon</code>, because a power measure peaks at the
+<p>The beamscan's lag is exactly <code>rate × mean age</code>, because a power measure peaks at the
 power-weighted centre of where the jammer has been. That is a <em>predictable</em> error, and the
 lead correction in the next section removes it. MUSIC's 13.5° excursion cannot be led out.
-Switching the null over to the beamscan took the drift case from 7.2 dB / score 65 to 10.8 dB /
-score 98.</p>
+Switching the null over to the beamscan took the drift case from <b>7.5 dB / score 66</b> to
+<b>11.1 dB / score 99</b>, against an achievable 11.5 — measured with identical settings and
+identical noise, changing only which spectrum feeds the null.</p>
 <p>MUSIC's real advantage is resolving two closely-spaced sources — which a single-jammer problem
 never asks for, and the guard sector already excludes the region near the signal. Both are computed
 and reported so this can be shown rather than claimed; there is no switch between them.</p>
@@ -416,17 +431,23 @@ grid quantisation jitter.</li>
 </ol>
 
 <h3>The lead, and why it is not a tuning knob</h3>
-<div class="eq">aim = latest estimate + (fitted rate) × (covariance horizon)
-lead is capped at guard_deg   <span class="cm">% half a beamwidth — see below</span></div>
+<div class="eq">aim = latest estimate + (fitted rate) × (mean age of the covariance)
+                               <span class="cm">% λ/(1−λ) = 9 steps, NOT 1/(1−λ) = 10</span>
+lead is capped at guard_deg    <span class="cm">% half a beamwidth — see below</span></div>
 <div class="col">
 <p>Both quantities on the right are already known: the rate is the slope this function fits, and the
 horizon is <code>1/(1−λ)</code> from the covariance. Nothing is fitted to performance and there is
 no coefficient to choose. If λ changes, the lead changes with it automatically.</p>
-<p>On the demo scenario it takes the aim error from <b>−3.50°</b> (lagging) to <b>+1.53°</b>, and
-mean absolute error from 5.03° to 3.96°.</p>
+<p>On the demo scenario it takes the aim error from <b>−4.50°</b> (lagging) to <b>−0.37°</b>, and
+mean absolute error from <b>4.65° to 0.75°</b>.</p>
+<p>Getting the horizon right here matters more than it looks. Leading by the window length (10)
+instead of the mean age (9) over-shoots by one step's motion every step; correcting it is worth
++0.4 to +1.3 dB across the qualified drift range, and takes the demo scenario from 10.8 dB / score
+98 to <b>11.1 dB / score 99</b>. It is a correctness fix, not a tuning change — the lead has no free
+coefficient either way.</p>
 </div>
 <div class="note"><b>Why the cap is there, and why it costs no new constant.</b> The lead multiplies
-the fitted rate by 10, so it amplifies any error in that rate tenfold. That is a good trade while
+the fitted rate by 9, so it amplifies any error in that rate ninefold. That is a good trade while
 the rate is well measured and a bad one once it is not — past roughly one beamwidth of travel per
 horizon, the beamscan peak itself smears, the slope gets noisy, and the extrapolation throws the
 null <em>further</em> off than no extrapolation at all. Beyond half a beamwidth ahead there is no
@@ -555,7 +576,7 @@ well the algorithm works, and mixing the two is how run length silently becomes 
 <tbody>
 <tr><td class="lbl">steady</td><td>−3.6 dB · 0</td><td class="ok">12.1 dB · 100</td><td>11.4 dB · 100</td><td><b>12.1 dB</b></td></tr>
 <tr><td class="lbl">on/off</td><td>4.9 dB · 53</td><td class="ok">12.1 dB · 100</td><td>11.6 dB · 99</td><td><b>12.2 dB</b></td></tr>
-<tr><td class="lbl">drift 0.5°/step</td><td>−7.7 dB · 0</td><td class="ok">10.8 dB · 98</td><td>7.7 dB · 41</td><td><b>11.5 dB</b></td></tr>
+<tr><td class="lbl">drift 0.5°/step</td><td>−7.7 dB · 0</td><td class="ok">11.1 dB · 99</td><td>7.7 dB · 41</td><td><b>11.5 dB</b></td></tr>
 </tbody>
 <caption>Mean settled SINR · score. Every score carries its ceiling.</caption>
 </table></div>
@@ -572,7 +593,7 @@ inside it would be in the main lobe and out of scope.</figcaption>
 <img src="assets/trace_spacing0_6_drift.png" alt="SINR and angle traces for a drifting jammer">
 <figcaption>The drift case, and the whole argument of section 4 in one picture. <b>Below:</b> truth
 (red); MUSIC (purple) sticking near 60° for sixteen steps before jumping; the beamscan (blue)
-lagging smoothly by <code>rate × horizon</code>; the aim after the lead correction (orange dashed)
+lagging smoothly by <code>rate × mean age</code>; the aim after the lead correction (orange dashed)
 sitting on the truth. <b>Above:</b> Approach 1 reaching the achievable ceiling once its window
 fills, Approach 2 climbing slowly because it has no model of the motion to lead with, and the
 quiescent beam collapsing as the jammer walks into its sidelobes.</figcaption>
@@ -595,10 +616,10 @@ and stops paying when it is not.</p>
 <div class="tw"><table>
 <thead><tr><th>drift rate</th><th>detect + null</th><th>achievable</th><th>aim error</th><th>score</th></tr></thead>
 <tbody>
-<tr><td class="lbl">0.25°/step</td><td>10.0 dB</td><td>11.2 dB</td><td>0.37°</td><td>82</td></tr>
-<tr><td class="lbl">0.50°/step</td><td>8.2 dB</td><td>11.2 dB</td><td>0.92°</td><td>60</td></tr>
-<tr><td class="lbl">1.00°/step</td><td>0.3 dB</td><td>11.1 dB</td><td>4.36°</td><td>25</td></tr>
-<tr><td class="lbl">1.50°/step</td><td class="warn">−4.2 dB</td><td>11.0 dB</td><td>5.61°</td><td class="warn">3</td></tr>
+<tr><td class="lbl">0.25°/step</td><td>11.1 dB</td><td>11.2 dB</td><td>0.34°</td><td>98</td></tr>
+<tr><td class="lbl">0.50°/step</td><td>8.9 dB</td><td>11.2 dB</td><td>0.72°</td><td>70</td></tr>
+<tr><td class="lbl">1.00°/step</td><td>1.9 dB</td><td>11.1 dB</td><td>3.75°</td><td>25</td></tr>
+<tr><td class="lbl">1.50°/step</td><td class="warn">−4.0 dB</td><td>11.0 dB</td><td>5.61°</td><td class="warn">3</td></tr>
 </tbody>
 <caption>90° traverse, harder than the demo's 60°. <code>results/drift_envelope.csv</code>.</caption>
 </table></div>
@@ -617,33 +638,33 @@ jammer's angle <em>and</em> its rate of change, and each step it blends the new 
 its own prediction, weighting whichever it currently trusts more. The point of it, here, is a
 lower-noise estimate of the <em>rate</em> — which is what the lead is multiplied by.</p>
 <p><b>Why that framing lets us settle it without building it.</b> The aim is
-<code>angle + rate × horizon</code>. A better filter can only improve the <em>rate</em> term. So
+<code>angle + rate × mean age</code>. A better filter can only improve the <em>rate</em> term. So
 feed the loop the <em>true</em> rate and you have an upper bound on any rate estimator that could
 ever exist, Kalman included — and if that bound is close to what the plain line-fit already gets,
 the filter is not worth building. This is the same move that closed the graded-release question in
 the previous work: bound the family before building members of it.</p>
 <p>Splitting it further — feeding the loop the true <em>angle</em> — separates which half of
-<code>angle + rate × horizon</code> is actually binding.</p>
+<code>angle + rate × mean age</code> is actually binding.</p>
 </div>
 <div class="tw"><table>
 <thead><tr><th>drift rate</th><th>no lead</th><th>fitted slope<br>(what ships)</th><th>perfect rate<br>(bounds any Kalman)</th><th>perfect angle</th><th>oracle</th></tr></thead>
 <tbody>
-<tr><td class="lbl">0.25°/step</td><td>6.4</td><td>10.0</td><td>11.1</td><td>11.2</td><td>11.2</td></tr>
-<tr><td class="lbl">0.50°/step</td><td>3.3</td><td>8.2</td><td>8.3</td><td>11.2</td><td>11.2</td></tr>
-<tr><td class="lbl">1.00°/step</td><td>−0.3</td><td>0.3</td><td>1.4</td><td class="ok">11.1</td><td>11.1</td></tr>
-<tr><td class="lbl">1.50°/step</td><td>−3.6</td><td>−4.2</td><td>−6.6</td><td class="ok">11.0</td><td>11.0</td></tr>
+<tr><td class="lbl">0.25°/step</td><td>6.4</td><td>11.1</td><td>11.1</td><td>11.2</td><td>11.2</td></tr>
+<tr><td class="lbl">0.50°/step</td><td>3.3</td><td>8.9</td><td>10.4</td><td>11.2</td><td>11.2</td></tr>
+<tr><td class="lbl">1.00°/step</td><td>−0.3</td><td>1.9</td><td>3.1</td><td class="ok">11.1</td><td>11.1</td></tr>
+<tr><td class="lbl">1.50°/step</td><td>−3.6</td><td>−4.0</td><td>−4.2</td><td class="ok">11.0</td><td>11.0</td></tr>
 </tbody>
 <caption>Mean settled SINR [dB]. The perfect-rate column is uncapped, so it is a genuine bound.
 <code>results/predictor_bound.csv</code>.</caption>
 </table></div>
-<div class="note derr"><b>A perfect rate estimator is worth at most 1.1 dB.</b> That is the ceiling
+<div class="note derr"><b>A perfect rate estimator is worth at most 1.5 dB.</b> That is the ceiling
 on the Kalman filter, measured rather than argued — and above 1°/step a perfect rate is
 <em>worse</em> than the line fit, because past about a beamwidth of travel per horizon the
-<code>rate × horizon</code> lag model itself stops holding: the covariance smear saturates, the
+<code>rate × mean age</code> lag model itself stops holding: the covariance smear saturates, the
 angle no longer lags by the full amount, and correcting by the true rate overshoots.</div>
 <div class="note good"><b>The binding constraint is the angle, not the rate.</b> Perfect angle
-reaches <b>11.1 dB against an oracle of 11.1</b> at 1°/step, where perfect rate reaches 1.4. Nearly
-ten dB sits in knowing <em>where the jammer is</em>, and roughly one dB in knowing how fast it is
+reaches <b>11.1 dB against an oracle of 11.1</b> at 1°/step, where perfect rate reaches 3.1. Eight
+dB sits in knowing <em>where the jammer is</em>, and at most 1.5 dB in knowing how fast it is
 moving. Given the right angle, the two-point null of section 6 is already optimal to within
 0.1–0.3 dB at every rate tested — there is nothing wrong with the beamformer.</div>
 <div class="col">
@@ -693,18 +714,22 @@ the <em>adaptive</em> variant that is worthless.</p>
 </section>
 
 <section id="map">
-<h2>12. The three constants, and the file map</h2>
+<h2>12. The constants, and the file map</h2>
 <div class="col">
 <p>These are the only numbers in the method that need defending, and they fit on one screen at the
-top of <code>run_demo.m</code>.</p>
+top of <code>run_demo.m</code>. Only the first and the last are chosen; the two in between are
+computed from λ.</p>
 </div>
 <div class="eq">FORGETTING_LAMBDA        = 0.90;   <span class="cm">% how far back the covariance remembers</span>
-COVARIANCE_HORIZON_STEPS = 10;     <span class="cm">% = 1/(1−λ), derived</span>
+COVARIANCE_HORIZON_STEPS = 10;     <span class="cm">% = 1/(1−λ)  — window length, sets memory</span>
+ESTIMATE_LAG_STEPS       =  9;     <span class="cm">% = λ/(1−λ)  — mean age, sets the lead</span>
 LOADING_FACTOR           = 30;     <span class="cm">% × noise floor; set by measurement</span></div>
 <div class="col">
-<p>Everything else is derived: <var>K</var> = 2·<var>N</var> from Reed–Mallett–Brennan, the guard
-from the array's beamwidth, the eigenvalue threshold from the Marchenko–Pastur edge, the run lengths
-from the estimators' convergence requirements, the lead from λ, and the lead cap from the guard.</p>
+<p><b>Two tuned numbers, λ and the loading factor; everything else follows.</b> The two memory
+quantities are both derived from λ and are not interchangeable — see section 3. Beyond them:
+<var>K</var> = 2·<var>N</var> from Reed–Mallett–Brennan, the guard from the array's beamwidth, the
+eigenvalue threshold from the Marchenko–Pastur edge, the run lengths from the estimators'
+convergence requirements, and the lead cap from the guard.</p>
 </div>
 <div class="tw"><table>
 <thead><tr><th>file</th><th>what it does</th></tr></thead>

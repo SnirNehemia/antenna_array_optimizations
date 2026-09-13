@@ -64,20 +64,28 @@ lead of 14 steps (10 covariance horizon + 4 application and smoothing lag).
 - **Measured worth:** +35 points on the drifting-jammer score (55.0 → 90.1),
   and provably inert on steady and on/off runs.
 - **What replaces it here:** a one-line arithmetic lead. The beamscan lags the
-  jammer by `rate × horizon`, so the null is aimed that far ahead, using the
-  fitted rate and the horizon we already have. Nothing is tuned to performance.
-  On the demo scenario it takes the aim error from −3.50° to +1.53° and the
-  score from 65 to 98.
+  jammer by `rate × (mean age of the covariance)`, so the null is aimed that far
+  ahead, using the fitted rate and a quantity that follows from λ. Nothing is
+  tuned to performance. On the demo scenario it takes the aim error from −4.50°
+  to −0.37°, mean |error| from 4.65° to 0.75°, and the score from 65 to 99.
+- **Which horizon — worth about 1 dB.** The covariance weights a block k steps
+  old by `(1−λ)λᵏ`, and that weighting has two one-number summaries:
+  `1/(1−λ) = 10` (effective window length, sets memory and the motion window)
+  and `λ/(1−λ) = 9` (mean age of the data, sets the lag). They differ by exactly
+  one step. **The lead must use the mean age.** Measured: dividing the observed
+  lag by the drift rate gives 9.00 steps exactly at 0.10 and 0.20°/step. Using
+  the window length instead over-leads by one step's motion every step and costs
+  0.4–1.3 dB across the qualified range.
 - **Cost of omitting the real filter — the drift envelope.** The lead multiplies
-  the fitted rate by 10, so it amplifies any error in that rate tenfold. It pays
+  the fitted rate by 9, so it amplifies any error in that rate ninefold. It pays
   while the rate is well measured and stops paying when it is not:
 
   | drift rate | detect+null | achievable | aim error | score |
   |---|---|---|---|---|
-  | 0.25°/step | 10.0 dB | 11.2 dB | 0.37° | 82 |
-  | 0.50°/step | 8.2 dB | 11.2 dB | 0.92° | 60 |
-  | 1.00°/step | 0.3 dB | 11.1 dB | 4.36° | 25 |
-  | 1.50°/step | −4.2 dB | 11.0 dB | 5.61° | 3 |
+  | 0.25°/step | 11.1 dB | 11.2 dB | 0.34° | 98 |
+  | 0.50°/step | 8.9 dB | 11.2 dB | 0.72° | 70 |
+  | 1.00°/step | 1.9 dB | 11.1 dB | 3.75° | 25 |
+  | 1.50°/step | −4.0 dB | 11.0 dB | 5.61° | 3 |
 
   (90° traverse; `results/drift_envelope.csv`.) **This version is qualified to
   roughly 0.5°/s and broken by 1.5°/s.** The previous implementation, with the
@@ -89,21 +97,21 @@ lead of 14 steps (10 covariance horizon + 4 application and smoothing lag).
   reuses `guard_deg` and adds no constant. It is inert below 1.26°/step and
   rescues the high-rate collapse (2°/step: −14.1 → −4.7 dB).
 - **Measured: adding the filter back is NOT the way to widen the envelope.**
-  The aim is `angle + rate × horizon`, and a filter can only improve the *rate*.
+  The aim is `angle + rate × mean age`, and a filter can only improve the *rate*.
   Feeding the loop the **true** rate bounds any rate estimator that could exist:
 
   | drift rate | ships | perfect rate | perfect angle | achievable |
   |---|---|---|---|---|
-  | 0.25°/step | 10.0 dB | 11.1 dB | 11.2 dB | 11.2 dB |
-  | 0.50°/step | 8.2 dB | 8.3 dB | 11.2 dB | 11.2 dB |
-  | 1.00°/step | 0.3 dB | 1.4 dB | **11.1 dB** | 11.1 dB |
-  | 1.50°/step | −4.2 dB | −6.6 dB | **11.0 dB** | 11.0 dB |
+  | 0.25°/step | 11.1 dB | 11.1 dB | 11.2 dB | 11.2 dB |
+  | 0.50°/step | 8.9 dB | 10.4 dB | 11.2 dB | 11.2 dB |
+  | 1.00°/step | 1.9 dB | 3.1 dB | **11.1 dB** | 11.1 dB |
+  | 1.50°/step | −4.0 dB | −4.2 dB | **11.0 dB** | 11.0 dB |
 
-  (`results/predictor_bound.csv`.) **A perfect rate estimator is worth ≤1.1 dB**
+  (`results/predictor_bound.csv`.) **A perfect rate estimator is worth ≤1.5 dB**
   — and above 1°/step it is *worse*, because past a beamwidth of travel per
-  horizon the `rate × horizon` lag model stops holding and the correction
-  overshoots. **Nearly 10 dB sits in the angle, ~1 dB in the rate.** Given the
-  right angle the two-point null already matches the oracle to 0.1–0.3 dB.
+  horizon the lag model stops holding and the correction overshoots.
+  **Eight dB sits in the angle, at most 1.5 dB in the rate.** Given the right
+  angle the two-point null already matches the oracle to 0.1–0.3 dB.
 - **The real lever is λ.** Shortening the memory is worth **+8.3 dB at 1°/step**
   (λ 0.90 → 0.70; 5 seeds, spread ±0.1–0.4 dB) — but it **breaks the on/off case**
   (12.1 → 4.4 dB): a short memory loses the jammer while it is off, the beamscan
@@ -154,11 +162,12 @@ a broad arc, and the peak inside that arc is numerically arbitrary.
 | MUSIC | 3.50° | 5.03° | **13.50°** | sticks, then jumps |
 | beamscan | 4.50° | 4.65° | **6.00°** | smooth |
 
-The beamscan's lag is exactly `rate × horizon`, because a power measure peaks at
+The beamscan's lag is exactly `rate × mean age`, because a power measure peaks at
 the power-weighted centre of where the jammer has been. That is a *predictable*
 error, and the lead correction removes it; MUSIC's 13.5° excursion cannot be led
-out. Switching to the beamscan took the drift case from 7.2 dB / score 65 to
-10.8 dB / score 98.
+out. Switching to the beamscan took the drift case from 7.5 dB / score 66 to
+11.1 dB / score 99 against an achievable 11.5, measured with identical settings
+and identical noise, changing only which spectrum feeds the null.
 
 On a stationary jammer the two agree to 0.00°. MUSIC's real advantage is
 resolving two closely-spaced sources, which a single-jammer problem never asks

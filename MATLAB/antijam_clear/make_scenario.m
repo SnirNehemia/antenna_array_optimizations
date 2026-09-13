@@ -89,6 +89,12 @@ STEP_SECONDS = 1.0;
 % move together if the horizon ever changes.
 COVARIANCE_HORIZON_STEPS = 10;
 
+% The MEAN AGE of the covariance, lambda/(1 - lambda) = 9 steps. This is what a
+% moving jammer's estimate actually lags by -- one step less than the window
+% length above. Used only for the printed description; classify_jammer_motion
+% is where it does real work.
+ESTIMATE_LAG_STEPS = 9;
+
 % A steady run needs the covariance to converge and then enough settled steps to
 % average over. Six horizons gives one horizon of transient and five of measurement.
 STEADY_HORIZONS = 6;
@@ -105,9 +111,9 @@ ONOFF_PERIOD_HORIZONS = 2;
 ONOFF_CYCLES = 8;
 
 % Drift rate, chosen so that the covariance's own lag is a visible fraction of a
-% beamwidth rather than negligible or catastrophic: the null trails the jammer by
-% rate * horizon = 0.5 * 10 = 5 degrees, about a fifth of a typical 25 degree
-% beamwidth here. That lag is the effect the drift case exists to show.
+% beamwidth rather than negligible or catastrophic: the estimate trails the
+% jammer by rate * mean age = 0.5 * 9 = 4.5 degrees, about a fifth of a typical
+% 25 degree beamwidth here. That lag is the effect the drift case exists to show.
 DRIFT_RATE_DEG_PER_STEP = 0.5;
 
 % Total angular travel for a drift run: far enough that the jammer leaves the
@@ -192,7 +198,7 @@ switch lower(behaviour)
         description = sprintf(['drifting jammer from %.1f deg separation, ' ...
                                '%.2f deg/step (null lags by ~%.1f deg)'], ...
                               jammer_separation_deg, drift_rate_deg_step, ...
-                              drift_rate_deg_step * COVARIANCE_HORIZON_STEPS);
+                              drift_rate_deg_step * ESTIMATE_LAG_STEPS);
 
     otherwise
         error('make_scenario:UnknownBehaviour', ...

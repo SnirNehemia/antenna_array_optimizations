@@ -32,21 +32,30 @@ addpath(this_folder);
 results_dir = fullfile(this_folder, 'results');
 
 
-%% ────────────────────── THE THREE CONSTANTS ──────────────────────
+%% ────────────────────── THE CONSTANTS ────────────────────────────
 %
-% These are the only numbers in the whole method that need defending, and they
-% all fit on this screen.
+% Two tuned numbers -- FORGETTING_LAMBDA and LOADING_FACTOR -- and everything
+% else derived from them. They all fit on this screen.
 
-% How far back the covariance remembers. The memory horizon below follows from
-% it, and every derived quantity in the run is quoted in horizons, so if this
-% moves they all move with it.
+% How far back the covariance remembers. Both memory numbers below follow from
+% it, so if this moves they move with it.
 FORGETTING_LAMBDA = 0.90;
 
-% 1/(1 - lambda) = 10 steps. This one number explains the drift lag (the null
-% trails the jammer by rate x horizon), why an on/off edge cannot be resolved
-% from this covariance, and how long a null usefully survives the jammer
-% switching off.
+% The covariance weights a block from k steps ago by (1-lambda)*lambda^k. That
+% decaying weighting has TWO useful one-number summaries, and they are not the
+% same number -- the distinction is worth about 1 dB on a drifting jammer.
+%
+% How much smoothing this is equivalent to: 10 steps. Sets how long the array
+% remembers, why an on/off edge cannot be resolved from this covariance, how
+% long a null survives the jammer switching off, and the motion window.
 COVARIANCE_HORIZON_STEPS = round(1 / (1 - FORGETTING_LAMBDA));
+
+% The MEAN AGE of the data in that weighted average: 9 steps. The beamscan
+% reports where the jammer was on average, and that average is this old -- so
+% this, not the window length above, is the lag, and this is what the null is
+% led by. Measured directly: at 0.10 and 0.20 deg/step the lag divided by the
+% rate comes out at 9.00 steps exactly.
+ESTIMATE_LAG_STEPS = round(FORGETTING_LAMBDA / (1 - FORGETTING_LAMBDA));
 
 % Diagonal loading, as a multiple of the estimated noise floor. Chosen by
 % measuring SINR against STEERING MISMATCH rather than against null depth: see
@@ -85,8 +94,10 @@ fprintf('  GUARD SECTOR (derived, half the wider beamwidth) : %.1f deg\n', ...
     array.profile.guard_deg);
 fprintf('  mirror ambiguity e(theta) vs e(180-theta)        : %.4f%s\n', ...
     array.profile.mirror_coherence, ambiguity_note(array.profile.is_mirror_ambiguous));
-fprintf('  snapshots per step (2 per element)               : %d\n\n', ...
+fprintf('  snapshots per step (2 per element)               : %d\n', ...
     array.snapshots_per_step);
+fprintf('  covariance memory: %d steps equivalent window, %d steps mean age\n\n', ...
+    COVARIANCE_HORIZON_STEPS, ESTIMATE_LAG_STEPS);
 
 
 %% ────────────────────── ONE INSTANT, STEP BY STEP ────────────────
@@ -109,7 +120,8 @@ snapshots = simulate_snapshots(scenario, 1, array);
 covariance = sample_covariance([], snapshots, FORGETTING_LAMBDA);
 
 % APPROACH 1, part one: where is the jammer, and what is it doing?
-jammer_state = detect_jammer(covariance, [], array, COVARIANCE_HORIZON_STEPS);
+jammer_state = detect_jammer(covariance, [], array, COVARIANCE_HORIZON_STEPS, ...
+                             ESTIMATE_LAG_STEPS);
 
 fprintf('DETECTED: jammer %s at theta = %.1f deg, classified %s\n', ...
     presence_word(jammer_state.is_present), jammer_state.theta_deg, jammer_state.behaviour);
@@ -144,7 +156,8 @@ for behaviour_index = 1:numel(behaviours)
                              signal_theta_deg, signal_phi_deg, 25, 0, 20);
 
     results = run_closed_loop(array, scenario, FORGETTING_LAMBDA, ...
-                              COVARIANCE_HORIZON_STEPS, LOADING_FACTOR);
+                              COVARIANCE_HORIZON_STEPS, ESTIMATE_LAG_STEPS, ...
+                              LOADING_FACTOR);
 
     compare_approaches(results, scenario, array, SETTLE_STEPS, results_dir);
     plot_pattern_cut(results, array, scenario, scenario.n_steps, results_dir);
@@ -181,7 +194,7 @@ for limited_index = 1:numel(limited_folders)
     end
 
     limited_state = detect_jammer(eye(limited_array.n_elements), [], limited_array, ...
-                                  COVARIANCE_HORIZON_STEPS);
+                                  COVARIANCE_HORIZON_STEPS, ESTIMATE_LAG_STEPS);
     [~, limited_reason] = detect_and_null(limited_array, limited_state);
     fprintf('  %s\n', limited_reason);
 end

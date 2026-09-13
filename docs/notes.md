@@ -262,6 +262,26 @@ measurement it costs and the recipe to restore it. The fast presence covariance 
 there at the user's request for a later delivery version. Graded release and adaptive
 loading recorded as not-to-be-reintroduced per brief §3.1.
 
+**Corrected the lead to use the covariance's MEAN AGE, not its window length.** The
+EMA weights a block k steps old by (1-lambda)*lambda^k, and that weighting has two
+one-number summaries which differ by exactly 1: `1/(1-lambda) = 10` (effective window
+length) and `lambda/(1-lambda) = 9` (mean age of the data). Memory is governed by the
+first; **lag is governed by the second**, because the beamscan reports where the jammer
+was ON AVERAGE. The code used 10 for the lead, over-shooting by one step's motion every
+step. Measured decisively: dividing the observed lag by the drift rate gives **9.00 steps
+exactly** at 0.10 and 0.20 deg/step (it scatters 8-10 above 0.25, within the 1 deg grid
+quantisation and the smear saturation). Fix: `run_demo` now derives BOTH from lambda and
+they are threaded separately through `run_closed_loop` -> `detect_jammer` ->
+`classify_jammer_motion`, which uses the window for its motion window and the mean age for
+the lead. Demo drift: **10.8 dB / score 98 -> 11.1 / 99**, mean |aim error| **3.96 -> 0.75
+deg**, median aim error **+1.53 -> -0.37 deg**. Steady and on/off bit-identical (the lead
+only applies when drifting). Envelope at 0.25 deg/step: 10.0 -> 11.1 dB, score 82 -> 98.
+The predictor bound moves with it: a perfect rate estimator is now worth **<= 1.5 dB**
+(was 1.1 against the mis-specified lead) and **zero** at 0.25 deg/step, so the conclusion
+that the Kalman filter is not on the path is unchanged and slightly firmer. This was a
+correctness fix, not a tuning change -- the lead has no free coefficient either way.
+Found by a reader's question about what "horizon" meant.
+
 **Bounded the CV-Kalman question instead of building it.** The aim is
 `angle + rate x horizon`; a filter can only improve the *rate*, so feeding the loop the
 TRUE rate upper-bounds any rate estimator that could exist (same move as the

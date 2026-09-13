@@ -94,8 +94,8 @@ img{width:100%;height:auto;display:block;background:#fff;border:1px solid var(--
   <div class="stats">
     <div class="stat"><div class="v">12.1 dB</div><div class="k">achieved against an achievable
     12.1 dB on a stationary jammer</div></div>
-    <div class="stat"><div class="v">3</div><div class="k">constants in the whole method that need
-    defending</div></div>
+    <div class="stat"><div class="v">2</div><div class="k">numbers actually tuned in the whole
+    method — everything else is derived</div></div>
     <div class="stat"><div class="v">20&times;</div><div class="k">narrower drift envelope than the
     full implementation — stated, not hidden</div></div>
   </div>
@@ -199,18 +199,21 @@ patch_back2back (2 elements)
   <h2>One constant explains most of the behaviour</h2>
   <div class="eq">R = λ·R_previous + (1−λ)·(X·Xᴴ)/K
 
-horizon = 1/(1−λ) = <b>10 steps</b>        <span class="cm">% at λ = 0.90</span></div>
-  <p class="big">The array remembers ten steps. That single number explains:</p>
-  <ul>
-    <li>why a drifting jammer is nulled where it was ten steps ago — the null trails by
-    <code>rate × 10</code> degrees;</li>
-    <li>why an on/off edge cannot be resolved from this covariance — it is smoothing exactly the
-    transition it would need to see;</li>
-    <li>how long a null usefully survives the jammer switching off.</li>
-  </ul>
-  <div class="note good"><b>Confirmed by measurement, not asserted.</b> On a jammer drifting at
-  0.5°/step the estimate settles to a lag of <b>4.65°</b>, against <b>5.0°</b> predicted from λ
-  alone. On a stationary jammer the same estimator is exact to 0.00°.</div>
+a block k steps old keeps weight (1−λ)·λᵏ
+
+1/(1−λ) = <b>10 steps</b>   <span class="cm">% effective window — how much smoothing</span>
+λ/(1−λ) = <b> 9 steps</b>   <span class="cm">% mean age of the data — the LAG</span></div>
+  <p class="big">The array remembers about ten steps. That explains why an on/off edge cannot be
+  resolved from this covariance, and how long a null survives the jammer switching off.</p>
+  <p><b>But two different summaries of that memory matter, and they differ by exactly one step.</b>
+  Nothing ever leaves the average — old data just fades. The <em>window length</em> says how much
+  smoothing this is; the <em>mean age</em> says how stale the answer is. Memory is governed by the
+  first; <b>lag is governed by the second</b>, because the beamscan reports where the jammer was
+  <em>on average</em>.</p>
+  <div class="note good"><b>Confirmed by measurement — and it settles which one.</b> Dividing the
+  measured lag by the drift rate gives the lag in steps directly: at 0.10 and 0.20°/step it comes out
+  at <b>9.00 steps exactly</b>, the mean age. Leading by 10 instead over-shoots by one step's motion
+  every step. On a stationary jammer the estimator is exact to 0.00°.</div>
   <p>Snapshots per step is derived too: <code>K = 2N</code>, the count at which a sample covariance
   lands within 3 dB of the ideal. 32 snapshots for 16 elements.</p>
 </section>
@@ -258,11 +261,12 @@ horizon = 1/(1−λ) = <b>10 steps</b>        <span class="cm">% at λ = 0.90</s
   source count reads 3 on 91 of 120 steps. MUSIC makes its noise subspace orthogonal to the jammer's
   whole <em>track</em>, its spectrum goes near-singular along a broad arc, and the peak inside that
   arc is numerically arbitrary.</p>
-  <p>The beamscan's lag is exactly <code>rate × horizon</code> — a <b>predictable</b> error, which
+  <p>The beamscan's lag is exactly <code>rate × mean age</code> — a <b>predictable</b> error, which
   the next slide removes. MUSIC's 13.5° excursion cannot be corrected for.</p>
-  <div class="note good">Switching the null to the beamscan took the drift case from 7.2 dB / score
-  65 to <b>10.8 dB / score 98</b>. Both estimators are still computed and reported, so the
-  comparison is an output rather than a claim.</div>
+  <div class="note good">Switching the null to the beamscan took the drift case from
+  <b>7.5 dB / score 66</b> to <b>11.1 dB / score 99</b> against an achievable 11.5 — identical
+  settings, identical noise, changing only which spectrum feeds the null. Both estimators are
+  still computed and reported, so the comparison is an output rather than a claim.</div>
 </section>
 
 <section class="slide"><span class="n">09</span>
@@ -276,14 +280,16 @@ horizon = 1/(1−λ) = <b>10 steps</b>        <span class="cm">% at λ = 0.90</s
     jammer is off and is already in place when it returns.</li>
     <li><b>Moving steadily</b> → lead it.</li>
   </ul>
-  <div class="eq">aim = latest estimate + (fitted rate) × (covariance horizon)
+  <div class="eq">aim = latest estimate + (fitted rate) × (mean age of the covariance)
+                               λ/(1−λ) = 9 steps, NOT 1/(1−λ) = 10
       capped at the guard sector — half a beamwidth</div>
-  <p><b>Both quantities on the right are already known.</b> The rate is the slope we fit; the horizon
-  is <code>1/(1−λ)</code>. Nothing is fitted to performance, there is no coefficient to choose, and
-  if λ changes the lead follows automatically.</p>
-  <p>On the demo scenario it takes aim error from <b>−3.50°</b> to <b>+1.53°</b>.</p>
+  <p><b>Both quantities on the right are already known.</b> The rate is the slope we fit; the mean
+  age follows from λ. Nothing is fitted to performance, there is no coefficient to choose, and if λ
+  changes the lead follows automatically.</p>
+  <p>On the demo scenario it takes aim error from <b>−4.50°</b> to <b>−0.37°</b>, and mean absolute
+  error from <b>4.65° to 0.75°</b>.</p>
   <div class="note">The cap costs no new constant — it reuses the guard sector. The lead multiplies
-  the fitted rate by ten, so it amplifies any error in that rate tenfold. Beyond half a beamwidth
+  the fitted rate by nine, so it amplifies any error in that rate ninefold. Beyond half a beamwidth
   ahead there is no measurement bearing on where the jammer will be: <b>do not aim further than you
   can see.</b></div>
 </section>
@@ -329,7 +335,7 @@ horizon = 1/(1−λ) = <b>10 steps</b>        <span class="cm">% at λ = 0.90</s
   <h2>A jammer on the move</h2>
   <img src="assets/trace_spacing0_6_drift.png" alt="SINR and angle traces for a drifting jammer">
   <p class="cap"><b>Below:</b> truth in red; MUSIC (purple) sticking near 60° for sixteen steps
-  before jumping; the beamscan (blue) lagging smoothly by <code>rate × horizon</code>; the aim after
+  before jumping; the beamscan (blue) lagging smoothly by <code>rate × mean age</code>; the aim after
   the lead correction (orange dashed) sitting on the truth. <b>Above:</b> Approach 1 reaching the
   achievable ceiling once its window fills; Approach 2 climbing slowly, because it has no model of
   the motion to lead with; the quiescent beam collapsing as the jammer walks into its sidelobes.</p>
@@ -343,7 +349,7 @@ horizon = 1/(1−λ) = <b>10 steps</b>        <span class="cm">% at λ = 0.90</s
     <tbody>
       <tr><td class="lbl">steady</td><td>−3.6 dB · 0</td><td class="ok">12.1 dB · 100</td><td>11.4 dB · 100</td><td><b>12.1 dB</b></td></tr>
       <tr><td class="lbl">on/off</td><td>4.9 dB · 53</td><td class="ok">12.1 dB · 100</td><td>11.6 dB · 99</td><td><b>12.2 dB</b></td></tr>
-      <tr><td class="lbl">drift 0.5°/step</td><td>−7.7 dB · 0</td><td class="ok">10.8 dB · 98</td><td>7.7 dB · 41</td><td><b>11.5 dB</b></td></tr>
+      <tr><td class="lbl">drift 0.5°/step</td><td>−7.7 dB · 0</td><td class="ok">11.1 dB · 99</td><td>7.7 dB · 41</td><td><b>11.5 dB</b></td></tr>
     </tbody>
     <caption>Mean settled SINR · score, where score is the percentage of steps within 3 dB of the
     perfect-knowledge solution.</caption>
@@ -364,10 +370,10 @@ horizon = 1/(1−λ) = <b>10 steps</b>        <span class="cm">% at λ = 0.90</s
   <div class="tw"><table>
     <thead><tr><th>drift rate</th><th>detect + null</th><th>achievable</th><th>aim error</th><th>score</th></tr></thead>
     <tbody>
-      <tr><td class="lbl">0.25°/s</td><td>10.0 dB</td><td>11.2 dB</td><td>0.37°</td><td>82</td></tr>
-      <tr><td class="lbl">0.50°/s</td><td>8.2 dB</td><td>11.2 dB</td><td>0.92°</td><td>60</td></tr>
-      <tr><td class="lbl">1.00°/s</td><td>0.3 dB</td><td>11.1 dB</td><td>4.36°</td><td>25</td></tr>
-      <tr><td class="lbl">1.50°/s</td><td class="warn">−4.2 dB</td><td>11.0 dB</td><td>5.61°</td><td class="warn">3</td></tr>
+      <tr><td class="lbl">0.25°/s</td><td>11.1 dB</td><td>11.2 dB</td><td>0.34°</td><td>98</td></tr>
+      <tr><td class="lbl">0.50°/s</td><td>8.9 dB</td><td>11.2 dB</td><td>0.72°</td><td>70</td></tr>
+      <tr><td class="lbl">1.00°/s</td><td>1.9 dB</td><td>11.1 dB</td><td>3.75°</td><td>25</td></tr>
+      <tr><td class="lbl">1.50°/s</td><td class="warn">−4.0 dB</td><td>11.0 dB</td><td>5.61°</td><td class="warn">3</td></tr>
     </tbody>
   </table></div>
   <div class="note derr"><b>This version is qualified to roughly 0.5°/s and broken by 1.5°/s. The
@@ -386,21 +392,21 @@ horizon = 1/(1−λ) = <b>10 steps</b>        <span class="cm">% at λ = 0.90</s
   <p class="sub">The full implementation used a constant-velocity Kalman filter: it keeps a running
   estimate of the jammer's angle <b>and</b> its rate of change, blending each new measurement
   against its own prediction. We measured what it could buy before considering building one.</p>
-  <p>The aim is <code>angle + rate × horizon</code>. A filter can only improve the <b>rate</b>. So
+  <p>The aim is <code>angle + rate × mean age</code>. A filter can only improve the <b>rate</b>. So
   feed the loop the <b>true</b> rate — that bounds any rate estimator that could ever exist. Feed it
   the true <b>angle</b> too, and you learn which half is actually binding.</p>
   <div class="tw"><table>
     <thead><tr><th>drift rate</th><th>what ships</th><th>perfect rate<br>(bounds any filter)</th><th>perfect angle</th><th>achievable</th></tr></thead>
     <tbody>
-      <tr><td class="lbl">0.25°/s</td><td>10.0 dB</td><td>11.1 dB</td><td>11.2 dB</td><td>11.2 dB</td></tr>
-      <tr><td class="lbl">0.50°/s</td><td>8.2 dB</td><td>8.3 dB</td><td>11.2 dB</td><td>11.2 dB</td></tr>
-      <tr><td class="lbl">1.00°/s</td><td>0.3 dB</td><td>1.4 dB</td><td class="ok">11.1 dB</td><td>11.1 dB</td></tr>
-      <tr><td class="lbl">1.50°/s</td><td>−4.2 dB</td><td>−6.6 dB</td><td class="ok">11.0 dB</td><td>11.0 dB</td></tr>
+      <tr><td class="lbl">0.25°/s</td><td>11.1 dB</td><td>11.1 dB</td><td>11.2 dB</td><td>11.2 dB</td></tr>
+      <tr><td class="lbl">0.50°/s</td><td>8.9 dB</td><td>10.4 dB</td><td>11.2 dB</td><td>11.2 dB</td></tr>
+      <tr><td class="lbl">1.00°/s</td><td>1.9 dB</td><td>3.1 dB</td><td class="ok">11.1 dB</td><td>11.1 dB</td></tr>
+      <tr><td class="lbl">1.50°/s</td><td>−4.0 dB</td><td>−4.2 dB</td><td class="ok">11.0 dB</td><td>11.0 dB</td></tr>
     </tbody>
     <caption>Mean settled SINR. The perfect-rate column is uncapped, so it is a genuine upper bound.</caption>
   </table></div>
-  <div class="note derr"><b>A perfect rate estimator is worth at most 1.1 dB — so the filter is
-  not the answer. Nearly 10 dB sits in knowing <em>where</em> the jammer is, about 1 dB in knowing
+  <div class="note derr"><b>A perfect rate estimator is worth at most 1.5 dB — so the filter is
+  not the answer. Eight dB sits in knowing <em>where</em> the jammer is, at most 1.5 dB in knowing
   how fast it moves.</b> Given the right angle, the simple two-point null already matches the
   perfect-knowledge solution to within 0.3 dB. Nothing is wrong with the beamformer.</div>
   <p>The angle's lag is set by the <b>memory constant</b>, not by a predictor. Shortening it is
@@ -412,9 +418,10 @@ horizon = 1/(1−λ) = <b>10 steps</b>        <span class="cm">% at λ = 0.90</s
 
 <section class="slide"><span class="n">16</span>
   <p class="kicker">Why this version exists</p>
-  <h2>Three constants, and everything else derived</h2>
+  <h2>Two tuned numbers, and everything else derived</h2>
   <div class="eq">FORGETTING_LAMBDA        = 0.90;   <span class="cm">% how far back the covariance remembers</span>
-COVARIANCE_HORIZON_STEPS = 10;     <span class="cm">% = 1/(1−λ), derived</span>
+COVARIANCE_HORIZON_STEPS = 10;     <span class="cm">% = 1/(1−λ)  — window length, sets memory</span>
+ESTIMATE_LAG_STEPS       =  9;     <span class="cm">% = λ/(1−λ)  — mean age, sets the lead</span>
 LOADING_FACTOR           = 30;     <span class="cm">% × noise floor; set by measurement</span></div>
   <p>Everything else follows from something: <code>K = 2N</code> from Reed–Mallett–Brennan; the guard
   from the array's beamwidth; the source threshold from the Marchenko–Pastur edge; run lengths from
@@ -423,7 +430,7 @@ LOADING_FACTOR           = 30;     <span class="cm">% × noise floor; set by mea
     <div class="stat"><div class="v">20</div><div class="k">files, each doing one thing</div></div>
     <div class="stat"><div class="v">5</div><div class="k">named calls per time step — the whole
     method</div></div>
-    <div class="stat"><div class="v">0</div><div class="k">tuning knobs beyond the three above</div></div>
+    <div class="stat"><div class="v">2</div><div class="k">numbers actually tuned — λ and the loading factor</div></div>
   </div>
   <p class="big">A simpler method that gives up a stated amount is a better outcome than a better one
   that quietly gives up an unknown amount.</p>

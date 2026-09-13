@@ -1,5 +1,6 @@
 function results = run_closed_loop(array, scenario, forgetting_lambda, ...
-                                   covariance_horizon_steps, loading_factor)
+                                   covariance_horizon_steps, estimate_lag_steps, ...
+                                   loading_factor)
 % ══════════════════════════════════════════════════════════════════
 % RUN_CLOSED_LOOP
 % The whole method, once per time step. Five named calls and nothing else.
@@ -8,7 +9,8 @@ function results = run_closed_loop(array, scenario, forgetting_lambda, ...
 % ══════════════════════════════════════════════════════════════════
 %
 %   results = RUN_CLOSED_LOOP(array, scenario, forgetting_lambda, ...
-%                             covariance_horizon_steps, loading_factor)
+%                             covariance_horizon_steps, estimate_lag_steps, ...
+%                             loading_factor)
 %
 %   Steps through a scenario, and at each step:
 %
@@ -37,7 +39,10 @@ function results = run_closed_loop(array, scenario, forgetting_lambda, ...
 %       array                    : struct from make_array.
 %       scenario                 : struct from make_scenario. TRUTH.
 %       forgetting_lambda        : covariance memory factor. Units: dimensionless.
-%       covariance_horizon_steps : 1/(1 - forgetting_lambda). Units: steps.
+%       covariance_horizon_steps : 1/(1 - forgetting_lambda), the effective
+%                                  window length. Units: steps.
+%       estimate_lag_steps       : forgetting_lambda/(1 - forgetting_lambda),
+%                                  the mean age of the covariance. Units: steps.
 %       loading_factor           : diagonal loading, as a multiple of the noise
 %                                  floor. Units: dimensionless.
 %
@@ -89,7 +94,8 @@ for step_index = 1:n_steps
 
     % 3-4. Approach 1: find the jammer, then null it.
     [jammer_state, detector_history] = detect_jammer(covariance, detector_history, ...
-                                                     array, covariance_horizon_steps);
+                                                     array, covariance_horizon_steps, ...
+                                                     estimate_lag_steps);
     weights_detect_and_null = detect_and_null(array, jammer_state);
 
     % 5. Approach 2: never look for the jammer at all.

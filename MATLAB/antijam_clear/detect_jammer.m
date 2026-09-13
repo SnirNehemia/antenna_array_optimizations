@@ -1,5 +1,5 @@
 function [jammer_state, history] = detect_jammer(covariance, history, array, ...
-                                                 covariance_horizon_steps)
+                                                 covariance_horizon_steps, estimate_lag_steps)
 % ══════════════════════════════════════════════════════════════════
 % DETECT_JAMMER
 % Where is it, and what is it doing? (the "detect" half of Approach 1)
@@ -8,7 +8,8 @@ function [jammer_state, history] = detect_jammer(covariance, history, array, ...
 % ══════════════════════════════════════════════════════════════════
 %
 %   [jammer_state, history] = DETECT_JAMMER(covariance, history, array, ...
-%                                           covariance_horizon_steps)
+%                                           covariance_horizon_steps, ...
+%                                           estimate_lag_steps)
 %
 %   This function contains almost no logic, and that is its purpose. It asks
 %   estimate_jammer_angle WHERE the jammer is at this instant, appends the
@@ -31,7 +32,11 @@ function [jammer_state, history] = detect_jammer(covariance, history, array, ...
 %       history                  : struct of past estimates, or [] on the first
 %                                  step. Returned updated -- pass it back in.
 %       array                    : struct from make_array.
-%       covariance_horizon_steps : 1/(1 - forgetting_lambda). Units: steps.
+%       covariance_horizon_steps : 1/(1 - forgetting_lambda), the effective
+%                                  window length. Units: steps.
+%       estimate_lag_steps       : forgetting_lambda/(1 - forgetting_lambda),
+%                                  the mean age of the covariance -- what the
+%                                  lead is computed from. Units: steps.
 %
 %   Outputs:
 %       jammer_state : struct with fields
@@ -70,7 +75,7 @@ history.is_present = [history.is_present; jammer_estimate.is_present];
 
 motion = classify_jammer_motion(history.theta_deg, history.phi_deg, ...
                                 history.is_present, array.profile, ...
-                                covariance_horizon_steps);
+                                covariance_horizon_steps, estimate_lag_steps);
 
 % ────────────────────────── ASSEMBLE ──────────────────────────────
 
