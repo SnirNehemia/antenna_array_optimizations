@@ -1,0 +1,743 @@
+<title>Anti-Jam, Clear Implementation: Walkthrough</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Serif:ital,wght@0,400;0,600;1,400&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
+<style>
+:root{
+  color-scheme: light;
+  --ground:#f7f8fa; --surface:#ffffff; --sunken:#eef1f5; --eqbg:#f4f6f9;
+  --ink:#10151c; --ink2:#3d4756; --ink3:#6b7688;
+  --rule:#dfe3ea; --rule2:#c9d0da;
+  --accent:#1c5cab; --warn:#c0392f; --ok:#008300;
+  --sans:"IBM Plex Sans",ui-sans-serif,system-ui,sans-serif;
+  --serif:"IBM Plex Serif",Georgia,serif;
+  --mono:"IBM Plex Mono",ui-monospace,Consolas,monospace;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    color-scheme: dark;
+    --ground:#0f1319; --surface:#161b23; --sunken:#1c222b; --eqbg:#1a212b;
+    --ink:#eef2f7; --ink2:#b9c2d0; --ink3:#8a94a4;
+    --rule:#262d38; --rule2:#333c49;
+    --accent:#6da7ec; --warn:#e07068; --ok:#3fa63f;
+  }
+}
+:root[data-theme="dark"]{
+  color-scheme: dark;
+  --ground:#0f1319; --surface:#161b23; --sunken:#1c222b; --eqbg:#1a212b;
+  --ink:#eef2f7; --ink2:#b9c2d0; --ink3:#8a94a4;
+  --rule:#262d38; --rule2:#333c49;
+  --accent:#6da7ec; --warn:#e07068; --ok:#3fa63f;
+}
+*{box-sizing:border-box;}
+body{background:var(--ground);color:var(--ink);font-family:var(--serif);
+  font-size:16.5px;line-height:1.62;margin:0;-webkit-font-smoothing:antialiased;}
+.wrap{max-width:1120px;margin:0 auto;padding:0 28px 100px;}
+.col{max-width:680px;}
+h1,h2,h3,h4,.eyebrow{font-family:var(--sans);text-wrap:balance;}
+h1{font-size:2.3rem;line-height:1.12;font-weight:600;letter-spacing:-.02em;margin:0 0 .35em;}
+h2{font-size:1.42rem;font-weight:600;letter-spacing:-.01em;margin:0 0 .5em;}
+h3{font-size:1.05rem;font-weight:600;margin:2em 0 .5em;}
+h4{font-size:.92rem;font-weight:600;margin:1.5em 0 .4em;color:var(--ink);}
+p{margin:0 0 1em;}
+.eyebrow{font-size:.72rem;font-weight:600;letter-spacing:.13em;text-transform:uppercase;
+  color:var(--ink3);margin:0 0 .9em;}
+.lede{font-family:var(--sans);font-size:1.12rem;line-height:1.55;color:var(--ink2);}
+code,.mono{font-family:var(--mono);font-size:.87em;}
+code{background:var(--sunken);padding:.1em .34em;border-radius:3px;}
+header{padding:66px 0 28px;border-bottom:1px solid var(--rule);margin-bottom:14px;}
+section{padding:40px 0;border-top:1px solid var(--rule);}
+section:first-of-type{border-top:none;}
+.toc{background:var(--surface);border:1px solid var(--rule);border-radius:5px;
+  padding:20px 24px;margin:26px 0 0;font-family:var(--sans);font-size:.9rem;}
+.toc ol{margin:0;padding-left:1.3em;columns:2;column-gap:36px;}
+.toc li{margin-bottom:.4em;color:var(--ink2);}
+.toc a{color:var(--ink2);text-decoration:none;}
+.toc a:hover{color:var(--accent);text-decoration:underline;}
+.eq{font-family:var(--mono);font-size:.92rem;line-height:1.75;background:var(--eqbg);
+  border:1px solid var(--rule);border-left:3px solid var(--accent);border-radius:4px;
+  padding:14px 18px;margin:18px 0;overflow-x:auto;color:var(--ink);}
+.eq .cm{color:var(--ink3);}
+var{font-family:var(--mono);font-style:normal;font-size:.92em;}
+.tw{overflow-x:auto;margin:20px 0;}
+table{border-collapse:collapse;width:100%;font-family:var(--sans);font-size:.86rem;
+  font-variant-numeric:tabular-nums;}
+caption{caption-side:bottom;text-align:left;color:var(--ink3);font-size:.79rem;
+  padding-top:9px;font-family:var(--sans);}
+th,td{padding:7px 11px;text-align:right;border-bottom:1px solid var(--rule);vertical-align:top;}
+th:first-child,td:first-child{text-align:left;}
+thead th{font-weight:600;color:var(--ink3);font-size:.75rem;letter-spacing:.05em;
+  text-transform:uppercase;border-bottom:1px solid var(--rule2);}
+td.lbl{font-family:var(--mono);font-size:.79rem;color:var(--ink2);}
+td.d{text-align:left;font-family:var(--serif);font-size:.93rem;color:var(--ink2);white-space:normal;}
+.warn{color:var(--warn);font-weight:600;} .ok{color:var(--ok);font-weight:600;}
+.note{background:var(--sunken);border:1px solid var(--rule);border-radius:4px;
+  padding:15px 19px;margin:20px 0;font-size:.93rem;color:var(--ink2);}
+.note b{color:var(--ink);}
+.note.derr{border-left:3px solid var(--warn);}
+.note.good{border-left:3px solid var(--ok);}
+ul.tight{padding-left:1.15em;margin:0 0 1em;}
+ul.tight li{margin-bottom:.42em;}
+ol.steps{padding-left:1.3em;margin:0 0 1em;}
+ol.steps li{margin-bottom:.6em;}
+figure{margin:26px 0;}
+figure img{width:100%;height:auto;display:block;background:#fff;
+  border:1px solid var(--rule);border-radius:5px;}
+figcaption{font-family:var(--sans);font-size:.81rem;color:var(--ink3);margin-top:9px;
+  max-width:760px;line-height:1.5;}
+.fileref{font-family:var(--mono);font-size:.78rem;color:var(--ink3);
+  border-top:1px dashed var(--rule2);padding-top:7px;margin-top:14px;}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px;}
+@media (max-width:760px){
+  h1{font-size:1.8rem;} body{font-size:16px;}
+  .toc ol{columns:1;} .wrap{padding:0 18px 70px;} header{padding-top:44px;}
+}
+</style>
+
+<div class="wrap">
+
+<header>
+  <p class="eyebrow">Anti-jam · clear implementation · walkthrough</p>
+  <h1>Two ways to null a jammer, and why each step is there</h1>
+  <p class="lede col">A deliberately simple reimplementation, built to be explained rather than to
+  win. One jammer of unknown direction, real measured element patterns, one complex weight per
+  element per step. Two approaches kept separate on purpose: find the jammer and null it, or solve
+  for maximum SINR and never look for it at all. Every constant in the method is either derived
+  from the array or measured, and this document says which.</p>
+  <div class="toc">
+    <ol>
+      <li><a href="#problem">The problem and the signal model</a></li>
+      <li><a href="#measure">Measure the array before adapting</a></li>
+      <li><a href="#data">Snapshots and the covariance</a></li>
+      <li><a href="#where">Approach 1a: where is the jammer</a></li>
+      <li><a href="#what">Approach 1b: what is it doing</a></li>
+      <li><a href="#null">Approach 1c: placing the null</a></li>
+      <li><a href="#maxsinr">Approach 2: maximise SINR directly</a></li>
+      <li><a href="#loading">Why diagonal loading is structural</a></li>
+      <li><a href="#score">The oracle and the score</a></li>
+      <li><a href="#results">Results</a></li>
+      <li><a href="#limits">What this version gives up</a></li>
+      <li><a href="#map">The three constants, and the file map</a></li>
+    </ol>
+  </div>
+</header>
+
+<section id="problem">
+<h2>1. The problem and the signal model</h2>
+<div class="col">
+<p>One jammer, somewhere on the sky, direction unknown. A wanted signal from a known direction. An
+array of <var>N</var> elements, and one complex weight per element, chosen once per step.</p>
+<p>A plane wave from <var>(θ, φ)</var> produces a known pattern of amplitude and phase across the
+elements — the <b>steering vector</b> <var>e(θ, φ)</var>. This is the one physical primitive the
+whole implementation is built from. It is read straight out of the measured CST element patterns,
+not from an analytic model, so it carries the real array's asymmetries.</p>
+</div>
+<div class="eq">x = e_s·s  +  e_j·j  +  n        <span class="cm">% what each element receives</span>
+y = w'·x                        <span class="cm">% what the beamformer outputs</span>
+
+SINR(w) = σs²|w'e_s|² / ( σj²|w'e_j|² + σn²‖w‖² )</div>
+<div class="col">
+<p>Read the SINR as three statements about the pattern the weights produce: how much gain it has
+towards the signal, how much towards the jammer, and how much noise it lets through. The last term
+is proportional to <code>‖w‖²</code> because receiver noise is independent on every element, so it
+adds in power rather than coherently.</p>
+<p>The whole job is to make the second and third terms small without touching the first.</p>
+
+<h3>What <var>e(θ, φ)</var> actually contains</h3>
+<p>It is an <var>N</var>-element <b>complex</b> vector — <em>amplitude and phase</em>, not phase
+alone. Entry <var>n</var> is element <var>n</var>'s far field in that direction, read straight out
+of the CST export as <code>Abs(Copol)·exp(i·Phase(Copol))</code>.</p>
+<p>The classical array model assumes <code>eₙ = exp(i·k·dₙ·û)</code>: unit magnitude on every
+element, phase set purely by element position, all elements identical and isotropic.
+<b>Nothing here assumes that</b>, and the measured patterns say plainly that it would be wrong:</p>
+</div>
+<div class="tw"><table>
+<thead><tr><th>property of <var>e</var> at (55°, 0°), spacing0.6</th><th>classical <code>e<sup>ikd</sup></code> model</th><th>measured</th></tr></thead>
+<tbody>
+<tr><td class="d">element-to-element amplitude spread</td><td>0.00 dB</td><td class="warn">11.3 dB</td></tr>
+<tr><td class="d">departure of phase from a straight line across the array</td><td>0°</td><td class="warn">68.5° RMS, 125° max</td></tr>
+<tr><td class="d">amplitude spread over the whole sphere (median)</td><td>0.00 dB</td><td class="warn">14.5 dB</td></tr>
+</tbody>
+<caption>A uniform linear array of identical isotropic elements would give zero in the middle
+column. The right-hand column is what the array actually does.</caption>
+</table></div>
+<div class="col">
+<p>Using the measured vector rather than the model costs nothing — it is a table lookup either way
+— and it means every result is a statement about <em>this hardware</em>. Element gain variation
+with angle, per-element phase from feed and orientation, whatever mutual coupling is present in the
+exported patterns, and any platform scattering CST modelled are all carried automatically, because
+they are simply what the field was.</p>
+<p>It also has a practical consequence used later: because the magnitudes are real and unequal, a
+direction where the array radiates weakly gives a <em>short</em> vector. That is physically correct
+and is what makes the achievable SINR array-dependent — but it is also why any angle <em>scan</em>
+must normalise <var>e</var> to unit length first (section 4), or it reports where the array hears
+best instead of where the source is.</p>
+</div>
+<div class="note"><b>The conjugation convention, stated once.</b> Array output is
+<code>y = wᴴx</code>, so gain in direction <var>e</var> is <code>wᴴe</code>, where
+<code>wᴴ</code> is the conjugate transpose (the dagger; <code>w'</code> in MATLAB). Every formula
+in the implementation uses that form — as does the rest of the anti-jam code in this repository.
+<p style="margin:.7em 0 0">The Milestone-1 pattern-synthesis side uses the other convention,
+<code>AF = Σ wₙEₙ = wᵀe</code> with no conjugate, which is the natural one for shaping a pattern
+you are transmitting. The two differ by <code>conj(w)</code>, and that conjugate is applied at
+exactly the two points where this folder calls <code>compute_array_factor</code>:
+<code>array_profile</code> (measuring the quiescent beamwidth) and <code>plot_pattern_cut</code>
+(drawing the pattern). Nowhere else. Letting it leak beyond those gives a beamformer that is right
+in the table and mirrored in the figure, which is expensive to diagnose.</p></div>
+<p class="fileref">steering_vector.m · output_sinr_db.m</p>
+</section>
+
+<section id="measure">
+<h2>2. Measure the array before adapting</h2>
+<div class="col">
+<p>Four facts are measured once, per <em>(array, target)</em> pair, before any adaptation. Each
+one exists because assuming it instead caused a real failure in the previous implementation.</p>
+</div>
+
+<h3>The guard sector — derived, never a constant</h3>
+<div class="col">
+<p>A jammer angularly closer to the target than the beamwidth is <em>inside the main lobe</em>.
+Nulling it cancels the wanted signal along with it, so that geometry is outside what this method
+claims to do, and it has to be recognised rather than scored as a failure.</p>
+<p>The guard is half the wider 3&nbsp;dB beamwidth. It is not a global number, and cannot be:</p>
+</div>
+<div class="tw"><table>
+<thead><tr><th>array</th><th>elements</th><th>HPBW θ</th><th>HPBW φ</th><th>guard</th><th>mirror coherence</th></tr></thead>
+<tbody>
+<tr><td class="lbl">Monopoles</td><td>14</td><td>32.1°</td><td>54.1°</td><td>27.0°</td><td>0.185</td></tr>
+<tr><td class="lbl">ManyDipoles</td><td>20</td><td>23.0°</td><td>49.4°</td><td>24.7°</td><td class="warn">1.000000</td></tr>
+<tr><td class="lbl">spacing0.6</td><td>16</td><td>25.2°</td><td>20.9°</td><td>12.6°</td><td>0.769</td></tr>
+<tr><td class="lbl">patchs_with_monopoles</td><td>6</td><td>165.6°</td><td>47.7°</td><td>82.8°</td><td class="warn">1.000000</td></tr>
+<tr><td class="lbl">Dipole</td><td>1</td><td>129.4°</td><td>360.0°</td><td>180.0°</td><td>—</td></tr>
+<tr><td class="lbl">patch_back2back</td><td>2</td><td>53.9°</td><td>180.0°</td><td>90.0°</td><td>0.706</td></tr>
+</tbody>
+<caption>Measured at target (θ = 30°, φ = 0°). The true guard spans 12.6° to 82.8° across these
+arrays. The global 5° in <code>config.yaml</code> is wrong on every one of them.</caption>
+</table></div>
+
+<h3>The mirror ambiguity — test the vectors, not the angles</h3>
+<div class="col">
+<p>A note on wording first, because the shorthand is easy to misread. <var>e</var> is a
+<em>function of direction</em>: there is no single "steering vector of the array", there is the
+array's response <var>e(θ, φ)</var> evaluated at whatever direction you ask about. The ambiguity is
+that on some arrays <b>two different directions return the same vector</b>:</p>
+</div>
+<div class="eq">e(30°, 0°)  and  e(150°, 0°)  on ManyDipoles
+
+  the two directions are <b>120° apart</b>
+  the two vectors differ elementwise by <b>6 parts in a million</b>
+  coherence |e_sᴴe_j| / (‖e_s‖‖e_j‖) = <b>1.000000</b></div>
+<div class="col">
+<p>So the angles are emphatically <em>not</em> the same. What is the same is the electrical
+signature those two directions produce across the elements — a wave arriving from 150° puts exactly
+the same amplitudes and phases on the 20 elements as one arriving from 30°. The array has no
+measurement that could distinguish them.</p>
+<p>Two distinct consequences follow, and they pull in opposite directions:</p>
+<ul class="tight">
+<li><b>Benign for nulling.</b> If the jammer is really at 100° and the estimator reports 80°, the
+null still lands correctly — because <var>e(80°)</var> <em>is</em> <var>e(100°)</var>. Being "wrong"
+about which half-space costs nothing.</li>
+<li><b>Fatal for tracking.</b> An angle history that flips between θ and 180−θ between steps looks
+like a jammer teleporting 100°, and the motion classifier would call a stationary jammer a violently
+drifting one. Hence the fold in <code>classify_jammer_motion</code>.</li>
+</ul>
+<p>The pair tested is the mirror <var>(180−θ, φ)</var>, not the antipode <var>(180−θ, φ+180)</var>.
+Confusing the two produces a confident and wrong conclusion that the ambiguity does not exist.</p>
+</div>
+
+<h4>The one case where it genuinely defeats you</h4>
+<div class="col">
+<p>The above is survivable. What is not is the jammer sitting <em>at the signal's own mirror</em> —
+signal at 30°, jammer at 150°. Then the jammer and the signal are the same vector, and
+<b>you are asking for gain 1 and gain 0 from one and the same thing.</b> This is exactly your
+reading: the jammer cannot be attenuated without attenuating the signal identically, because the
+beamformer only ever sees <code>wᴴe</code> and there is only one <var>e</var>.</p>
+<p>What makes it dangerous is that the arithmetic does not complain:</p>
+</div>
+<div class="eq">LCMV solve, ManyDipoles, signal 30°, jammer 150°:
+
+  gain on signal  |wᴴe_s|² = 1.0000      <span class="cm">% asked for 1 — satisfied</span>
+  gain on jammer  |wᴴe_j|² = 3.3e-10     <span class="cm">% asked for 0 — satisfied</span>
+
+  ‖w‖² = <b>1.7e10</b>                          <span class="cm">% the bill</span>
+  noise power out = 1.7e10 · σn²
+  <b>SINR = −102.4 dB</b>                       <span class="cm">% quiescent beam gives −20.0 dB</span></div>
+<div class="note derr"><b>Both constraints are met exactly, and the result is 82 dB worse than doing
+nothing.</b> The solver satisfies the letter of the request by driving the weights to a norm of
+10<sup>10</sup>, and the noise term <code>σn²‖w‖²</code> — the one part of the SINR the two-point
+solve does not look at — annihilates the output. A test that only checked "did it null the jammer?"
+would report success.
+<p style="margin:.8em 0 0">The 2×2 matrix <code>CᴴC</code> has condition number 8.4×10<sup>11</sup>
+here, against 73 on <code>Monopoles</code> for the identical geometry. That is what the coherence
+check in <code>detect_and_null</code> detects, and it refuses:
+<code>"…has the same steering vector as the signal to within 1.0000, so a null there would cancel
+the wanted signal. Refusing to null."</code> — falling back to the quiescent beam and its −20 dB.</p></div>
+<div class="note"><b>Why the test must be on the vectors, not the angles.</b> 150° is <em>120° away</em>
+from 30° — far outside any guard sector, and a check on angular separation sails straight past it.
+Only comparing the two vectors catches it.</div>
+
+<h3>Degrees of freedom, and target visibility</h3>
+<div class="col">
+<p>An <var>N</var>-element array has <var>N</var> weights; one is spent holding gain on the signal,
+so <var>N−1</var> remain to place nulls with. At <var>N</var> = 1 that is zero and the array
+provably cannot null anything. The correct output is the quiescent beam and a stated reason.</p>
+<p>Separately, the target itself must be visible. <code>patch_back2back</code> at (30°, 0°) sits
+<b>113 dB below</b> the array's best direction — a genuine co-pol pattern null. The array cannot
+receive its own signal there, so no beamformer, including the perfect-knowledge oracle, can achieve
+anything, and any score computed there is meaningless rather than bad. That pair is <em>not a
+test</em>, and the profile says so.</p>
+</div>
+<p class="fileref">array_profile.m · make_array.m</p>
+</section>
+
+<section id="data">
+<h2>3. Snapshots and the covariance</h2>
+<div class="col">
+<p>A real digital receiver hands you samples, not a covariance. Each step draws <var>K</var>
+snapshots per element. <var>K</var> is derived, not chosen: a covariance estimated from <var>K</var>
+samples of an <var>N</var>-element array lands within about 3 dB of the ideal once
+<var>K ≈ 2N</var> — the standard Reed–Mallett–Brennan result — so <var>K</var> = 32 for a
+16-element array, and "why 32?" has an answer.</p>
+</div>
+<div class="eq">R_block = (X·Xᴴ)/K                         <span class="cm">% this step's estimate</span>
+R       = λ·R_previous + (1−λ)·R_block     <span class="cm">% blended with the past</span>
+
+horizon = 1/(1−λ) = 10 steps               <span class="cm">% at λ = 0.90</span></div>
+<div class="col">
+<p><b>Why forget at all.</b> The jammer moves and switches off. A plain running average would
+remember every place it has ever been and put the null at the average of them, which is nowhere
+useful.</p>
+<p><b>Quote the horizon, not λ.</b> "The system remembers ten steps" is a sentence anyone in the
+room can reason about, and that single number explains a surprising share of the behaviour: why a
+drifting jammer is nulled where it was ten steps ago, why an on/off edge cannot be resolved from
+this covariance, and how long a null usefully survives the jammer switching off.</p>
+</div>
+<div class="note derr"><b>One implementation detail is load-bearing.</b> The update is applied
+<em>once per step, to the batch-averaged block</em>. Applying it once per snapshot column runs the
+recursion <var>K</var> times per step, shortening the true horizon by a factor of <var>K</var> while
+λ still reads 0.90 in the code. The previous implementation had exactly that bug, and it made a λ of
+0.98 appear correct.</div>
+<div class="note good"><b>The horizon is confirmed by measurement, not asserted.</b> On a jammer
+drifting at 0.5°/step, the covariance's angle estimate settles to a lag of <b>4.65°</b> against the
+<b>5.0°</b> predicted by <code>rate × horizon</code> from λ alone. On a stationary jammer the same
+estimator is exact to 0.00°.</div>
+<p class="fileref">simulate_snapshots.m · sample_covariance.m</p>
+</section>
+
+<section id="where">
+<h2>4. Approach 1a — where is the jammer</h2>
+<div class="col">
+<p>Two different questions, answered by two different properties of the covariance, and it is worth
+keeping them straight.</p>
+<p><b>The eigenvalues say <em>whether</em>.</b> A covariance built from a few strong sources plus
+noise has a handful of large eigenvalues — one per source — above a flat floor of small ones that
+are noise and nothing else. Counting how many rise above that floor counts the sources: two means
+signal plus jammer, one means the signal alone. Nothing is hardcoded, so the answer can change
+during the run, which is what presence detection requires.</p>
+<p><b>A power scan says <em>where</em>.</b> Sweep a unit-length steering vector across the sky and
+measure the power the array would receive pointing that way. The largest value outside the guard
+sector is the jammer.</p>
+</div>
+<div class="eq">P_beamscan(θ,φ) = e_unitᴴ · R · e_unit           <span class="cm">% used: places the null</span>
+P_music(θ,φ)    = 1 / ‖V_noiseᴴ · e_unit(θ,φ)‖²   <span class="cm">% reported for comparison</span>
+
+threshold = noise_floor · (1 + √(N/K))²          <span class="cm">% Marchenko–Pastur edge</span></div>
+
+<h3>Two things both scans must get right</h3>
+<div class="col">
+<p><b>Unit-norm steering vectors.</b> Both spectra are only source estimates when <var>e</var> has
+unit norm. With raw CST vectors the scan multiplies in the array's own gain variation and reports
+the direction the array hears <em>best</em> rather than where the jammer is. Measured here, that
+error was <b>77°</b> — and it looked entirely plausible.</p>
+<p><b>Exclude the guard sector.</b> The wanted signal is one of the strong sources, so both scans
+find it too, and it is often the stronger peak. Masking the guard sector is exactly what makes "the
+largest remaining peak" mean "the jammer". Without it, Approach 1 confidently and precisely nulls
+your own signal.</p>
+</div>
+
+<h3>Why the sharper estimator is the wrong one here</h3>
+<div class="col">
+<p>MUSIC is the textbook answer and is sharper on a stationary source, because it measures a
+<em>null</em> in the noise subspace rather than a peak, and a null can be arbitrarily deep. On a
+<em>moving</em> source it is measurably worse, and the reason is instructive: a jammer smeared
+across ten steps of covariance memory is <b>no longer a point source</b>. Its track occupies a
+multi-dimensional subspace — the source count reads 3 on 91 of 120 steps of a drifting run — so
+MUSIC makes its noise subspace orthogonal to the <em>whole track</em>, the spectrum goes
+near-singular along a broad arc, and the peak inside that arc is numerically arbitrary. It sticks,
+then jumps.</p>
+</div>
+<div class="tw"><table>
+<thead><tr><th>estimator</th><th>median lag</th><th>mean |lag|</th><th>max |lag|</th><th>behaviour</th></tr></thead>
+<tbody>
+<tr><td class="lbl">MUSIC</td><td>3.50°</td><td>5.03°</td><td class="warn">13.50°</td><td class="d">sticks, then jumps</td></tr>
+<tr><td class="lbl">beamscan</td><td>4.50°</td><td>4.65°</td><td class="ok">6.00°</td><td class="d">smooth</td></tr>
+</tbody>
+<caption>spacing0.6, jammer drifting 0.5°/step. On a stationary jammer the two agree exactly, both
+to 0.00°.</caption>
+</table></div>
+<div class="col">
+<p>The beamscan's lag is exactly <code>rate × horizon</code>, because a power measure peaks at the
+power-weighted centre of where the jammer has been. That is a <em>predictable</em> error, and the
+lead correction in the next section removes it. MUSIC's 13.5° excursion cannot be led out.
+Switching the null over to the beamscan took the drift case from 7.2 dB / score 65 to 10.8 dB /
+score 98.</p>
+<p>MUSIC's real advantage is resolving two closely-spaced sources — which a single-jammer problem
+never asks for, and the guard sector already excludes the region near the signal. Both are computed
+and reported so this can be shown rather than claimed; there is no switch between them.</p>
+</div>
+<div class="note derr"><b>Presence detection is late, and by more than it looks.</b> The source
+threshold sits just above the <em>noise floor</em>, but a strong jammer's eigenvalue starts far
+above it — 23.7 dB on spacing0.6 at JNR 20 dB — and the covariance decays it by only
+<code>−10·log₁₀(λ) = 0.46 dB</code> per step. It therefore needs about <b>52 steps</b> to fall below
+threshold, so a jammer toggling every 10 steps never appears to switch off at all: presence reads
+100% against a true duty cycle of 50%, at every JNR from 3 to 20 dB. The lateness is set by
+<em>jammer strength</em>, not by the toggle period. It costs nothing here, because the right action
+for both <code>steady</code> and <code>onoff</code> is the same — hold the null.</div>
+<p class="fileref">estimate_jammer_angle.m · noise_floor_power.m</p>
+</section>
+
+<section id="what">
+<h2>5. Approach 1b — what is it doing</h2>
+<div class="col">
+<p>"Where is it" and "what has it been doing" are different questions with different evidence — a
+single covariance versus a history. Keeping them in separate functions is deliberate: fusing them
+is how the previous implementation grew a single 485-line function that could not be tested or
+explained in pieces.</p>
+</div>
+<ol class="steps col">
+<li><b>Fold first</b>, if the array is mirror-ambiguous. Otherwise a stationary jammer looks like a
+violently drifting one.</li>
+<li><b>Seen intermittently → <code>onoff</code></b>. Hold the last known position. The null costs
+almost nothing while the jammer is off and is already in place when it returns.</li>
+<li><b>Seen moving steadily → <code>drifting</code></b>. Fit a straight line to the recent angle
+history; extrapolate (below).</li>
+<li><b>Seen consistently → <code>steady</code></b>. Null the median of the window, which removes
+grid quantisation jitter.</li>
+</ol>
+
+<h3>The lead, and why it is not a tuning knob</h3>
+<div class="eq">aim = latest estimate + (fitted rate) × (covariance horizon)
+lead is capped at guard_deg   <span class="cm">% half a beamwidth — see below</span></div>
+<div class="col">
+<p>Both quantities on the right are already known: the rate is the slope this function fits, and the
+horizon is <code>1/(1−λ)</code> from the covariance. Nothing is fitted to performance and there is
+no coefficient to choose. If λ changes, the lead changes with it automatically.</p>
+<p>On the demo scenario it takes the aim error from <b>−3.50°</b> (lagging) to <b>+1.53°</b>, and
+mean absolute error from 5.03° to 3.96°.</p>
+</div>
+<div class="note"><b>Why the cap is there, and why it costs no new constant.</b> The lead multiplies
+the fitted rate by 10, so it amplifies any error in that rate tenfold. That is a good trade while
+the rate is well measured and a bad one once it is not — past roughly one beamwidth of travel per
+horizon, the beamscan peak itself smears, the slope gets noisy, and the extrapolation throws the
+null <em>further</em> off than no extrapolation at all. Beyond half a beamwidth ahead there is no
+measurement bearing on where the jammer will be, so the cap says: do not aim further than you can
+see. It reuses <code>guard_deg</code>, is inert below 1.26°/step, and rescues the high-rate collapse
+(2°/step: −14.1 → −4.7 dB).</div>
+<p class="fileref">classify_jammer_motion.m · detect_jammer.m</p>
+</section>
+
+<section id="null">
+<h2>6. Approach 1c — placing the null</h2>
+<div class="eq">C = [e_s , e_j]          <span class="cm">% the two directions you care about</span>
+g = [1 ; 0]              <span class="cm">% what you want in each: keep, kill</span>
+w = C·(CᴴC)⁻¹·g          <span class="cm">% minimum-norm solution of Cᴴw = g</span></div>
+<div class="col">
+<p>Among all weight vectors that hold unit gain on the signal <em>and</em> place an exact zero on
+the jammer, this picks the one with the smallest norm. Since the noise reaching the output is
+<code>σn²‖w‖²</code>, "smallest weights that satisfy the constraints" is not an aesthetic
+preference — it is the best of them.</p>
+<p><b>What is remarkable about it, and worth saying out loud: there is no covariance in it.</b> No
+data, no inverse of an estimated quantity, no diagonal loading, nothing to converge. It needs only
+two directions, and the whole of it fits on a whiteboard. That is what makes Approach 1 genuinely
+independent of Approach 2 rather than a variation on it.</p>
+<p><b>What it gives up.</b> It shapes the pattern at exactly two points and is indifferent to
+everything else. It ignores how strong the jammer actually is — a jammer 20 dB down gets the same
+infinitely deep null as one 40 dB up, and the degrees of freedom are spent either way. And it is
+only as good as the estimated angle; Approach 2 never needs an angle and so cannot be wrong about
+one.</p>
+</div>
+<div class="note"><b>Three ways it correctly declines to null:</b> no jammer detected (quiescent
+beam); no degrees of freedom, as on a one-element array (quiescent beam, with the reason); or the
+two directions are nearly the same <em>vector</em> to this array, which is the mirror case above and
+is caught on the vectors rather than the angles.</div>
+<p class="fileref">detect_and_null.m · quiescent_weights.m</p>
+</section>
+
+<section id="maxsinr">
+<h2>7. Approach 2 — maximise SINR directly</h2>
+<div class="eq">R_loaded = R + δ·I
+w        = R_loaded⁻¹·e_s / (e_sᴴ·R_loaded⁻¹·e_s)</div>
+<div class="col">
+<p>This is the minimum-variance solution: among all <var>w</var> with unit gain on the signal, it
+minimises total output power <code>wᴴRw</code>. The signal's contribution is pinned at unit gain by
+the constraint, so minimising the total minimises <em>everything else</em> — jammer and noise
+together, in whatever proportion they happen to arrive.</p>
+<p>It never asks where the jammer is. It does not know and cannot be told. It simply refuses to pass
+power that is not coming from the signal direction, and a jammer is by definition power that is not
+coming from there. That is the whole of Approach 2, and it is why it cannot be wrong about an
+angle: it never estimates one.</p>
+</div>
+<p class="fileref">max_sinr_weights.m</p>
+</section>
+
+<section id="loading">
+<h2>8. Why diagonal loading is structural, not a knob</h2>
+<div class="col">
+<p>The wanted signal is <em>inside</em> the covariance — a real receiver cannot remove what it is
+trying to receive. That makes this MPDR rather than MVDR, and it has a sharp consequence: if the
+assumed signal direction is even slightly wrong, the solver sees wanted signal arriving from a
+direction it is not protecting, correctly identifies it as "power that is not the signal", and
+cancels <b>your own transmission</b>. The stronger your signal, the more of it there is to cancel —
+so this failure gets worse exactly when things should be getting easier.</p>
+<p>Adding <code>δ·I</code> raises the noise floor the solver believes in, which caps how much of any
+single direction it is willing to cancel, including yours.</p>
+</div>
+<div class="tw"><table>
+<thead><tr><th>δ / P_noise</th><th>SNR 0 dB</th><th>SNR 10 dB</th><th>SNR 20 dB</th><th>worst</th></tr></thead>
+<tbody>
+<tr><td class="lbl">0.1</td><td>6.5</td><td>−0.1</td><td class="warn">−9.2</td><td class="warn">−9.2</td></tr>
+<tr><td class="lbl">1</td><td>9.1</td><td>4.4</td><td>−4.8</td><td>−4.8</td></tr>
+<tr><td class="lbl">10</td><td>11.3</td><td>15.2</td><td>7.8</td><td>7.8</td></tr>
+<tr><td class="lbl"><b>30</b></td><td>10.7</td><td>16.8</td><td>12.3</td><td class="ok"><b>10.7</b></td></tr>
+<tr><td class="lbl">100</td><td>7.7</td><td>14.9</td><td>13.7</td><td>7.7</td></tr>
+<tr><td class="lbl">300</td><td>2.6</td><td>11.2</td><td>13.9</td><td>2.6</td></tr>
+</tbody>
+<caption>Mean SINR [dB], worst case over 0–3° of steering mismatch. spacing0.6, JNR 20 dB.
+δ = 30 is the best worst case and costs at most 1.6 dB against tuning it per condition.
+<code>results/loading_sweep.csv</code>.</caption>
+</table></div>
+<div class="note derr"><b>Self-cancellation, visible in one row.</b> At light loading
+(δ = 0.1·P_noise) and just <b>1° of steering error</b>, raising the signal from 0 dB to 20 dB takes
+SINR from 9.7 dB down to <b>−0.7 dB</b>. Twenty dB more signal made the receiver <em>worse</em>.
+This is why δ is set by measuring against steering <em>mismatch</em> rather than against null depth:
+null depth always prefers less loading, and always being wrong in that direction is how
+self-cancellation gets shipped.</div>
+<div class="col">
+<p>δ is scaled to the <em>noise floor</em>, not to <code>trace(R)</code>. The trace is dominated by
+the jammer, so trace scaling would raise your own loading whenever the jammer got stronger —
+blunting the very null you need against it. The noise floor is the one part of the covariance that
+does not move when the jammer does.</p>
+</div>
+<p class="fileref">max_sinr_weights.m · noise_floor_power.m</p>
+</section>
+
+<section id="score">
+<h2>9. The oracle and the score</h2>
+<div class="eq">R_true = σs²·e_s·e_sᴴ + σj²·e_j·e_jᴴ + σn²·I     <span class="cm">% exact, no estimation</span>
+w_oracle = R_true⁻¹·e_s / (e_sᴴ·R_true⁻¹·e_s)
+
+score = 100 · (fraction of settled steps within 3 dB of the oracle)</div>
+<div class="col">
+<p>The oracle is built from the true directions and true powers. It is <b>not deliverable</b> — it
+is handed the answer — and it lives in its own file so that is impossible to miss. It exists so that
+every score can be quoted as "98, against an achievable 11.5 dB" rather than "98 out of 100".</p>
+<p><b>The rule the reporting code enforces: the achievable dB is printed on the same line as the
+score, always.</b> A score of 99 on a two-element array whose ceiling is 11 dB is not better than 72
+on a sixteen-element array whose ceiling is 31 dB, and a table of bare scores misleads everyone who
+reads one.</p>
+<p>A pleasant consequence worth keeping: an array that can do nothing scores 100 for doing nothing,
+because its quiescent beam <em>is</em> its optimum. The one-element array is not marked as failing;
+it is marked as achieving everything available to it, which is the truth.</p>
+<p>Scoring starts after three memory horizons. The covariance needs time to fill and the motion
+classifier needs its window; scoring the warm-up measures how fast the estimator converges, not how
+well the algorithm works, and mixing the two is how run length silently becomes a confound.</p>
+</div>
+<p class="fileref">oracle_weights.m · compare_approaches.m</p>
+</section>
+
+<section id="results">
+<h2>10. Results</h2>
+<div class="col">
+<p>spacing0.6, 16 elements, guard 12.6°, jammer at 25° separation, SNR 0 dB, JNR 20 dB.</p>
+</div>
+<div class="tw"><table>
+<thead><tr><th>scenario</th><th>quiescent</th><th>detect + null</th><th>max SINR</th><th>achievable</th></tr></thead>
+<tbody>
+<tr><td class="lbl">steady</td><td>−3.6 dB · 0</td><td class="ok">12.1 dB · 100</td><td>11.4 dB · 100</td><td><b>12.1 dB</b></td></tr>
+<tr><td class="lbl">on/off</td><td>4.9 dB · 53</td><td class="ok">12.1 dB · 100</td><td>11.6 dB · 99</td><td><b>12.2 dB</b></td></tr>
+<tr><td class="lbl">drift 0.5°/step</td><td>−7.7 dB · 0</td><td class="ok">10.8 dB · 98</td><td>7.7 dB · 41</td><td><b>11.5 dB</b></td></tr>
+</tbody>
+<caption>Mean settled SINR · score. Every score carries its ceiling.</caption>
+</table></div>
+
+<figure>
+<img src="assets/pattern_spacing0_6_steady.png" alt="Radiation pattern cut showing a beam at 30 degrees and a deep null at 55 degrees">
+<figcaption>The steady case, as a pattern. Beam held on the signal at 30°, a null deeper than 40 dB
+placed exactly on the jammer at 55°. The two approaches (orange under blue) are visually identical;
+the quiescent beam (grey) has nothing at 55°. The shaded band is the 12.6° guard sector — a jammer
+inside it would be in the main lobe and out of scope.</figcaption>
+</figure>
+
+<figure>
+<img src="assets/trace_spacing0_6_drift.png" alt="SINR and angle traces for a drifting jammer">
+<figcaption>The drift case, and the whole argument of section 4 in one picture. <b>Below:</b> truth
+(red); MUSIC (purple) sticking near 60° for sixteen steps before jumping; the beamscan (blue)
+lagging smoothly by <code>rate × horizon</code>; the aim after the lead correction (orange dashed)
+sitting on the truth. <b>Above:</b> Approach 1 reaching the achievable ceiling once its window
+fills, Approach 2 climbing slowly because it has no model of the motion to lead with, and the
+quiescent beam collapsing as the jammer walks into its sidelobes.</figcaption>
+</figure>
+
+<div class="note"><b>Two metrics disagree on drift, and both are right.</b> Approach 2 has the
+better <em>mean</em> in some configurations but the worse <em>score</em>: it spends more steps
+further than 3 dB from the oracle, but is less bad when it falls behind. Approach 1 is steadier.
+Do not let either be quoted without the other.</div>
+</section>
+
+<section id="limits">
+<h2>11. What this version gives up</h2>
+
+<h3>The drift envelope — the honest headline</h3>
+<div class="col">
+<p>The lead correction is arithmetic, not a filter. It pays while the fitted rate is well measured
+and stops paying when it is not.</p>
+</div>
+<div class="tw"><table>
+<thead><tr><th>drift rate</th><th>detect + null</th><th>achievable</th><th>aim error</th><th>score</th></tr></thead>
+<tbody>
+<tr><td class="lbl">0.25°/step</td><td>10.0 dB</td><td>11.2 dB</td><td>0.37°</td><td>82</td></tr>
+<tr><td class="lbl">0.50°/step</td><td>8.2 dB</td><td>11.2 dB</td><td>0.92°</td><td>60</td></tr>
+<tr><td class="lbl">1.00°/step</td><td>0.3 dB</td><td>11.1 dB</td><td>4.36°</td><td>25</td></tr>
+<tr><td class="lbl">1.50°/step</td><td class="warn">−4.2 dB</td><td>11.0 dB</td><td>5.61°</td><td class="warn">3</td></tr>
+</tbody>
+<caption>90° traverse, harder than the demo's 60°. <code>results/drift_envelope.csv</code>.</caption>
+</table></div>
+<div class="note derr"><b>This version is qualified to roughly 0.5°/s and broken by 1.5°/s.</b> The
+previous implementation, with a constant-velocity Kalman filter on <code>[θ, θ̇, φ, φ̇]</code>, was
+qualified to about 10°/s — an envelope some <b>20× wider</b>. That filter was worth +35 points on
+drifting jammers and was provably inert on everything else. It is the single largest piece of
+complexity in that stack and it buys exactly one scenario. Leaving it out is a deliberate trade, and
+this is its price: a narrower envelope, not a few dB.</div>
+
+<h3>Would a proper predictor close it? We measured, rather than assumed</h3>
+<div class="col">
+<p><b>What the missing piece is.</b> The previous implementation tracked the jammer with a
+constant-velocity Kalman filter. In one sentence: it maintains a running estimate of both the
+jammer's angle <em>and</em> its rate of change, and each step it blends the new measurement with
+its own prediction, weighting whichever it currently trusts more. The point of it, here, is a
+lower-noise estimate of the <em>rate</em> — which is what the lead is multiplied by.</p>
+<p><b>Why that framing lets us settle it without building it.</b> The aim is
+<code>angle + rate × horizon</code>. A better filter can only improve the <em>rate</em> term. So
+feed the loop the <em>true</em> rate and you have an upper bound on any rate estimator that could
+ever exist, Kalman included — and if that bound is close to what the plain line-fit already gets,
+the filter is not worth building. This is the same move that closed the graded-release question in
+the previous work: bound the family before building members of it.</p>
+<p>Splitting it further — feeding the loop the true <em>angle</em> — separates which half of
+<code>angle + rate × horizon</code> is actually binding.</p>
+</div>
+<div class="tw"><table>
+<thead><tr><th>drift rate</th><th>no lead</th><th>fitted slope<br>(what ships)</th><th>perfect rate<br>(bounds any Kalman)</th><th>perfect angle</th><th>oracle</th></tr></thead>
+<tbody>
+<tr><td class="lbl">0.25°/step</td><td>6.4</td><td>10.0</td><td>11.1</td><td>11.2</td><td>11.2</td></tr>
+<tr><td class="lbl">0.50°/step</td><td>3.3</td><td>8.2</td><td>8.3</td><td>11.2</td><td>11.2</td></tr>
+<tr><td class="lbl">1.00°/step</td><td>−0.3</td><td>0.3</td><td>1.4</td><td class="ok">11.1</td><td>11.1</td></tr>
+<tr><td class="lbl">1.50°/step</td><td>−3.6</td><td>−4.2</td><td>−6.6</td><td class="ok">11.0</td><td>11.0</td></tr>
+</tbody>
+<caption>Mean settled SINR [dB]. The perfect-rate column is uncapped, so it is a genuine bound.
+<code>results/predictor_bound.csv</code>.</caption>
+</table></div>
+<div class="note derr"><b>A perfect rate estimator is worth at most 1.1 dB.</b> That is the ceiling
+on the Kalman filter, measured rather than argued — and above 1°/step a perfect rate is
+<em>worse</em> than the line fit, because past about a beamwidth of travel per horizon the
+<code>rate × horizon</code> lag model itself stops holding: the covariance smear saturates, the
+angle no longer lags by the full amount, and correcting by the true rate overshoots.</div>
+<div class="note good"><b>The binding constraint is the angle, not the rate.</b> Perfect angle
+reaches <b>11.1 dB against an oracle of 11.1</b> at 1°/step, where perfect rate reaches 1.4. Nearly
+ten dB sits in knowing <em>where the jammer is</em>, and roughly one dB in knowing how fast it is
+moving. Given the right angle, the two-point null of section 6 is already optimal to within
+0.1–0.3 dB at every rate tested — there is nothing wrong with the beamformer.</div>
+<div class="col">
+<p><b>So what would move it?</b> The angle's lag is set by the covariance memory, so the lever is λ,
+not a predictor. Shortening it is worth far more than any filter — verified over five seeds, spread
+±0.1–0.4 dB:</p>
+</div>
+<div class="tw"><table>
+<thead><tr><th>drift rate</th><th>λ = 0.90 (memory 10)</th><th>λ = 0.70 (memory 3)</th><th>gain</th><th>achievable</th></tr></thead>
+<tbody>
+<tr><td class="lbl">0.50°/step</td><td>8.0 dB</td><td>10.9 dB</td><td class="ok">+2.9 dB</td><td>11.2 dB</td></tr>
+<tr><td class="lbl">1.00°/step</td><td>0.2 dB</td><td>8.5 dB</td><td class="ok">+8.3 dB</td><td>11.1 dB</td></tr>
+<tr><td class="lbl">1.50°/step</td><td>−4.3 dB</td><td>5.2 dB</td><td class="ok">+9.5 dB</td><td>11.0 dB</td></tr>
+</tbody>
+</table></div>
+<div class="note derr"><b>But a shorter memory is not free — it breaks the on/off case</b>, 12.1 dB
+→ 4.4 dB, and the mechanism matters. With a short memory the covariance loses the jammer while it
+is switched off, so the beamscan peak wanders onto noise (estimates as far out as 143°). Presence
+detection does not catch this, because it is late for the reasons in section 4. Those noise angles
+enter the history, the motion classifier fits a line through them, calls stationary noise
+<code>drifting</code>, and then <em>amplifies it</em> by the lead. SINR falls to −17 dB on
+individual steps.
+<p style="margin:.8em 0 0"><b>Which closes the loop:</b> the fix for that is the fast presence
+covariance — already on the deferred list. Knowing quickly that the jammer has stopped transmitting
+is what makes a short memory safe, and a short memory is what is worth 8 dB on drift. The ordering
+is: fast presence detector first, shorter memory second. The Kalman filter is not on the path at
+all.</p></div>
+
+<h3>Also deliberately absent</h3>
+<div class="col">
+<ul class="tight">
+<li><b>The fast presence covariance</b> — a second EMA at λ = 0.5, used only for presence detection.
+It took presence error against the true duty cycle from 0.46 / 0.32 / 0.14 to 0.13 / 0.06 / 0.03 at
+toggle periods of 4 / 10 / 25 s. Without it, presence is reactive (section 4). It costs nothing in
+this implementation because <code>steady</code> and <code>onoff</code> take the same action — its
+value is <em>anticipation</em>, acting before the jammer returns.</li>
+<li><b>Two-component (total) polarization</b> — results are co-pol only, and do not account for a
+jammer arriving on the orthogonal polarization.</li>
+<li><b>Mode S, the frequency/notch layer, and every campaign runner</b> — out of scope for a
+readable Mode C implementation.</li>
+</ul>
+<p>Two features are recorded as <em>not to be reintroduced</em>: graded null release (built,
+measured, capped at +0.9 mean with zero extra passing cells) and data-driven adaptive loading
+(+0.00 pp across 90 cells, and it crashed two arrays). Diagonal loading itself is mandatory; it is
+the <em>adaptive</em> variant that is worthless.</p>
+</div>
+</section>
+
+<section id="map">
+<h2>12. The three constants, and the file map</h2>
+<div class="col">
+<p>These are the only numbers in the method that need defending, and they fit on one screen at the
+top of <code>run_demo.m</code>.</p>
+</div>
+<div class="eq">FORGETTING_LAMBDA        = 0.90;   <span class="cm">% how far back the covariance remembers</span>
+COVARIANCE_HORIZON_STEPS = 10;     <span class="cm">% = 1/(1−λ), derived</span>
+LOADING_FACTOR           = 30;     <span class="cm">% × noise floor; set by measurement</span></div>
+<div class="col">
+<p>Everything else is derived: <var>K</var> = 2·<var>N</var> from Reed–Mallett–Brennan, the guard
+from the array's beamwidth, the eigenvalue threshold from the Marchenko–Pastur edge, the run lengths
+from the estimators' convergence requirements, the lead from λ, and the lead cap from the guard.</p>
+</div>
+<div class="tw"><table>
+<thead><tr><th>file</th><th>what it does</th></tr></thead>
+<tbody>
+<tr><td class="lbl">load_array</td><td class="d">Parse a CST folder, stack one polarization component.</td></tr>
+<tr><td class="lbl">steering_vector</td><td class="d">The array's response in one direction. The physical primitive.</td></tr>
+<tr><td class="lbl">array_profile</td><td class="d">Guard sector, mirror coherence, degrees of freedom, target visibility.</td></tr>
+<tr><td class="lbl">make_array</td><td class="d">The antenna and its target, as one object.</td></tr>
+<tr><td class="lbl">make_scenario</td><td class="d">The ground truth. Never passed to an algorithm.</td></tr>
+<tr><td class="lbl">simulate_snapshots</td><td class="d">Truth in, snapshots out. The boundary.</td></tr>
+<tr><td class="lbl">sample_covariance</td><td class="d">What the array has been hearing lately.</td></tr>
+<tr><td class="lbl">noise_floor_power</td><td class="d">The noise level, for the threshold and the loading.</td></tr>
+<tr><td class="lbl">estimate_jammer_angle</td><td class="d">Whether (eigenvalues) and where (beamscan; MUSIC reported).</td></tr>
+<tr><td class="lbl">classify_jammer_motion</td><td class="d">Steady / onoff / drifting, and where to aim.</td></tr>
+<tr><td class="lbl">detect_jammer</td><td class="d">The seam: calls the two above, returns one state.</td></tr>
+<tr><td class="lbl">detect_and_null</td><td class="d"><b>Approach 1.</b> Two directions, closed form.</td></tr>
+<tr><td class="lbl">max_sinr_weights</td><td class="d"><b>Approach 2.</b> Loaded minimum-variance solve.</td></tr>
+<tr><td class="lbl">quiescent_weights</td><td class="d">The plain beam: baseline and graceful fallback.</td></tr>
+<tr><td class="lbl">oracle_weights</td><td class="d">The ceiling. Not deliverable.</td></tr>
+<tr><td class="lbl">output_sinr_db</td><td class="d">The one scorer.</td></tr>
+<tr><td class="lbl">run_closed_loop</td><td class="d">The whole method, once per step.</td></tr>
+<tr><td class="lbl">compare_approaches</td><td class="d">Table, score with its ceiling, CSV.</td></tr>
+<tr><td class="lbl">plot_pattern_cut</td><td class="d">The picture that makes the null visible.</td></tr>
+<tr><td class="lbl">run_demo</td><td class="d">The main script. Read it top to bottom.</td></tr>
+</tbody>
+</table></div>
+<div class="col">
+<p>Depends on <code>MATLAB/matlab_utils/</code> for CST parsing and pattern maths, and on nothing in
+<code>MATLAB/antijam_utils/</code>. Runs on MATLAB R2020a. Results are written to
+<code>MATLAB/antijam_clear/results/</code>.</p>
+</div>
+<p class="fileref">Part of: Antenna Array Pattern Optimization Tool — anti-jam milestone, clear
+reimplementation.</p>
+</section>
+
+</div>

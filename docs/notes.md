@@ -205,6 +205,91 @@ or `ValueError` — never silently fall back to a hardcoded default.
 > Claude Code must append an entry here at the end of every working session.
 > Format shown below. Newest entry at the top.
 
+### 2026-09-13 — [CLEAR] Clear reimplementation in MATLAB/antijam_clear
+
+Built the readable reimplementation the rewrite brief §7 and `next_session_prompt.md`
+call for: 20 files in `MATLAB/antijam_clear/`, depending on `matlab_utils/` and on
+nothing in `antijam_utils/`. Results in `MATLAB/antijam_clear/results/`, kept out of the
+repository-level `results/`. Docs at `docs/antijam_clear/` (walkthrough + 15-slide deck).
+All files Code Analyzer clean, R2020a.
+
+**Two approaches, kept structurally separate.** `detect_and_null` is the two-point LCMV
+`w = C(CᴴC)⁻¹g` with `C = [e_s, e_j]` — no covariance in it at all, which is what makes
+it independent of `max_sinr_weights` rather than a variant. `max_sinr_weights` is the
+loaded MPDR solve. Both closed form.
+
+**Three constants only**: `FORGETTING_LAMBDA = 0.90`, its derived `COVARIANCE_HORIZON_STEPS
+= 10`, `LOADING_FACTOR = 30`. Everything else derived — `K = 2N` (Reed–Mallett–Brennan),
+guard from the array's own HPBW, source threshold from the Marchenko–Pastur edge
+`(1+√(N/K))²`, run lengths from the estimators' convergence requirements, the drift lead
+from λ, the lead cap from the guard.
+
+**Results** (spacing0.6, SNR 0 dB, JNR 20 dB, jammer 25° off): steady 12.1 dB / score 100
+against an achievable 12.1; on/off 12.1 / 100 against 12.2; drift 0.5°/step 10.8 / 98
+against 11.5. Approach 1 is essentially optimal wherever the angle is right.
+
+**Findings that changed the implementation, in the order they bit:**
+
+1. *Unit-norm steering vectors are mandatory in any angle scan.* A raw-vector beamscan put
+   the jammer at 132° instead of 55° — it reports where the array hears best, not where the
+   source is. Cost one run to catch only because it was checked against truth.
+2. *MUSIC is the wrong estimator for a moving source here.* A jammer smeared across the
+   10-step memory is not a point source (`n_sources` reads 3 on 91 of 120 drift steps), so
+   MUSIC's noise subspace goes orthogonal to the whole *track*, its spectrum is near-singular
+   along a broad arc, and the argmax inside it is arbitrary — it sticks 16 steps, then jumps
+   (max error 13.5° vs beamscan's 6.0°; identical 0.00° on a steady jammer). Switching the
+   null to the beamscan took drift from 7.2 dB / score 65 → **10.8 dB / score 98**. Both are
+   still computed and reported; there is deliberately no selector.
+3. *Presence detection is late by far more than one horizon.* The threshold sits just above
+   the noise floor but the jammer eigenvalue starts 23.7 dB above it and the EMA decays it
+   0.46 dB/step ⇒ ~52 steps to disappear. A jammer toggling every 10 steps never appears to
+   switch off, at any JNR from 3 to 20 dB. Lateness is set by *jammer strength*, not by the
+   toggle period. Costs nothing here — `steady` and `onoff` take the same action.
+4. *The drift lead amplifies slope error 10×.* Helps below ~1°/step (aim error 4.34° → 0.92°
+   at 0.5), hurts above (8.35° → 9.30° at 1.5). Capped at `guard_deg` — half a beamwidth,
+   no new constant — which is inert below 1.26°/step and rescues 2°/step from −14.1 → −4.7 dB.
+5. *Target visibility is a distinct feasibility axis from the guard.* `patch_back2back` at
+   (30,0) is 113 dB below its own best direction — a genuine co-pol null, so the pair is not
+   a test. Added `target_visibility_db` / `is_target_illuminated`, threshold −40 dB sitting
+   inside the ~97 dB gap between real geometries (7.6–15.7 dB down) and that one.
+
+**Envelope, stated rather than hidden:** qualified to ≈0.5°/s drift, broken by 1.5°/s,
+against the CV-Kalman stack's ≈10°/s — a 20× narrower envelope, which is the honest price of
+omitting the filter. `results/drift_envelope.csv`.
+
+**Deliberate omissions register** is `MATLAB/antijam_clear/README.md`, each with the
+measurement it costs and the recipe to restore it. The fast presence covariance is flagged
+there at the user's request for a later delivery version. Graded release and adaptive
+loading recorded as not-to-be-reintroduced per brief §3.1.
+
+**Bounded the CV-Kalman question instead of building it.** The aim is
+`angle + rate x horizon`; a filter can only improve the *rate*, so feeding the loop the
+TRUE rate upper-bounds any rate estimator that could exist (same move as the
+best-of-{none,binary} bound that closed graded release). Result: **a perfect rate
+estimator is worth <= 1.1 dB**, and above 1 deg/step it is *worse* than the line fit,
+because past ~a beamwidth of travel per horizon the `rate x horizon` lag model stops
+holding and the correction overshoots. Feeding the true ANGLE instead reaches 11.1 dB
+against an oracle of 11.1 at 1 deg/step. **~10 dB is in the angle, ~1 dB in the rate** —
+and given the right angle the two-point null already matches the oracle to 0.1-0.3 dB, so
+nothing is wrong with the beamformer. `results/predictor_bound.csv`.
+
+**The lever is lambda, and it is gated on the deferred presence detector.** Shortening the
+memory is worth **+8.3 dB at 1 deg/step** (0.90 -> 0.70; 5 seeds, spread +-0.1-0.4 dB) and
++9.5 at 1.5. But it **breaks on/off**, 12.1 -> 4.4 dB, by a mechanism worth recording: a
+short memory loses the jammer while it is switched off, the beamscan peak wanders onto
+noise (estimates out to 143 deg), presence detection is too late to suppress it (trap 3
+above), those angles enter the history, and `classify_jammer_motion` reads stationary noise
+as drift and then AMPLIFIES it by the lead — -17 dB on individual steps. So the fast
+presence covariance is not merely a nice-to-have: it is what makes a short memory safe.
+**Order of work for the delivery version: fast presence detector, then shorter memory. The
+CV-Kalman filter is not on the path at all.** Nothing implemented — measurement only.
+
+**Diagonal loading set by measurement, not preference** — swept against steering *mismatch*
+per the brief, never null depth. δ = 30×noise floor is the best worst case over 0–3° mismatch
+and 0–20 dB SNR, costing ≤1.6 dB vs per-condition tuning. The sweep also demonstrates
+self-cancellation in one row: at δ = 0.1 and 1° of mismatch, +20 dB of signal takes SINR
+9.7 → −0.7 dB. `results/loading_sweep.csv`.
+
 ### 2026-09-12 — [O2] Rewrite brief; session summary merged into it
 
 Wrote `docs/antijam_rewrite_brief.md` as the single entry point for a structural
