@@ -405,9 +405,35 @@ lead correction in the next section removes it. MUSIC's 13.5° excursion cannot 
 Switching the null over to the beamscan took the drift case from <b>7.5 dB / score 66</b> to
 <b>11.1 dB / score 99</b>, against an achievable 11.5 — measured with identical settings and
 identical noise, changing only which spectrum feeds the null.</p>
-<p>MUSIC's real advantage is resolving two closely-spaced sources — which a single-jammer problem
-never asks for, and the guard sector already excludes the region near the signal. Both are computed
-and reported so this can be shown rather than claimed; there is no switch between them.</p>
+<p>MUSIC's real advantage is resolving two closely-spaced sources. That advantage is real — here
+it is, with two jammers 10° apart against a 25.2° beamwidth:</p>
+</div>
+<div class="eq">two sources at 55° and 65°, exact covariance
+
+  beamscan  peaks found:  <b>59°</b>          <span class="cm">% merged into one, beamwidth-limited</span>
+  MUSIC     peaks found:  <b>55°, 65°</b>     <span class="cm">% both resolved, exactly</span></div>
+<div class="col">
+<p>That is superresolution working exactly as advertised, and it is why MUSIC is the textbook
+answer. <b>But this problem has one jammer</b>, and the guard sector already excludes the region
+near the signal — so the capability is never exercised, while the assumption it rests on is
+violated every step a jammer moves. Both are computed and reported so this can be shown rather than
+claimed; there is no switch between them.</p>
+
+<h4>A common misconception worth heading off</h4>
+<p>MUSIC is often described as the "linear algebra" alternative to scanning. <b>It is not — MUSIC
+scans the same grid.</b> The eigendecomposition only builds the noise subspace; you then evaluate
+<code>1/‖V_noiseᴴe_unit‖²</code> at every direction and take the peak, exactly as the beamscan
+evaluates <code>e_unitᴴRe_unit</code> at every direction. Measured on this array, the
+eigendecomposition is <b>0.045 ms</b> and MUSIC's grid evaluation is <b>10.9 ms</b> — the search is
+99.6% of its cost. MUSIC is <em>a different spectrum over the same search</em>, not a way to avoid
+searching.</p>
+<p>Methods that genuinely replace the search do exist — <b>Root-MUSIC</b> finds the angles as roots
+of a polynomial, <b>ESPRIT</b> as a generalised eigenvalue problem. Both need a <em>structured</em>
+manifold: Root-MUSIC needs the uniform-linear form <code>eₙ = zⁿ</code>, ESPRIT needs two identical
+subarrays at a fixed displacement. <b>This implementation deliberately has neither</b>, because it
+uses measured patterns rather than an <code>e^{ikd}</code> model — 11.3 dB of amplitude spread
+across elements and 68.5° RMS departure from a linear phase progression (section 1). The elegance is
+available only at the price of the idealised array model we rejected on physical grounds.</p>
 </div>
 <h3>What the scan costs — and why Approach 2 is the one that deploys</h3>
 <div class="col">
